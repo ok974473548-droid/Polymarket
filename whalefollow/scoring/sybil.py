@@ -18,9 +18,10 @@ from collections import defaultdict
 from itertools import combinations
 
 import numpy as np
-import pandas as pd
+import polars as pl
 from scipy import sparse
 
+from .. import frames
 from ..config import Params
 from ..db import DB, now_ts
 
@@ -72,9 +73,9 @@ def update_funders(db: DB, allowlist: tuple = ()) -> None:
 
 
 def compute_links(
-    trades: pd.DataFrame,
-    wallets: pd.DataFrame,
-    transfers: pd.DataFrame,
+    trades: pl.DataFrame,
+    wallets: pl.DataFrame,
+    transfers: pl.DataFrame | None,
     params: Params,
     max_wallets_per_market: int = 300,
 ) -> dict[tuple[str, str], dict]:
@@ -83,33 +84,34 @@ def compute_links(
     links: dict[tuple[str, str], dict] = defaultdict(dict)
 
     # L6 общий владелец, L1 общий источник финансирования
-    if not wallets.empty:
+    if not wallets.is_empty():
         for col, code in (("owner_eoa", "L6"), ("funder_wallet", "L1")):
-            if col not in wallets:
+            if col not in wallets.columns:
                 continue
-            for key, g in wallets.dropna(subset=[col]).groupby(col):
+            groups = wallets.filter(pl.col(col).is_not_null()).group_by(col).agg(pl.col("wallet")).sort(col).iter_rows()
+            for key, members in groups:
                 if code == "L1" and str(key).lower() in allow:
                     continue
-                members = sorted(g["wallet"])
+                members = sorted(members)
                 if code == "L1" and len(members) > params.sybil_max_wallets_per_funder:
                     continue  # массовый источник — скорее биржа или мост, чем один владелец
                 for a, b in combinations(members, 2):
                     links[_pair(a, b)][code] = {"key": str(key)}
     # L2 прямые переводы
-    if transfers is not None and not transfers.empty:
-        known = set(wallets["wallet"]) if not wallets.empty else set()
-        for r in transfers.itertuples():
-            if r.from_wallet in known and r.to_wallet in known and r.from_wallet != r.to_wallet:
-                links[_pair(r.from_wallet, r.to_wallet)]["L2"] = {"amount": float(r.amount)}
+    if transfers is not None and not transfers.is_empty():
+        known = set(wallets["wallet"].to_list()) if not wallets.is_empty() else set()
+        for fw, tw, amount in transfers.select("from_wallet", "to_wallet", "amount").iter_rows():
+            if fw in known and tw in known and fw != tw:
+                links[_pair(fw, tw)]["L2"] = {"amount": float(amount)}
 
-    if trades.empty:
+    if trades.is_empty():
         return _scored(links, w)
 
     # L3 Jaccard рынков: пересечения всех пар разом — произведение разреженных матриц «кошелёк × рынок»
     # (популярные рынки, где больше max_wallets_per_market игроков, кандидатов не порождают)
-    t = trades.dropna(subset=["market_id"])[["wallet", "market_id"]].drop_duplicates()
-    wcode, wuniq = pd.factorize(t["wallet"])
-    mcode, _ = pd.factorize(t["market_id"])
+    t = trades.filter(pl.col("market_id").is_not_null()).select("wallet", "market_id").unique(maintain_order=True)
+    wuniq, wcode = np.unique(t["wallet"].to_numpy().astype(str), return_inverse=True)
+    _, mcode = np.unique(t["market_id"].to_numpy().astype(str), return_inverse=True)
     n_mk = np.bincount(wcode, minlength=len(wuniq))  # рынков у кошелька (все)
     full = sparse.csr_matrix(
         (np.ones(len(t), dtype=np.int32), (wcode, mcode)), shape=(len(wuniq), mcode.max() + 1 if len(t) else 0)
@@ -130,16 +132,16 @@ def compute_links(
                 b_i[jac >= params.sybil_jaccard_min],
                 jac[jac >= params.sybil_jaccard_min],
             ):
-                links[_pair(wuniq[ai], wuniq[bi])]["L3"] = {"jaccard": round(float(j), 3)}
+                links[_pair(str(wuniq[ai]), str(wuniq[bi]))]["L3"] = {"jaccard": round(float(j), 3)}
 
     # L4 синхронность сделок по одному токену: пары сделок в окне ±win находятся сдвигами
     # отсортированного массива (векторно), а не перебором в Python
-    n_trades = trades.groupby("wallet").size()
+    n_trades = dict(trades.group_by("wallet").len().iter_rows())
     win = params.sybil_sync_window_s
-    tt = trades.sort_values(["token_id", "ts"], kind="stable")
-    tok = pd.factorize(tt["token_id"])[0]
-    tsa = tt["ts"].to_numpy(np.int64)
-    wc, wnames = pd.factorize(tt["wallet"])
+    tt = trades.sort(["token_id", "ts"], maintain_order=True, nulls_last=True)
+    _, tok = np.unique(tt["token_id"].fill_null("").to_numpy().astype(str), return_inverse=True)
+    tsa = tt["ts"].to_numpy().astype(np.int64)
+    wnames, wc = np.unique(tt["wallet"].to_numpy().astype(str), return_inverse=True)
     n = len(tt)
     src, dst = [], []
     alive = np.arange(n - 1) if n > 1 else np.zeros(0, np.int64)
@@ -160,9 +162,9 @@ def compute_links(
         # каждый другой кошелёк учитывается один раз на сделку
         pairs = np.unique(np.stack([i_all, wc[j_all]], axis=1), axis=0) if len(i_all) else np.zeros((0, 2), int)
         if len(pairs):
-            key = pd.DataFrame({"a": wc[pairs[:, 0]], "b": pairs[:, 1]}).value_counts()
-            for (a_c, b_c), cnt in key.items():
-                a, b = wnames[a_c], wnames[b_c]
+            ab, counts = np.unique(np.stack([wc[pairs[:, 0]], pairs[:, 1]], axis=1), axis=0, return_counts=True)
+            for (a_c, b_c), cnt in zip(ab, counts):
+                a, b = str(wnames[a_c]), str(wnames[b_c])
                 share = cnt / n_trades[a]
                 if share >= params.sybil_sync_share and n_trades[a] >= 5:
                     p = _pair(a, b)
@@ -170,7 +172,9 @@ def compute_links(
                     links[p]["L4"] = {"share": round(max(prev, share), 3)}
 
     # L5 похожие суммы — только для пар, уже связанных другими сигналами
-    sizes = trades.assign(r=trades["size_usd"].round(0)).groupby("wallet")["r"].agg(lambda s: set(s))
+    sizes: dict[str, set] = defaultdict(set)
+    for wlt, r in zip(trades["wallet"].to_list(), np.round(trades["size_usd"].to_numpy().astype(float), 0)):
+        sizes[wlt].add(float(r))
     for a, b in list(links):
         if a in sizes and b in sizes and sizes[a] and sizes[b]:
             common = len(sizes[a] & sizes[b]) / min(len(sizes[a]), len(sizes[b]))
@@ -211,23 +215,26 @@ def run_antisybil(db: DB, params: Params, wallets: list[str] | None = None) -> d
     update_funders(db, params.funder_allowlist)
     if wallets is not None:
         ph = ",".join("?" for _ in wallets) or "''"
-        trades = db.frame(
-            f"SELECT wallet, token_id, market_id, ts, size_usd FROM trades WHERE wallet IN ({ph})", wallets
+        trades = frames.read(
+            db, f"SELECT wallet, token_id, market_id, ts, size_usd FROM trades WHERE wallet IN ({ph})", wallets
         )
-        wallets_df = db.frame(f"SELECT wallet, owner_eoa, funder_wallet FROM wallets WHERE wallet IN ({ph})", wallets)
-        transfers = db.frame(
+        wallets_df = frames.read(
+            db, f"SELECT wallet, owner_eoa, funder_wallet FROM wallets WHERE wallet IN ({ph})", wallets
+        )
+        transfers = frames.read(
+            db,
             f"SELECT from_wallet, to_wallet, amount FROM transfers WHERE from_wallet IN ({ph}) OR to_wallet IN ({ph})",
             wallets + wallets,
         )
     else:
-        trades = db.frame("SELECT wallet, token_id, market_id, ts, size_usd FROM trades")
-        wallets_df = db.frame("SELECT wallet, owner_eoa, funder_wallet FROM wallets")
-        transfers = db.frame("SELECT from_wallet, to_wallet, amount FROM transfers")
+        trades = frames.read_history(db, "SELECT wallet, token_id, market_id, ts, size_usd FROM trades")
+        wallets_df = frames.read(db, "SELECT wallet, owner_eoa, funder_wallet FROM wallets")
+        transfers = frames.read(db, "SELECT from_wallet, to_wallet, amount FROM transfers")
     links = compute_links(trades, wallets_df, transfers, params)
     mapping, grey = cluster_wallets(links, params)
     ts = now_ts()
-    scoped = wallets is not None and not isinstance(wallets, pd.DataFrame)
-    scope_list = list(wallets) if wallets is not None and scoped else []
+    scoped = wallets is not None
+    scope_list = list(wallets) if wallets is not None else []
     with db.tx():
         if scoped:
             # пересчёт только по своим кошелькам: чужие связи и объединения не трогаем

@@ -4,7 +4,7 @@ import threading
 import time
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import pytest
 
 from whalefollow.agent import Agent
@@ -18,23 +18,24 @@ from conftest import fast_params
 from synthetic import FakeClob, FakeData, FakeGamma, SyntheticWorld
 
 
-def _old_two_sided(trades: pd.DataFrame) -> float:
-    """Прежняя (медленная) реализация F1 — эталон для сравнения."""
-    by_market = trades.groupby("market_id")
+def _old_two_sided(trades: pl.DataFrame) -> float:
+    """Прежняя (медленная) реализация F1 — построчным перебором, эталон для сравнения."""
+    by_market: dict = {}
+    for r in trades.iter_rows(named=True):
+        by_market.setdefault(r["market_id"], []).append(r)
     two = 0
-    for _, g in by_market:
-        buys = g[g.side == "BUY"]
-        both = buys["token_id"].nunique() >= 2
-        bs = any((g[g.token_id == t].side.nunique() == 2) for t in g.token_id.unique())
+    for rows in by_market.values():
+        both = len({r["token_id"] for r in rows if r["side"] == "BUY"}) >= 2
+        bs = any(len({r["side"] for r in rows if r["token_id"] == t}) == 2 for t in {r["token_id"] for r in rows})
         two += int(both or bs)
-    return two / max(by_market.ngroups, 1)
+    return two / max(len(by_market), 1)
 
 
 def test_maker_flags_vectorized_matches_loop():
     rng = np.random.default_rng(3)
     n = 3000
     m = rng.integers(0, 300, n)
-    trades = pd.DataFrame(
+    trades = pl.DataFrame(
         {
             "market_id": [f"m{i}" for i in m],
             "token_id": [f"m{i}:{k}" for i, k in zip(m, rng.integers(0, 2, n))],
@@ -42,7 +43,15 @@ def test_maker_flags_vectorized_matches_loop():
             "size_usd": rng.uniform(1, 100, n),
         }
     )
-    pos = pd.DataFrame(columns=["status", "closed_ts", "opened_ts", "remaining_shares", "avg_entry"])
+    pos = pl.DataFrame(
+        schema={
+            "status": pl.Utf8,
+            "closed_ts": pl.Int64,
+            "opened_ts": pl.Int64,
+            "remaining_shares": pl.Float64,
+            "avg_entry": pl.Float64,
+        }
+    )
     t0 = time.time()
     f = maker_flags(trades, pos, fast_params())
     assert time.time() - t0 < 0.5

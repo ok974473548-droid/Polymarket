@@ -45,8 +45,15 @@ def scored_world():
     for e in scores["entity_id"]:
         wallet = e[2:] if e.startswith("E-") else e
         role[e] = world.roles.get(wallet, "?")
-    scores["role"] = scores["entity_id"].map(role)
+    scores = scores.with_columns(role=scores["entity_id"].replace_strict(role, return_dtype=str))
     return world, d, params, scores
+
+
+def approved_ids(scores) -> list[str]:
+    """Допущенные игроки по убыванию рейтинга (таблица оценок polars)."""
+    import polars as pl
+
+    return scores.filter(pl.col("status") == "approved").sort("score", descending=True)["entity_id"].to_list()
 
 
 # ---------------------------------------------------------------- прогон тестов на PostgreSQL

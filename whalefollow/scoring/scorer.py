@@ -9,75 +9,109 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 import numpy as np
-import pandas as pd
+import polars as pl
 
+from .. import frames
 from ..config import Params
 from ..db import DB, now_ts
 from . import classify as cls
+from .classify import Cols, cols
 from .metrics import add_clv, bucket_edges, closed_positions, cluster_table
 from .stats import bh_qvalues, bootstrap_wmean, null_pvalue, shrink, wmean, zscore
 
 log = logging.getLogger(__name__)
 DAY = 86400
+NAN = float("nan")
+CL_COLS = ["edge_c", "w_c", "clv_1h", "clv_24h", "ts", "category", "p_rep", "r_rep"]
+CLOSED_COLS = [
+    "closed_ts",
+    "opened_ts",
+    "pnl_usd",
+    "cost_usd",
+    "avg_entry",
+    "exit_value_per_share",
+    "edge",
+    "held_to_resolution",
+]
+POS_COLS = [
+    "cost_usd",
+    "opened_ts",
+    "closed_ts",
+    "status",
+    "remaining_shares",
+    "avg_entry",
+    "market_id",
+    "event_id",
+    "clv_24h",
+]
+NESTED = ("flags", "buckets", "categories")
+
+
+def _n(c: Cols) -> int:
+    return len(next(iter(c.values()))) if c else 0
+
+
+def _sub(c: Cols, m: np.ndarray) -> Cols:
+    return {k: v[m] for k, v in c.items()}
 
 
 def _entity_core(
     e: str,
-    cl: pd.DataFrame,
-    closed: pd.DataFrame,
-    pos_e: pd.DataFrame,
+    cl: Cols,
+    closed: Cols,
+    pos_e: Cols,
     now: int,
     params: Params,
     rng: np.random.Generator,
     heavy: bool = True,
 ) -> dict:
     """heavy=False — без бутстрепа: у игрока слишком мало событий, отбор он всё равно не пройдёт."""
-    x, w = cl["edge_c"].to_numpy(float), cl["w_c"].to_numpy(float)
-    n = len(cl)
-    e_raw = wmean(x, w) if n else float("nan")
+    n = _n(cl)
+    x, w = (cl["edge_c"], cl["w_c"]) if n else (np.zeros(0), np.zeros(0))
+    e_raw = wmean(x, w) if n else NAN
     e_shr = shrink(e_raw, n, params.shrink_k)
-    lo, hi = bootstrap_wmean(x, w, params.bootstrap_b, rng, k=params.shrink_k) if n and heavy else (np.nan, np.nan)
-    clv24 = cl["clv_24h"].to_numpy(float)
+    lo, hi = bootstrap_wmean(x, w, params.bootstrap_b, rng, k=params.shrink_k) if n and heavy else (NAN, NAN)
+    clv24 = cl["clv_24h"] if n else np.zeros(0)
     clv_lo, _ = (
         bootstrap_wmean(clv24, w, max(500, params.bootstrap_b // 5), rng)
         if heavy and np.isfinite(clv24).sum() >= 2
-        else (np.nan, np.nan)
+        else (NAN, NAN)
     )
-    halves = (np.nan, np.nan)
+    halves = (NAN, NAN)
     if n >= 4:
-        med = np.median(cl["ts"])
-        h1, h2 = cl[cl["ts"] <= med], cl[cl["ts"] > med]
-        halves = (
-            wmean(h1["edge_c"].to_numpy(), h1["w_c"].to_numpy()),
-            wmean(h2["edge_c"].to_numpy(), h2["w_c"].to_numpy()),
-        )
-    e90 = cl[cl["ts"] >= now - 90 * DAY]
-    e365 = cl[cl["ts"] >= now - 365 * DAY]
-    decay = np.nan
-    if len(e90) >= 20 and len(e365) >= 20:  # на коротком окне оценка затухания слишком шумная
-        a = wmean(e90["edge_c"].to_numpy(), e90["w_c"].to_numpy())
-        b = wmean(e365["edge_c"].to_numpy(), e365["w_c"].to_numpy())
-        decay = a / b if b > 0 else np.nan
-    recent = closed[closed["closed_ts"] >= now - 90 * DAY]
-    ret90 = (
-        float(recent["pnl_usd"].sum() / recent["cost_usd"].sum())
-        if len(recent) and recent["cost_usd"].sum() > 0
-        else np.nan
-    )
+        ts = cl["ts"]
+        med = np.median(ts)
+        h1, h2 = ts <= med, ts > med
+        halves = (wmean(x[h1], w[h1]), wmean(x[h2], w[h2]))
+    decay = NAN
+    if n:
+        m90, m365 = cl["ts"] >= now - 90 * DAY, cl["ts"] >= now - 365 * DAY
+        if m90.sum() >= 20 and m365.sum() >= 20:  # на коротком окне оценка затухания слишком шумная
+            a = wmean(x[m90], w[m90])
+            b = wmean(x[m365], w[m365])
+            decay = a / b if b > 0 else NAN
+    ret90 = NAN
+    if _n(closed):
+        recent = closed["closed_ts"] >= now - 90 * DAY
+        cost90 = np.nansum(closed["cost_usd"][recent])
+        if recent.any() and cost90 > 0:
+            ret90 = float(np.nansum(closed["pnl_usd"][recent]) / cost90)
     hp = cls.hold_profile(closed)
+    n_pos = _n(pos_e)
     return {
         "entity_id": e,
         "n_clusters": n,
-        "total_cost": float(pos_e["cost_usd"].sum()),
-        "history_days": float((now - pos_e["opened_ts"].min()) / DAY) if len(pos_e) else 0.0,
+        "total_cost": float(np.nansum(pos_e["cost_usd"])) if n_pos else 0.0,
+        "history_days": float((now - np.nanmin(pos_e["opened_ts"])) / DAY) if n_pos else 0.0,
         "edge_raw": e_raw,
         "edge_shrunk": e_shr,
         "edge_ci_lo": lo,
         "edge_ci_hi": hi,
-        "clv_1h": wmean(cl["clv_1h"].to_numpy(float), w) if n else np.nan,
-        "clv_24h": wmean(clv24, w) if n else np.nan,
+        "clv_1h": wmean(cl["clv_1h"], w) if n else NAN,
+        "clv_24h": wmean(clv24, w) if n else NAN,
         "clv_ci_lo": clv_lo,
         "edge_half1": halves[0],
         "edge_half2": halves[1],
@@ -87,17 +121,19 @@ def _entity_core(
     }
 
 
-def _category_scores(e: str, cl: pd.DataFrame, params: Params, rng, heavy: bool = True) -> list[dict]:
+def _category_scores(e: str, cl: Cols, params: Params, rng, heavy: bool = True) -> list[dict]:
     out = []
-    for cat, g in cl.groupby(cl["category"].fillna("other")):
-        x, w = g["edge_c"].to_numpy(float), g["w_c"].to_numpy(float)
-        n = len(g)
+    cats = np.array(["other" if c is None else str(c) for c in cl["category"]], dtype=object)
+    for cat in sorted(set(cats)):
+        m = cats == cat
+        x, w = cl["edge_c"][m], cl["w_c"][m]
+        n = int(m.sum())
         es = shrink(wmean(x, w), n, params.shrink_k)
         need = heavy and n >= params.min_clusters_category  # тема с малым числом событий не допускается
         lo, _ = (
             bootstrap_wmean(x, w, max(500, params.bootstrap_b // 5), rng, k=params.shrink_k)
             if n >= 2 and need
-            else (np.nan, np.nan)
+            else (NAN, NAN)
         )
         ok = n >= params.min_clusters_category and es > 0 and np.isfinite(lo) and lo > 0
         out.append(
@@ -113,60 +149,94 @@ def _category_scores(e: str, cl: pd.DataFrame, params: Params, rng, heavy: bool 
     return out
 
 
+def _partition(df: pl.DataFrame, names: list[str]) -> dict[str, Cols]:
+    """Таблица → {игрок: массивы numpy}. Колонки переводятся в numpy один раз, затем режутся по игрокам
+    (порядок строк внутри игрока сохраняется)."""
+    if df.is_empty():
+        return {}
+    names = [c for c in names if c in df.columns]
+    ent = df["entity_id"].to_numpy().astype(str)
+    keys, inv, counts = np.unique(ent, return_inverse=True, return_counts=True)
+    order = np.argsort(inv, kind="stable")
+    bounds = np.cumsum(counts)[:-1]
+    full = cols(df, names)
+    parts = {c: np.split(v[order], bounds) for c, v in full.items()}
+    return {str(k): {c: parts[c][i] for c in names} for i, k in enumerate(keys)}
+
+
+def _empty_cols(names: list[str]) -> Cols:
+    return {c: np.zeros(0) for c in names}
+
+
 def score_entities(
-    pos: pd.DataFrame,
-    trades: pd.DataFrame,
-    wallets: pd.DataFrame,
-    markets: pd.DataFrame,
-    prices: pd.DataFrame,
+    pos: pl.DataFrame,
+    trades: pl.DataFrame,
+    wallets: pl.DataFrame,
+    markets: pl.DataFrame,
+    prices: pl.DataFrame,
     params: Params,
     now: int,
     seed: int = 7,
     entities: list[str] | None = None,
     pvalue_pool: dict | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pl.DataFrame, pl.DataFrame]:
     """pvalue_pool — p-value других игроков, проверенных раньше ({entity: p}). Поправка на множественные
     проверки (BH) считается по всем проверенным игрокам, а не только по пересчитываемым сейчас: иначе
-    у одиночной проверки q = p и случайный «везунчик» проходит отбор легче, чем при общем пересчёте."""
+    у одиночной проверки q = p и случайный «везунчик» проходит отбор легче, чем при общем пересчёте.
+
+    Возвращает (оценки игроков, оценки по темам) — таблицы polars; вложенные flags/buckets/categories
+    в оценках игроков хранятся как объекты Python."""
     rng = np.random.default_rng(seed)
-    if pos.empty:
-        return pd.DataFrame(), pd.DataFrame()
-    pos = pos[pos["opened_ts"] <= now].copy()
-    if "resolved_ts" not in pos:
-        pos = pos.merge(markets[["market_id", "resolved_ts"]], on="market_id", how="left")
+    if pos.is_empty():
+        return pl.DataFrame(), pl.DataFrame()
+    pos = pos.filter(pl.col("opened_ts") <= now)
+    if "resolved_ts" not in pos.columns:
+        pos = pos.join(
+            frames.cast(markets.select("market_id", "resolved_ts")).unique("market_id", keep="first"),
+            on="market_id",
+            how="left",
+            maintain_order="left",
+        )
     pos = add_clv(pos, prices, params)
     closed = closed_positions(pos, now)
     clusters = cluster_table(closed)
-    trades = trades[trades["ts"] <= now]
-    ent_of = pos.drop_duplicates("wallet").set_index("wallet")["entity_id"].to_dict()
-    trades = trades.assign(entity_id=trades["wallet"].map(lambda x: ent_of.get(x, x)))
-    first_seen = {}
-    if not wallets.empty:
-        ws = wallets.assign(entity_id=wallets["wallet"].map(lambda x: ent_of.get(x, x)))
-        first_seen = ws.groupby("entity_id")["first_seen_ts"].min().to_dict()
-    vol = markets.set_index("market_id")["volume_usd"].to_dict() if not markets.empty else {}
-    last_trade = trades.groupby("entity_id")["ts"].max().to_dict()
+    trades = trades.filter(pl.col("ts") <= now)
+    ent_of = pos.select("wallet", "entity_id").unique("wallet", keep="first", maintain_order=True)
+    if "entity_id" in trades.columns:
+        trades = trades.drop("entity_id")
+    trades = trades.join(ent_of, on="wallet", how="left", maintain_order="left").with_columns(
+        entity_id=pl.coalesce("entity_id", "wallet")
+    )
+    first_seen: dict = {}
+    if not wallets.is_empty():
+        ws = wallets.join(ent_of, on="wallet", how="left").with_columns(entity_id=pl.coalesce("entity_id", "wallet"))
+        first_seen = dict(ws.group_by("entity_id").agg(pl.col("first_seen_ts").min()).iter_rows())
+    vol = dict(markets.select("market_id", "volume_usd").iter_rows()) if not markets.is_empty() else {}
+    last_trade = dict(trades.group_by("entity_id").agg(pl.col("ts").max()).iter_rows()) if trades.height else {}
+    maker = cls.maker_trade_flags(trades)
 
     rows, cat_rows = [], []
-    ids = entities or sorted(pos["entity_id"].unique())
-    cl_by = dict(tuple(clusters.groupby("entity_id"))) if not clusters.empty else {}
-    closed_by = dict(tuple(closed.groupby("entity_id"))) if not closed.empty else {}
-    pos_by = dict(tuple(pos.groupby("entity_id")))
-    tr_by = dict(tuple(trades.groupby("entity_id"))) if not trades.empty else {}
+    ids = entities or sorted(pos["entity_id"].unique().to_list())
+    cl_by = _partition(clusters, CL_COLS)
+    closed_by = _partition(closed, CLOSED_COLS)
+    pos_by = _partition(pos, POS_COLS)
     for e in ids:
-        cl = cl_by.get(e, clusters.iloc[0:0])
-        cl_e = closed_by.get(e, closed.iloc[0:0])
-        pos_e = pos_by.get(e, pos.iloc[0:0])
-        tr_e = tr_by.get(e, trades.iloc[0:0])
+        cl = cl_by.get(e) or _empty_cols(CL_COLS)
+        cl_e = closed_by.get(e) or _empty_cols(CLOSED_COLS)
+        pos_e = pos_by.get(e) or _empty_cols(POS_COLS)
+        n_cl = _n(cl)
         # быстрый путь: мало событий — бутстреп и проверка на удачу не нужны (статус «мало данных»)
-        heavy = len(cl) >= min(params.min_clusters, params.min_clusters_category)
+        heavy = n_cl >= min(params.min_clusters, params.min_clusters_category)
         core = _entity_core(e, cl, cl_e, pos_e, now, params, rng, heavy=heavy)
-        klass, flags = cls.classify(tr_e, pos_e, cl_e, core["n_clusters"], first_seen.get(e), vol, params)
-        core["last_trade_ts"] = int(last_trade.get(e, 0))
+        fs = first_seen.get(e)
+        klass, flags = cls.classify(
+            maker.get(e), pos_e, cl_e, core["n_clusters"], float(fs) if fs is not None else None, vol, params
+        )
+        core["last_trade_ts"] = int(last_trade.get(e) or 0)
         core["class"] = klass
         core["flags"] = flags
         core["buckets"] = bucket_edges(cl_e, params.price_buckets)
-        core["categories"] = sorted(set(cl["category"].dropna())) if len(cl) else []
+        core["categories"] = sorted({c for c in cl["category"] if c is not None}) if n_cl else []
         core["active"] = now - core["last_trade_ts"] <= params.max_inactive_days * DAY
         core["base_ok"] = (
             core["n_clusters"] >= params.min_clusters
@@ -174,40 +244,54 @@ def score_entities(
             and core["active"]
             and core["total_cost"] >= params.min_total_cost_usd
         )
-        core["pvalue"] = np.nan
-        if core["base_ok"] and len(cl):
-            core["pvalue"] = null_pvalue(
-                cl["p_rep"].to_numpy(), cl["r_rep"].to_numpy(), cl["w_c"].to_numpy(), params.null_sims, rng
-            )
+        core["pvalue"] = NAN
+        if core["base_ok"] and n_cl:
+            core["pvalue"] = null_pvalue(cl["p_rep"], cl["r_rep"], cl["w_c"], params.null_sims, rng)
         rows.append(core)
-        if len(cl):
+        if n_cl:
             cat_rows.extend(_category_scores(e, cl, params, rng, heavy=heavy))
 
-    df = pd.DataFrame(rows)
-    df["qvalue"] = np.nan
-    tested = df["pvalue"].notna()
+    pv = np.array([r["pvalue"] for r in rows], float)
+    tested = np.isfinite(pv)
+    q_all = np.full(len(rows), NAN)
     if tested.any():
+        mine_ids = {r["entity_id"] for r in rows}
         pool = {
             k: float(v)
             for k, v in (pvalue_pool or {}).items()
-            if v is not None and np.isfinite(v) and k not in set(df["entity_id"])
+            if v is not None and np.isfinite(v) and k not in mine_ids
         }
-        mine = df.loc[tested, "pvalue"].to_numpy()
-        q = bh_qvalues(np.concatenate([mine, np.fromiter(pool.values(), float, len(pool))]))
-        df.loc[tested, "qvalue"] = q[: len(mine)]
-    df["status"] = df.apply(lambda r: _status(r, params), axis=1)
-    df["score"] = np.nan
-    ok = df["status"] == "approved"
-    if ok.any():
+        q = bh_qvalues(np.concatenate([pv[tested], np.fromiter(pool.values(), float, len(pool))]))
+        q_all[tested] = q[: int(tested.sum())]
+    for r, qv in zip(rows, q_all):
+        r["qvalue"] = float(qv)
+        r["status"] = _status(r, params)
+        r["score"] = NAN
+    ok = [i for i, r in enumerate(rows) if r["status"] == "approved"]
+    if ok:
         a, b, c, d = params.rating_weights
-        sub = df[ok]
-        df.loc[ok, "score"] = (
-            a * zscore(sub["edge_ci_lo"])
-            + b * zscore(sub["clv_24h"].fillna(0))
-            + c * zscore(np.minimum(sub["edge_half1"], sub["edge_half2"]))
-            + d * zscore(sub["hold_share"].fillna(0))
+        sub = [rows[i] for i in ok]
+        col = lambda k, fill=None: np.array(
+            [(fill if fill is not None and not np.isfinite(r[k]) else r[k]) for r in sub], float
         )
-    return df, pd.DataFrame(cat_rows)
+        sc = (
+            a * zscore(col("edge_ci_lo"))
+            + b * zscore(col("clv_24h", 0.0))
+            + c * zscore(np.minimum(col("edge_half1"), col("edge_half2")))
+            + d * zscore(col("hold_share", 0.0))
+        )
+        for i, v in zip(ok, sc):
+            rows[i]["score"] = float(v)
+    return to_frame(rows), pl.DataFrame(cat_rows) if cat_rows else pl.DataFrame()
+
+
+def to_frame(rows: list[dict]) -> pl.DataFrame:
+    """Строки оценок → таблица polars (вложенные значения — объекты Python)."""
+    if not rows:
+        return pl.DataFrame()
+    flat = [{k: v for k, v in r.items() if k not in NESTED} for r in rows]
+    df = pl.DataFrame(flat, infer_schema_length=None, nan_to_null=False)
+    return df.with_columns([pl.Series(k, [r[k] for r in rows], dtype=pl.Object) for k in NESTED])
 
 
 def approval_checks(r, params: Params) -> dict:
@@ -246,55 +330,71 @@ def _status(r, params: Params) -> str:
 TRADE_COLS = "trade_id, ts, wallet, token_id, market_id, side, price, size_shares, size_usd, source"
 
 
-def drop_conversions(db: DB, pos: pd.DataFrame, wallets: list[str] | None = None) -> pd.DataFrame:
+def drop_conversions(db: DB, pos: pl.DataFrame, wallets: list[str] | None = None) -> pl.DataFrame:
     """Позиции в событиях, где кошелёк делал конвертацию neg-risk, в оценку не идут."""
     from ..ingest.pipeline import conversion_events
 
     bad = conversion_events(db, wallets)
-    if not bad or pos.empty:
+    if not bad or pos.is_empty():
         return pos
-    key = pd.Series(list(zip(pos["wallet"], pos["event_id"].fillna(pos["market_id"]))), index=pos.index)
-    return pos[~key.isin(bad)]
+    bad_df = pl.DataFrame(
+        {"wallet": [w for w, _ in bad], "_ev": [e for _, e in bad]}, schema={"wallet": pl.Utf8, "_ev": pl.Utf8}
+    )
+    return (
+        pos.with_columns(_ev=pl.coalesce("event_id", "market_id"))
+        .join(bad_df, on=["wallet", "_ev"], how="anti", maintain_order="left")
+        .drop("_ev")
+    )
 
 
 def load_frames(db: DB, entities: list[str] | None = None) -> dict:
     """Данные для скоринга. entities — только эти игроки (проверка одного кита):
     читаются их сделки, позиции, рынки и цены, а не вся база."""
     f = _load_frames(db, entities)
-    f["pos"] = drop_conversions(db, f["pos"], sorted(set(f["pos"]["wallet"])) if entities and len(f["pos"]) else None)
+    f["pos"] = drop_conversions(
+        db, f["pos"], sorted(set(f["pos"]["wallet"].to_list())) if entities and f["pos"].height else None
+    )
     return f
+
+
+POS_SELECT = "SELECT * FROM positions"
 
 
 def _load_frames(db: DB, entities: list[str] | None = None) -> dict:
     if not entities:
         return {
-            "pos": db.frame("SELECT * FROM positions"),
-            "trades": db.frame(f"SELECT {TRADE_COLS} FROM trades"),
-            "wallets": db.frame("SELECT wallet, first_seen_ts, owner_eoa, funder_wallet FROM wallets"),
-            "markets": db.frame("SELECT market_id, event_id, category, volume_usd, resolved_ts, status FROM markets"),
-            # цены нужны только по токенам позиций (CLV)
-            "prices": db.frame(
+            "pos": frames.read(db, POS_SELECT),
+            "trades": frames.read_history(db, f"SELECT {TRADE_COLS} FROM trades"),
+            "wallets": frames.read(db, "SELECT wallet, first_seen_ts, owner_eoa, funder_wallet FROM wallets"),
+            "markets": frames.read(
+                db, "SELECT market_id, event_id, category, volume_usd, resolved_ts, status FROM markets"
+            ),
+            # цены нужны только по токенам позиций (CLV); история большая — читает DuckDB
+            "prices": frames.read_history(
+                db,
                 "SELECT token_id, ts, price FROM price_history WHERE token_id IN "
-                "(SELECT DISTINCT token_id FROM positions)"
+                "(SELECT DISTINCT token_id FROM positions)",
             ),
         }
     pe = ",".join("?" for _ in entities)
-    pos = db.frame(f"SELECT * FROM positions WHERE entity_id IN ({pe})", entities)
-    wallets = sorted(set(pos["wallet"]) | set(entities)) if len(pos) else list(entities)
+    pos = frames.read(db, f"{POS_SELECT} WHERE entity_id IN ({pe})", entities)
+    wallets = sorted(set(pos["wallet"].to_list()) | set(entities)) if pos.height else list(entities)
     pw = ",".join("?" for _ in wallets)
     pos_sub = f"SELECT DISTINCT {{col}} FROM positions WHERE entity_id IN ({pe})"
     return {
         "pos": pos,
-        "trades": db.frame(f"SELECT {TRADE_COLS} FROM trades WHERE wallet IN ({pw})", wallets),
-        "wallets": db.frame(
-            f"SELECT wallet, first_seen_ts, owner_eoa, funder_wallet FROM wallets WHERE wallet IN ({pw})", wallets
+        "trades": frames.read(db, f"SELECT {TRADE_COLS} FROM trades WHERE wallet IN ({pw})", wallets),
+        "wallets": frames.read(
+            db, f"SELECT wallet, first_seen_ts, owner_eoa, funder_wallet FROM wallets WHERE wallet IN ({pw})", wallets
         ),
-        "markets": db.frame(
+        "markets": frames.read(
+            db,
             "SELECT market_id, event_id, category, volume_usd, resolved_ts, status FROM markets "
             f"WHERE market_id IN ({pos_sub.format(col='market_id')})",
             entities,
         ),
-        "prices": db.frame(
+        "prices": frames.read(
+            db,
             f"SELECT token_id, ts, price FROM price_history WHERE token_id IN ({pos_sub.format(col='token_id')})",
             entities,
         ),
@@ -308,15 +408,13 @@ def run_scoring(
     seed: int = 7,
     entities: list[str] | None = None,
     add_new: bool = True,
-) -> pd.DataFrame:
+) -> pl.DataFrame:
     """entities — пересчитать только этих игроков (киты из списка); add_new — добавлять ли
     в живой список новых допущенных игроков (только при автопоиске)."""
     now = now or now_ts()
     f = load_frames(db, entities)
-    if f["pos"].empty:
-        return pd.DataFrame()
-    if f["prices"].empty:
-        f["prices"] = pd.DataFrame(columns=["token_id", "ts", "price"])
+    if f["pos"].is_empty():
+        return pl.DataFrame()
     df, cats = score_entities(
         f["pos"],
         f["trades"],
@@ -344,9 +442,13 @@ def pvalue_pool(db: DB) -> dict:
     return {r["entity_id"]: r["pvalue"] for r in rows}
 
 
-def save_scores(db: DB, df: pd.DataFrame, cats: pd.DataFrame, now: int) -> None:
+def _fin(v: Any) -> Any:
+    return None if isinstance(v, float) and not np.isfinite(v) else v
+
+
+def save_scores(db: DB, df: pl.DataFrame, cats: pl.DataFrame, now: int) -> None:
     rows, flag_rows = [], []
-    for r in df.to_dict("records"):
+    for r in df.to_dicts():
         metrics = {"buckets": r["buckets"], "categories": r["categories"], "flags": r["flags"]}
         rows.append(
             {
@@ -385,13 +487,14 @@ def save_scores(db: DB, df: pd.DataFrame, cats: pd.DataFrame, now: int) -> None:
             if v is not None and np.isfinite(v):
                 flag_rows.append({"entity_id": r["entity_id"], "flag": k, "value": float(v), "computed_at": now})
     cat_rows = []
-    if not cats.empty:
-        for r in cats.to_dict("records"):
+    if not cats.is_empty():
+        for r in cats.to_dicts():
             cat_rows.append(
                 {
                     **r,
                     "computed_at": now,
-                    "edge_ci_lo": None if not np.isfinite(r["edge_ci_lo"]) else r["edge_ci_lo"],
+                    "edge_shrunk": _fin(r["edge_shrunk"]),
+                    "edge_ci_lo": _fin(r["edge_ci_lo"]),
                     "n_clusters": int(r["n_clusters"]),
                 }
             )
@@ -401,11 +504,16 @@ def save_scores(db: DB, df: pd.DataFrame, cats: pd.DataFrame, now: int) -> None:
         db.upsert_many("wallet_flags", flag_rows, ["entity_id", "flag", "computed_at"])
 
 
-def refresh_watchlist(db: DB, df: pd.DataFrame, params: Params, add_new: bool = True) -> None:
+def refresh_watchlist(db: DB, df: pl.DataFrame, params: Params, add_new: bool = True) -> None:
     """Живой список: топ-N допущенных по рейтингу. Решения пользователя (watch/off/copy) не перетираются.
     add_new=False — новых китов система сама не добавляет (данные собираются только по списку пользователя)."""
-    top = df[df["status"] == "approved"].sort_values("score", ascending=False).head(params.live_list_size)
-    for e in top["entity_id"] if add_new else []:
+    if df.is_empty():
+        return
+    rows = df.select("entity_id", "status", "score").to_dicts()
+    approved = [r for r in rows if r["status"] == "approved"]
+    approved.sort(key=lambda r: -(r["score"] if r["score"] is not None and np.isfinite(r["score"]) else -np.inf))
+    for r in approved[: params.live_list_size] if add_new else []:
+        e = r["entity_id"]
         if not db.one("SELECT 1 AS x FROM watchlist WHERE entity_id=?", (e,)):
             db.upsert(
                 "watchlist",
@@ -413,24 +521,25 @@ def refresh_watchlist(db: DB, df: pd.DataFrame, params: Params, add_new: bool = 
                 ["entity_id"],
             )
     # кит, переставший проходить отбор, перестаёт копироваться автоматически
-    for r in df[df["status"].isin(["excluded", "watch", "candidate", "insufficient"])].itertuples():
-        row = db.one("SELECT mode, added_by FROM watchlist WHERE entity_id=?", (r.entity_id,))
+    for r in rows:
+        if r["status"] not in ("excluded", "watch", "candidate", "insufficient"):
+            continue
+        row = db.one("SELECT mode, added_by FROM watchlist WHERE entity_id=?", (r["entity_id"],))
         if row and row["added_by"] == "system" and row["mode"] == "copy":
-            db.execute("UPDATE watchlist SET mode='watch' WHERE entity_id=?", (r.entity_id,))
+            db.execute("UPDATE watchlist SET mode='watch' WHERE entity_id=?", (r["entity_id"],))
             db.notify(
                 "whale_status",
-                f"Кит {short(r.entity_id)} больше не копируется",
+                f"Кит {short(r['entity_id'])} больше не копируется",
                 "Его преимущество перестало подтверждаться — оставили в режиме «Только следить».",
-                r.entity_id,
+                r["entity_id"],
             )
 
 
-def latest_scores(db: DB) -> pd.DataFrame:
-    return pd.DataFrame(
-        db.query(
-            "SELECT s.* FROM wallet_scores s JOIN (SELECT entity_id, MAX(computed_at) AS m FROM wallet_scores "
-            "GROUP BY entity_id) t ON s.entity_id=t.entity_id AND s.computed_at=t.m"
-        )
+def latest_scores(db: DB) -> pl.DataFrame:
+    return frames.read(
+        db,
+        "SELECT s.* FROM wallet_scores s JOIN (SELECT entity_id, MAX(computed_at) AS m FROM wallet_scores "
+        "GROUP BY entity_id) t ON s.entity_id=t.entity_id AND s.computed_at=t.m",
     )
 
 

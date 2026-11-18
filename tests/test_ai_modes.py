@@ -14,7 +14,7 @@ from whalefollow.scoring.scorer import run_scoring
 from whalefollow.scoring.sybil import run_antisybil
 from whalefollow.services import Services
 
-from conftest import fast_params
+from conftest import approved_ids, fast_params
 from synthetic import FakeClob, FakeData, FakeGamma, SyntheticWorld, load_world
 
 GOOGLE_RSS = b"""<?xml version="1.0"?><rss><channel>
@@ -90,7 +90,7 @@ def env():
     )
     agent.run_once()
     whale = cat = None
-    for e in scores[scores.status == "approved"].sort_values("score", ascending=False)["entity_id"]:
+    for e in approved_ids(scores):
         cats = [
             r["category"]
             for r in db.query(

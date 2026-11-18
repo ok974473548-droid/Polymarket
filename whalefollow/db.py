@@ -153,14 +153,25 @@ class DB:
             cur = conn.execute(self._sql(sql), tuple(params))
             return [dict(r) for r in cur.fetchall()]
 
-    def frame(self, sql: str, params: Sequence[Any] = ()):
-        """Результат запроса сразу в pandas (в разы быстрее, чем через список словарей)."""
-        import pandas as pd
+    def rows(self, sql: str, params: Sequence[Any] = ()) -> tuple[list[str], list[tuple]]:
+        """(колонки, строки-кортежи) — быстрый путь для таблиц polars (без словаря на строку)."""
+        with self._read() as conn:
+            if self.kind == "pg":
+                from psycopg.rows import tuple_row  # type: ignore
 
-        if self.kind == "sqlite":
-            with self._read() as conn:
-                return pd.read_sql_query(sql, conn, params=tuple(params))
-        return pd.DataFrame(self.query(sql, params))
+                with conn.cursor(row_factory=tuple_row) as cur:
+                    cur.execute(self._sql(sql), tuple(params))
+                    return [d[0] for d in cur.description or []], list(cur.fetchall())
+            cur = conn.cursor()
+            cur.row_factory = None
+            cur.execute(sql, tuple(params))
+            return [d[0] for d in cur.description or []], cur.fetchall()
+
+    def frame(self, sql: str, params: Sequence[Any] = ()):
+        """Результат запроса сразу в таблицу polars (типы колонок — frames.SCHEMA)."""
+        from .frames import read
+
+        return read(self, sql, params)
 
     def one(self, sql: str, params: Sequence[Any] = ()) -> dict | None:
         rows = self.query(sql, params)
@@ -237,10 +248,15 @@ class DB:
         )
         return self.executemany(sql, ([r[c] for c in cols] for r in rows))
 
-    def upsert_df(self, table: str, df, keys: Sequence[str]) -> int:
-        """upsert из DataFrame без перекладки в список словарей (быстро для сотен тысяч строк)."""
-        if df is None or len(df) == 0:
+    def upsert_frame(self, table: str, df: Any, keys: Sequence[str]) -> int:
+        """upsert из таблицы polars без перекладки в словари (быстро для сотен тысяч строк). NaN → NULL."""
+        if df is None or df.height == 0:
             return 0
+        import polars as pl
+
+        floats = [c for c, t in df.schema.items() if t in (pl.Float32, pl.Float64)]
+        if floats:
+            df = df.with_columns([pl.col(c).fill_nan(None) for c in floats])
         cols = list(df.columns)
         placeholders = ",".join("?" for _ in cols)
         updates = ",".join(f"{c}=excluded.{c}" for c in cols if c not in keys) or f"{keys[0]}=excluded.{keys[0]}"
@@ -248,8 +264,7 @@ class DB:
             f"INSERT INTO {table} ({','.join(cols)}) VALUES ({placeholders}) "
             f"ON CONFLICT ({','.join(keys)}) DO UPDATE SET {updates}"
         )
-        obj = df.astype(object).where(df.notna(), None)
-        return self.executemany(sql, obj.itertuples(index=False, name=None))
+        return self.executemany(sql, df.iter_rows())
 
     def insert_ignore(self, table: str, rows: list[dict]) -> int:
         """Идемпотентная вставка: повторная загрузка не создаёт дублей (правило 1 раздела 4)."""

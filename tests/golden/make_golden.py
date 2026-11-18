@@ -16,14 +16,14 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE.parent.parent))
 
-from conftest import fast_params  # noqa: E402
-from synthetic import SyntheticWorld, load_world  # noqa: E402
-
 from whalefollow.backtest.engine import quick_params, run_backtest, walk_forward  # noqa: E402
 from whalefollow.db import DB  # noqa: E402
 from whalefollow.positions import assign_entities, build_positions  # noqa: E402
 from whalefollow.scoring.scorer import run_scoring  # noqa: E402
 from whalefollow.scoring.sybil import run_antisybil  # noqa: E402
+
+from conftest import fast_params  # noqa: E402
+from synthetic import SyntheticWorld, load_world  # noqa: E402
 
 DAY = 86400
 WORLDS = {
@@ -54,6 +54,16 @@ def clean(v):
     return v
 
 
+def _records(df) -> list[dict]:
+    """Строки таблицы (pandas — эталон 0.15, polars — новый движок)."""
+    return df.to_dicts() if hasattr(df, "to_dicts") else df.to_dict("records")
+
+
+def _counts(s) -> dict:
+    vals = s.to_list() if hasattr(s, "to_list") else list(s)
+    return {v: vals.count(v) for v in set(vals)}
+
+
 def dump_tables(db: DB) -> dict:
     out = {}
     for t, order in TABLES.items():
@@ -81,14 +91,14 @@ def snapshot(name: str, cfg: dict) -> dict:
     out["antisybil"] = run_antisybil(db, p)
     assign_entities(db)
     df = run_scoring(db, p, now=world.now)
-    out["scoring_status"] = clean(sorted(df["status"].value_counts().to_dict().items()))
+    out["scoring_status"] = clean(sorted(_counts(df["status"]).items()))
     out["tables"] = dump_tables(db)
     # пересчёт только части игроков (как проверка одного кита / пересчёт китов из списка)
-    ents = sorted(df["entity_id"])[:3]
+    ents = sorted(df["entity_id"].to_list() if hasattr(df["entity_id"], "to_list") else df["entity_id"])[:3]
     wallets = [r["wallet"] for r in db.query("SELECT DISTINCT wallet FROM positions WHERE entity_id IN (?,?,?)", ents)]
     build_positions(db, wallets)
     sub = run_scoring(db, p, now=world.now + 1, entities=ents, add_new=False)
-    out["scoped"] = clean(sorted(sub.to_dict("records"), key=lambda r: r["entity_id"]))
+    out["scoped"] = clean(sorted(_records(sub), key=lambda r: r["entity_id"]))
     q = quick_params(p)
     out["backtest"] = clean(run_backtest(db, q, world.now - 60 * DAY, world.now))
     out["walk_forward"] = clean(walk_forward(db, q, world.now - 120 * DAY, world.now - 60 * DAY))

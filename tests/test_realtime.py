@@ -26,7 +26,7 @@ from whalefollow.services import Services
 from whalefollow.streams import LiveBooks, Streams, TradeStream, to_trade_row
 from whalefollow.ws import WSClient
 
-from conftest import fast_params
+from conftest import approved_ids, fast_params
 from synthetic import FakeClob, FakeData, FakeGamma, SyntheticWorld, load_world
 
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -382,9 +382,9 @@ def env():
         clock=lambda: world.now,
     )
     agent.run_once()
-    best = scores[scores.status == "approved"].sort_values("score", ascending=False)
+    best = approved_ids(scores)
     whale = cat = None
-    for e in best["entity_id"]:
+    for e in best:
         cats = [
             r["category"]
             for r in db.query(

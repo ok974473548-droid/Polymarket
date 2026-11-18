@@ -432,7 +432,7 @@ def main(argv: list[str] | None = None) -> int:
         from .scoring.scorer import run_scoring
 
         df = run_scoring(db, params)
-        print(df["status"].value_counts().to_string() if len(df) else "нет позиций")
+        print(df["status"].value_counts().sort("status") if df.height else "нет позиций")
     elif args.cmd == "backtest":
         from .backtest.engine import run_backtest
 

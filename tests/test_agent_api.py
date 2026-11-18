@@ -17,7 +17,7 @@ from whalefollow.scoring.scorer import run_scoring
 from whalefollow.scoring.sybil import run_antisybil
 from whalefollow.services import Services
 
-from conftest import fast_params
+from conftest import approved_ids, fast_params
 from synthetic import FakeClob, FakeData, FakeGamma, SyntheticWorld, load_world
 
 
@@ -42,9 +42,9 @@ def env():
         clock=lambda: world.now,
     )
     agent.run_once()  # первая догрузка истории сигналов не создаёт
-    best = scores[scores.status == "approved"].sort_values("score", ascending=False)
+    best = approved_ids(scores)
     whale = None
-    for e in best["entity_id"]:
+    for e in best:
         cats = [
             r["category"]
             for r in db.query(

@@ -2,8 +2,7 @@
 
 import json
 
-import numpy as np
-import pandas as pd
+import polars as pl
 import pytest
 from test_realtime import env  # noqa: F401 — общий мир с китом в режиме «копировать»
 
@@ -28,7 +27,7 @@ DAY = 86400
 
 
 def _trades(rows):
-    return pd.DataFrame(
+    return pl.DataFrame(
         [
             {
                 "trade_id": f"t{i}",
@@ -44,9 +43,9 @@ def _trades(rows):
     )
 
 
-def _mk(resolved_ts=np.nan, end_ts=np.nan):
+def _mk(resolved_ts=None, end_ts=None):
     return (
-        pd.DataFrame(
+        pl.DataFrame(
             [
                 {
                     "market_id": "m",
@@ -56,9 +55,10 @@ def _mk(resolved_ts=np.nan, end_ts=np.nan):
                     "resolved_ts": resolved_ts,
                     "end_ts": end_ts,
                 }
-            ]
+            ],
+            schema_overrides={"resolved_ts": pl.Int64, "end_ts": pl.Int64},
         ),
-        pd.DataFrame([{"token_id": "y", "market_id": "m", "payout": 1.0}]),
+        pl.DataFrame([{"token_id": "y", "market_id": "m", "payout": 1.0}]),
     )
 
 
@@ -66,19 +66,19 @@ def _mk(resolved_ts=np.nan, end_ts=np.nan):
 def test_oversold_position_does_not_count_foreign_proceeds():
     # купил 100 по 0,4; продал 300 по 0,6 (200 акций пришли не из покупок — split/перевод)
     m, t = _mk(resolved_ts=5000)
-    p = _build(_trades([("y", "BUY", 100, 0.4, 100), ("y", "SELL", 300, 0.6, 200)]), m, t).iloc[0]
+    p = _build(_trades([("y", "BUY", 100, 0.4, 100), ("y", "SELL", 300, 0.6, 200)]), m, t).row(0, named=True)
     assert p["shares_sold"] == 100 and p["proceeds_usd"] == pytest.approx(60.0)
     assert p["pnl_usd"] == pytest.approx(20.0)  # было 140: выручка за чужие 200 акций
 
 
 def test_resolved_market_without_date_is_not_dropped_from_scoring():
-    m, t = _mk(resolved_ts=np.nan, end_ts=9000)
+    m, t = _mk(resolved_ts=None, end_ts=9000)
     p = _build(_trades([("y", "BUY", 100, 0.4, 100)]), m, t)
-    assert p.iloc[0]["closed_ts"] == 9000
-    p["entity_id"] = "w"
+    assert p.row(0, named=True)["closed_ts"] == 9000
+    p = p.with_columns(entity_id=pl.lit("w"))
     assert len(closed_positions(p, now=10_000)) == 1  # раньше closed_ts = NaN → позиция выпадала
     m2, t2 = _mk()  # нет ни даты разрешения, ни срока — последняя сделка
-    assert _build(_trades([("y", "BUY", 100, 0.4, 100)]), m2, t2).iloc[0]["closed_ts"] == 100
+    assert _build(_trades([("y", "BUY", 100, 0.4, 100)]), m2, t2).row(0, named=True)["closed_ts"] == 100
 
 
 # ---------------------------------------------------------------- отбор: поправка на множественные проверки
@@ -105,10 +105,11 @@ def test_single_check_uses_pvalue_pool():
         entities=[skilled],
         pvalue_pool=pool,
     )
-    p = alone.iloc[0]["pvalue"]
-    assert alone.iloc[0]["qvalue"] == pytest.approx(p)  # один тест — q = p
-    assert pooled.iloc[0]["qvalue"] == pytest.approx(bh_qvalues([p] + [0.6] * 99)[0])
-    assert pooled.iloc[0]["qvalue"] >= alone.iloc[0]["qvalue"]
+    a, b = alone.row(0, named=True), pooled.row(0, named=True)
+    p = a["pvalue"]
+    assert a["qvalue"] == pytest.approx(p)  # один тест — q = p
+    assert b["qvalue"] == pytest.approx(bh_qvalues([p] + [0.6] * 99)[0])
+    assert b["qvalue"] >= a["qvalue"]
 
 
 # ---------------------------------------------------------------- маркет-мейкер: split/merge
@@ -121,9 +122,10 @@ def test_split_merge_is_maker_flag_and_not_two_sided_trading():
             rows += [
                 {"market_id": m, "token_id": m + t, "side": "BUY", "size_usd": 5.0, "source": "split"} for t in "yn"
             ]
-    trades = pd.DataFrame(rows)
-    pos = pd.DataFrame(
-        {"status": ["open"], "closed_ts": [np.nan], "opened_ts": [0], "remaining_shares": [1.0], "avg_entry": [0.5]}
+    trades = pl.DataFrame(rows, schema_overrides={"source": pl.Utf8})
+    pos = pl.DataFrame(
+        {"status": ["open"], "closed_ts": [None], "opened_ts": [0], "remaining_shares": [1.0], "avg_entry": [0.5]},
+        schema_overrides={"closed_ts": pl.Int64},
     )
     f = classify.maker_flags(trades, pos, fast_params())
     assert f["F5_merge_split"] == pytest.approx(0.4)

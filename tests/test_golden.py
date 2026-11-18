@@ -1,7 +1,7 @@
 """Сверка с эталоном (tests/golden, снят на pandas-версии 0.15.0): переход на polars не меняет результаты.
 
 Позиции, связи кошельков, оценки китов (в том числе бутстреп и тест на удачу — тот же генератор случайных
-чисел в том же порядке), живой список, бэктест и walk-forward сравниваются до 1e-9 относительной погрешности.
+чисел в том же порядке), живой список, бэктест и walk-forward сравниваются до 1e-9 (относительной или абсолютной — в долларах) погрешности.
 """
 
 import gzip
@@ -10,11 +10,11 @@ import math
 from pathlib import Path
 
 import pytest
-
 from golden.make_golden import WORLDS, snapshot
 
 HERE = Path(__file__).resolve().parent / "golden"
 REL = 1e-9
+ABS = 1e-9  # суммы в долларах: разница в порядке сложения даёт ~1e-12 у почти нулевой прибыли
 
 
 def _diff(a, b, path="", out=None, limit=20):
@@ -35,7 +35,7 @@ def _diff(a, b, path="", out=None, limit=20):
     elif isinstance(a, (int, float)) and isinstance(b, (int, float)) and not isinstance(a, bool):
         if math.isnan(float(a)) and math.isnan(float(b)):
             return out
-        if not math.isclose(float(a), float(b), rel_tol=REL, abs_tol=1e-12):
+        if not math.isclose(float(a), float(b), rel_tol=REL, abs_tol=ABS):
             out.append(f"{path}: {a!r} → {b!r}")
     elif isinstance(a, str) and isinstance(b, str) and a.startswith("{") and b.startswith("{"):
         try:

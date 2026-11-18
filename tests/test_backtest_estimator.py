@@ -17,10 +17,12 @@ def test_positions_at_hides_future(scored_world):
     fr = Frames(db)
     at = world.now - 60 * DAY
     pos = fr.positions_at(at)
+    import polars as pl
+
     assert pos["opened_ts"].max() <= at
-    resolved_later = pos[(pos["resolved_ts"].isna()) & (pos["status"] == "resolved")]
-    assert resolved_later.empty
-    assert (pos.loc[pos["status"] == "resolved", "resolved_ts"] <= at).all()
+    resolved_later = pos.filter(pl.col("resolved_ts").is_null() & (pl.col("status") == "resolved"))
+    assert resolved_later.is_empty()
+    assert (pos.filter(pl.col("status") == "resolved")["resolved_ts"] <= at).all()
 
 
 def test_backtest_report_shape(scored_world):

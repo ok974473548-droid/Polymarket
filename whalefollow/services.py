@@ -15,7 +15,6 @@ import time
 from datetime import UTC, datetime
 
 import numpy as np
-import pandas as pd
 
 from . import categories as _cats
 from . import fees, reconcile, tracked
@@ -1026,7 +1025,7 @@ class Services:
 
     def whales(self) -> dict:
         scores = (
-            {r["entity_id"]: r for r in scorer.latest_scores(self.db).to_dict("records")}
+            {r["entity_id"]: r for r in scorer.latest_scores(self.db).to_dicts()}
             if self.db.scalar("SELECT COUNT(*) AS n FROM wallet_scores", default=0)
             else {}
         )
@@ -1066,22 +1065,23 @@ class Services:
         wl = self.db.one("SELECT * FROM watchlist WHERE entity_id=?", (entity_id,)) or {}
         off = set(json.loads(wl.get("categories_off") or "[]"))
         cats = scorer.latest_category_scores(self.db, entity_id)
-        pos = pd.DataFrame(
-            self.db.query(
-                "SELECT closed_ts, pnl_usd, cost_usd FROM positions WHERE entity_id=? AND "
-                "pnl_usd IS NOT NULL ORDER BY closed_ts",
-                (entity_id,),
-            )
-        )
+        months: dict[str, list[float]] = {}
+        for r in self.db.query(
+            "SELECT closed_ts, pnl_usd, cost_usd FROM positions WHERE entity_id=? AND "
+            "pnl_usd IS NOT NULL AND closed_ts IS NOT NULL ORDER BY closed_ts",
+            (entity_id,),
+        ):
+            m = datetime.fromtimestamp(int(r["closed_ts"]), tz=UTC).strftime("%Y-%m")
+            acc = months.setdefault(m, [0.0, 0.0])
+            acc[0] += r["pnl_usd"] or 0.0
+            acc[1] += r["cost_usd"] or 0.0
         series = []
-        if not pos.empty:
-            pos["month"] = pd.to_datetime(pos["closed_ts"], unit="s").dt.to_period("M").astype(str)
-            g = pos.groupby("month").agg(pnl=("pnl_usd", "sum"), cost=("cost_usd", "sum")).tail(7)
-            cum_cost = g["cost"].cumsum()
-            series = [
-                {"month": m, "cum_return_pct": round(v * 100, 1)}
-                for m, v in (g["pnl"].cumsum() / cum_cost.clip(lower=1)).items()
-            ]
+        cum_pnl = cum_cost = 0.0
+        last7 = sorted(months.items())[-7:]
+        for m, (pnl, cost) in last7:
+            cum_pnl += pnl
+            cum_cost += cost
+            series.append({"month": m, "cum_return_pct": round(cum_pnl / max(cum_cost, 1) * 100, 1)})
         ours = self.db.query(
             "SELECT s.signal_id, s.token_id, s.whale_price, s.ts, s.status, s.kind, d.decision, d.size_usd "
             "FROM signals s LEFT JOIN decisions d ON d.signal_id=s.signal_id WHERE s.entity_id=? "
@@ -1447,10 +1447,10 @@ class Services:
         f = scorer.load_frames(self.db, [e])
         stats = {
             "trades": int(len(f["trades"])),
-            "markets": int(f["pos"]["market_id"].nunique()) if len(f["pos"]) else 0,
+            "markets": int(f["pos"]["market_id"].n_unique()) if f["pos"].height else 0,
             "seconds": None,
         }
-        if f["pos"].empty or e not in set(f["pos"]["entity_id"]):
+        if f["pos"].is_empty() or e not in set(f["pos"]["entity_id"].to_list()):
             stats["seconds"] = round(time.time() - t0, 1)
             return {
                 "ok": True,
@@ -1460,8 +1460,6 @@ class Services:
                 "stats": stats,
                 "checks": [{"ok": False, "title": "Нет истории ставок", "text": "У кошелька нет закрытых ставок"}],
             }
-        if f["prices"].empty:
-            f["prices"] = pd.DataFrame(columns=["token_id", "ts", "price"])
         df, cats = scorer.score_entities(
             f["pos"],
             f["trades"],
@@ -1476,7 +1474,7 @@ class Services:
         scorer.save_scores(self.db, df, cats, self.clock())
         prog("score", 1, 1)
         rec = None  # сверка с Polymarket больше не нужна: прибыль и позиции берутся у Polymarket готовыми
-        r = df.iloc[0].to_dict()
+        r = df.row(0, named=True)
         ch = scorer.approval_checks(r, self.p)
         checks = [
             {
@@ -1508,8 +1506,8 @@ class Services:
         fits = r["status"] == "approved"
         strong = [
             CATEGORY_RU.get(c, c)
-            for c, v in (cats.set_index("category").iterrows() if not cats.empty else [])
-            if v["status"] == "approved"
+            for c, st in (cats.select("category", "status").iter_rows() if not cats.is_empty() else [])
+            if st == "approved"
         ]
         stats["seconds"] = round(time.time() - t0, 1)
         return {

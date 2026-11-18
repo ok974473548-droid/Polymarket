@@ -408,7 +408,7 @@ class Scheduler:
             if not ents:
                 return None
         df = run_scoring(self.db, self.p, now=self.clock(), entities=ents, add_new=scope is None)
-        status = df["status"].value_counts().to_dict() if len(df) else {}
+        status = dict(df["status"].value_counts().iter_rows()) if df.height else {}
         log.info("скоринг: %s, антисибил: %s", status, sy)
         return status
 
