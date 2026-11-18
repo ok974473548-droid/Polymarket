@@ -17,6 +17,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 
+from events_fake import EventsClob, EventsGamma, make_events  # noqa: E402
 from test_players import ReadyData, ReadyGamma  # noqa: E402
 
 from whalefollow import categories  # noqa: E402
@@ -30,7 +31,7 @@ from whalefollow.scoring.sybil import run_antisybil  # noqa: E402
 from whalefollow.services import Services  # noqa: E402
 
 from conftest import fast_params  # noqa: E402
-from synthetic import FakeClob, FakeData, FakeGamma, SyntheticWorld, load_world  # noqa: E402
+from synthetic import FakeData, FakeGamma, SyntheticWorld, load_world  # noqa: E402
 
 
 def _mix(dst: type, src: type) -> None:
@@ -61,6 +62,7 @@ def build(db_url: str = "sqlite://:memory:") -> tuple[Services, dict]:
     _mix(DemoData, ReadyData)
     _mix(FakeGamma, ReadyGamma)
     w = SyntheticWorld(seed=4, now=int(time.time()) // 3600 * 3600)  # «сейчас» — настоящее: таймеры сигналов идут
+    evs = make_events(w)  # события для вкладки «События» (многоисходное и «Да/Нет»)
     db = DB(db_url)
     db.init_schema()
     load_world(db, w)
@@ -73,8 +75,8 @@ def build(db_url: str = "sqlite://:memory:") -> tuple[Services, dict]:
     db.set_setting("categories", categories.KEYS + ["other"])
     data = DemoData(w)
     ReadyData.__init__(data)
-    gamma = FakeGamma(w)
-    agent = Agent(db, p, data, FakeClob(w), gamma, estimator=FunctionEstimator(lambda c: 0.64), clock=lambda: w.now)
+    gamma = EventsGamma(w, evs)
+    agent = Agent(db, p, data, EventsClob(w), gamma, estimator=FunctionEstimator(lambda c: 0.64), clock=lambda: w.now)
     svc = Services(db, p, agent=agent, data=data, gamma=gamma, clock=lambda: w.now)
     best = sc.filter(sc["status"] == "approved").sort("score", descending=True)["entity_id"].to_list()
     for e in best[:3]:

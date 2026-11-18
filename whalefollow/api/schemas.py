@@ -72,6 +72,14 @@ class PushSubscribeIn(_In):
     label: str = Field(default="", description="Браузер/устройство — для списка")
 
 
+class EventBuyIn(_In):
+    token_id: str = Field(default="", description="Исход (токен), который покупаем")
+    usd: float = Field(default=0, description="Сумма, $ (урезается лимитами модуля «События»)")
+    max_price: float | None = Field(
+        default=None, description="Не дороже этой цены (0–1); по умолчанию лучшая цена + 2¢"
+    )
+
+
 class PluginPatchIn(_In):
     enabled: bool = Field(default=True, description="Включить (true) или выключить (false) плагин")
 

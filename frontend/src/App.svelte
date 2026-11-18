@@ -29,6 +29,8 @@
     settings: () => import("./views/Settings.svelte"),
     diagnostics: () => import("./views/Diagnostics.svelte"),
     plugins: () => import("./views/Plugins.svelte"),
+    events: () => import("./views/Events.svelte"),
+    event: () => import("./views/Event.svelte"),
     trial: () => import("./views/Trial.svelte"),
     welcome: () => import("./views/Welcome.svelte"),
   };
@@ -114,6 +116,7 @@
   <nav class="side" id="side" aria-label="Разделы" hidden={current.nav === null || app.locked}>
     <p class="logo"><span class="seal" aria-hidden="true">W</span>WhaleFollow</p>
     <a href="#/" class:on={current.nav === "signals"} data-nav="signals">Сигналы</a>
+    <a href="#/events" class:on={current.nav === "events"} data-nav="events">События</a>
     <a href="#/positions" class:on={current.nav === "positions"} data-nav="positions"
       >Мои ставки{#if st?.need_decision}<span class="badge" id="badge-decide">{st.need_decision}</span>{/if}</a
     >

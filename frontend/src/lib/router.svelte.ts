@@ -9,6 +9,8 @@ const ROUTES: [RegExp, string, string | null][] = [
   [/^#?\/?$/, "dashboard", "signals"],
   [/^#\/signal\/([^/]+)$/, "signal", "signals"],
   [/^#\/journal$/, "journal", "signals"],
+  [/^#\/events$/, "events", "events"],
+  [/^#\/events\/([^/]+)$/, "event", "events"],
   [/^#\/positions(?:\/(open|closed))?$/, "positions", "positions"],
   [/^#\/bet\/([^/]+)$/, "bet", "positions"],
   [/^#\/whales$/, "whales", "whales"],

@@ -1,6 +1,6 @@
 [project]
 name = "whalefollow"
-version = "1.0.0"
+version = "1.1.0"
 description = "WhaleFollow: отбор сильных игроков Polymarket и агент копирования ставок (v1: данные, скоринг, бэктест, бумажная торговля)"
 requires-python = ">=3.11"
 # Существующие зависимости — диапазонами (как в 0.13), новые пакеты — точными версиями; pandas заменён polars (0.16)
@@ -79,7 +79,7 @@ python_version = "3.12"   # линтер в CI работает на 3.12
 files = ["whalefollow/scoring", "whalefollow/decision", "whalefollow/execution", "whalefollow/positions.py",
          "whalefollow/net.py", "whalefollow/api", "whalefollow/migrations/__init__.py", "whalefollow/logs.py",
          "whalefollow/ws.py", "whalefollow/rotation.py", "whalefollow/frames.py", "whalefollow/runtime.py",
-         "whalefollow/plugins", "whalefollow/push.py"]
+         "whalefollow/plugins", "whalefollow/push.py", "whalefollow/eventhub"]
 follow_imports = "silent"          # ошибки проверяются в перечисленных модулях; остальное — постепенно
 ignore_missing_imports = true      # pandas/scipy без заглушек типов (pandas заменяется на этапе 3)
 warn_unused_ignores = true

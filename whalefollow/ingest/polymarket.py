@@ -258,6 +258,24 @@ class GammaClient:
                 return None
             raise
 
+    def events(self, **params) -> list[dict]:
+        """Список событий (Gamma /events): tag_slug, order, ascending, limit, offset, active, closed, end_date_min."""
+        res = self.http.get("/events", params) or []
+        return res if isinstance(res, list) else []
+
+    def event(self, event_id: str) -> dict | None:
+        try:
+            return self.http.get(f"/events/{event_id}") or None
+        except ApiError as exc:
+            if "HTTP 404" in str(exc):
+                return None
+            raise
+
+    def search_events(self, q: str, limit: int = 20, status: str = "active") -> list[dict]:
+        """Поиск событий по словам (как строка поиска на сайте)."""
+        res = self.http.get("/public-search", {"q": q, "limit_per_type": limit, "events_status": status}) or {}
+        return list(res.get("events") or []) if isinstance(res, dict) else []
+
     def search_profiles(self, q: str, limit: int = 6) -> list[dict]:
         """Поиск игроков по имени (как строка поиска на сайте)."""
         res = (
@@ -716,6 +734,12 @@ class ClobClient:
 
     def book(self, token_id: str):
         return parse_book(self.http.get("/book", {"token_id": token_id}))
+
+    def prices_interval(self, token_id: str, interval: str, fidelity_min: int) -> list[tuple[int, float]]:
+        """История цены за период CLOB: interval = 1h | 6h | 1d | 1w | 1m | max; точка раз в fidelity_min минут."""
+        return parse_price_history(
+            self.http.get("/prices-history", {"market": token_id, "interval": interval, "fidelity": fidelity_min})
+        )
 
     def prices_history(self, token_id: str, start: int | None = None, end: int | None = None, fidelity_min: int = 1):
         params = {"market": token_id, "fidelity": fidelity_min}

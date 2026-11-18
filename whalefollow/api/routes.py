@@ -34,6 +34,11 @@ GET  /api/journal?limit=100           журнал всех решений
 GET  /api/trial                       прогресс пробного режима и работа сбора данных
 GET  /api/rotation?window_weeks&min_bets&min_result_usd&max_drawdown_share  ротация китов по форме
 PUT  /api/rotation/rule               сохранить правило «в форме»
+GET  /api/catalog?topic&sort&q&offset  «События»: список событий Polymarket по темам, поиск, сортировка
+GET  /api/catalog/{id}                событие: исходы, цены, правила, наши ставки, лимиты модуля
+GET  /api/catalog/{id}/history?period=1w&keys=a,b   история цен исходов (1h 6h 1d 1w 1m all)
+GET  /api/catalog/{id}/live?tokens=a,b живые цены исходов (поток стаканов или стакан CLOB)
+POST /api/catalog/{id}/buy            {token_id, usd, max_price?} — виртуальная покупка исхода
 GET  /api/plugins                     экран «Плагины»: источники, уведомления, стратегии, состояние и ошибки
 PATCH /api/plugins/{name}             {enabled} — включить/выключить плагин
 GET  /api/plugins/{name}/backtest?days=90  бэктест стратегии на китах из списка
@@ -310,6 +315,33 @@ def build_router(svc: Services) -> APIRouter:
     @r.get("/diagnostics", responses=_doc(S.DiagnosticsOut), tags=["Диагностика"])
     def diagnostics(request: Request, live: str | None = None) -> Response:
         return J(request, svc.diagnostics(live=live == "1"))
+
+    # ---------------------------------------------------------------- модуль «События»
+    def _csv(v: str | None) -> list[str]:
+        return [x for x in (v or "").split(",") if x][:24]
+
+    @r.get("/catalog", tags=["События"])
+    def events_list(
+        request: Request, topic: str = "", sort: str = "volume24", q: str = "", offset: str | None = None
+    ) -> Response:
+        return J(request, svc.events_list(topic, sort, q, _int(offset) or 0))
+
+    @r.get("/catalog/{event_id}", tags=["События"])
+    def event_detail(request: Request, event_id: str) -> Response:
+        return J(request, _need(svc.event_detail(event_id), "Событие не найдено"))
+
+    @r.get("/catalog/{event_id}/history", tags=["События"])
+    def event_history(request: Request, event_id: str, period: str = "1w", keys: str | None = None) -> Response:
+        return J(request, svc.event_history(event_id, period, _csv(keys) or None))
+
+    @r.get("/catalog/{event_id}/live", tags=["События"])
+    def event_live(request: Request, event_id: str, tokens: str | None = None) -> Response:
+        return J(request, svc.event_live(event_id, _csv(tokens)))
+
+    @r.post("/catalog/{event_id}/buy", tags=["События"])
+    def event_buy(request: Request, event_id: str, body: S.EventBuyIn | None = None) -> Response:
+        b = body or S.EventBuyIn()
+        return J(request, svc.event_buy(event_id, b.token_id, b.usd, b.max_price))
 
     # ---------------------------------------------------------------- плагины
     @r.get("/plugins", tags=["Плагины"])

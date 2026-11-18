@@ -139,3 +139,35 @@ test("плагины: состояние, переключатель и бэкт
   await expect(copy).toContainText("Повторили бы");
   await expect(page.locator('[data-plugin="bookmakers"]')).toContainText(/недоступен|выключен/);
 });
+
+test("события: список по темам, страница события с живым графиком и покупка", async ({ page }) => {
+  await page.goto("/");
+  await page.locator('[data-nav="events"]').click();
+  await expect(page).toHaveURL(/#\/events$/);
+  await page.locator('[data-topic="politics"]').click();
+  const card = page.locator('[data-event="9001"]');
+  await expect(card).toContainText("Кто победит на выборах мэра?");
+  await expect(page.locator('[data-event="9002"]')).toHaveCount(0);
+  await card.click();
+  await expect(page).toHaveURL(/#\/events\/9001$/);
+  await expect(page.locator(".ev-legend .ev-leg")).toHaveCount(4);
+  await expect(page.locator(".ev-row[data-outcome]")).toHaveCount(4);
+  await expect(page.locator(".ev-row[data-outcome]").first()).toContainText("Анна Смирнова");
+  // живые цены: страница сама опрашивает цены исходов
+  await page.waitForRequest((r) => r.url().includes("/live?tokens="));
+  await page.locator('[data-period="1d"]').click();
+  await expect(page.locator('[data-period="1d"]')).toHaveAttribute("aria-pressed", "true");
+  // стакан исхода
+  await page.locator(".ev-row[data-outcome] .ev-name").first().click();
+  await expect(page.locator(".ev-book")).toContainText("Продавцы");
+  // виртуальная покупка
+  await page.locator("[data-act=buy-yes]").first().click();
+  const dlg = page.locator("dialog[open]");
+  await expect(dlg).toContainText("Анна Смирнова");
+  await dlg.locator("[data-act=buy-usd]").fill("5");
+  await dlg.locator("[data-act=buy-confirm]").click();
+  await expect(page.locator("#toast")).toHaveText(/Куплено .* на \$5/);
+  await expect(page.getByRole("heading", { name: "Ваши ставки в этом событии" })).toBeVisible();
+  await page.goto("/#/positions/open");
+  await expect(page.locator("a.ledger-row.bets-grid", { hasText: "своя ставка по событию" })).toHaveCount(1);
+});

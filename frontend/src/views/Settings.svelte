@@ -34,6 +34,8 @@
     ["daily_limit_usd", "Лимит в день", "$"],
     ["daily_loss_stop_frac", "Пауза при убытке за день", "%"],
     ["monthly_loss_stop_frac", "Пауза при убытке за месяц", "%"],
+    ["events_max_bet_usd", "«События»: максимум на одну ставку", "$"],
+    ["events_daily_limit_usd", "«События»: лимит в день", "$"],
   ];
   const src = (k: string, def = true) => {
     const v = (s.news_sources || {})[k];
@@ -53,6 +55,8 @@
       bankroll_usd: v("bankroll_usd"),
       max_bet_usd: v("max_bet_usd"),
       daily_limit_usd: v("daily_limit_usd"),
+      events_max_bet_usd: v("events_max_bet_usd"),
+      events_daily_limit_usd: v("events_daily_limit_usd"),
       daily_loss_stop_frac: v("daily_loss_stop_frac") / 100,
       monthly_loss_stop_frac: v("monthly_loss_stop_frac") / 100,
       categories: f.getAll("cat"),
@@ -169,7 +173,7 @@
                 <input {id} class="inp" type="number" min="0" step="1" value={suffix === "%" ? Math.round(s[id] * 100) : s[id]} />
               </div>
             {/each}
-            <div class="sub">Система никогда не превысит эти суммы, даже если сигнал очень выгодный.</div>
+            <div class="sub">Система никогда не превысит эти суммы, даже если сигнал очень выгодный. Ставки со страницы «События» — из того же банка, с отдельным лимитом; общие лимиты и паузы действуют и на них.</div>
           </fieldset>
         </div>
         <div class="card">

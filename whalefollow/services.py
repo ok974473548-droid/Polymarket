@@ -31,6 +31,23 @@ from .scoring import scorer
 DAY = 86400
 log = logging.getLogger(__name__)
 
+
+def watch_tokens(db: DB, tokens: list[str], ttl_s: float = 120.0) -> None:
+    """Исходы открытой страницы события — в поток стаканов на ttl_s (живые цены в интерфейсе)."""
+    now = time.time()
+    cur = {t: e for t, e in (db.get_state("live_watch") or {}).items() if e > now}
+    if all(cur.get(t, 0) > now + ttl_s / 2 for t in tokens):
+        return  # уже следим — не пишем в базу на каждый опрос
+    for t in tokens:
+        cur[t] = now + ttl_s
+    db.set_state("live_watch", dict(sorted(cur.items(), key=lambda kv: -kv[1])[:60]))
+
+
+def watched_tokens(db: DB) -> list[str]:
+    now = time.time()
+    return [t for t, e in (db.get_state("live_watch") or {}).items() if e > now]
+
+
 # Причины решений простыми словами (для «Недавние решения», журнала и уведомлений)
 REASONS_RU = {
     "too_late": "Сигнал пришёл слишком поздно",
@@ -496,7 +513,8 @@ class Services:
         }
 
     def _live_tokens(self) -> list[str]:
-        toks = [
+        toks = watched_tokens(self.db)  # исходы открытой страницы события
+        toks += [
             r["token_id"]
             for r in self.db.query("SELECT DISTINCT token_id FROM signals WHERE status='pending' LIMIT 30")
         ]
@@ -723,6 +741,9 @@ class Services:
             "whale_exited": whale_state == "вышел",
             "result": None if is_open else result,
             "is_open": is_open,
+            # откуда ставка: повтор за китом или своя — со страницы события (модуль «События»)
+            "origin": "event" if str(p.get("signal_id") or "").startswith("ev:") else "whale",
+            "event_id": str(p["signal_id"])[3:] if str(p.get("signal_id") or "").startswith("ev:") else None,
         }
 
     def positions(self, status: str = "open") -> dict:
@@ -1863,6 +1884,174 @@ class Services:
         self.db.notify("settings", f"Порог выгоды изменён на {t * 100:.0f}%", "Подстройка по итогам пробного режима")
         return {"ok": True, "tuning": self.tuning()}
 
+    # ------------------------------------------------------------ модуль «События» (этап A: каталог и страница)
+    def _events(self):
+        from .eventhub.catalog import EventsCatalog
+
+        cat = self.__dict__.get("_events_catalog")
+        if cat is None:
+            if self.gamma is None:
+                return None
+            cat = self.__dict__["_events_catalog"] = EventsCatalog(self.gamma, self.clob, self.db)
+        return cat
+
+    def events_list(self, topic: str = "", sort: str = "volume24", q: str = "", offset: int = 0) -> dict:
+        cat = self._events()
+        if cat is None:
+            return {"ok": False, "error": "Нет подключения к Polymarket", "items": []}
+        try:
+            return cat.browse(topic, sort, q, offset)
+        except Exception as exc:
+            return {"ok": False, "error": f"Polymarket не ответил: {exc}"[:200], "items": []}
+
+    def _event_spent_today(self, now: int) -> float:
+        day0 = now - now % DAY
+        return float(
+            self.db.scalar(
+                "SELECT SUM(f.size_shares*f.price) AS s FROM fills f JOIN orders o ON o.order_id=f.order_id "
+                "WHERE f.side='BUY' AND f.ts>=? AND o.signal_id LIKE 'ev:%'",
+                (day0,),
+                0.0,
+            )
+            or 0.0
+        )
+
+    def event_detail(self, event_id: str) -> dict | None:
+        cat = self._events()
+        if cat is None:
+            return {"ok": False, "error": "Нет подключения к Polymarket"}
+        try:
+            ev = cat.get(event_id)
+        except Exception as exc:
+            return {"ok": False, "error": f"Polymarket не ответил: {exc}"[:200]}
+        if ev is None:
+            return None
+        toks = {t for r in ev["outcomes"] for t in (r["yes_token"], r["no_token"]) if t}
+        now = int(self.clock())
+        mine = []
+        for tok, p in self.pf.positions().items():
+            if tok in toks and (p["shares"] > 1e-9 or (p.get("closed_ts") or 0) > now - 30 * DAY):
+                row = self._bet_row(p, now)
+                mine.append(
+                    {
+                        "token_id": tok,
+                        "title": next(
+                            (r["title"] for r in ev["outcomes"] if tok in (r["yes_token"], r["no_token"])), ""
+                        ),
+                        "side": row.get("side"),
+                        "is_open": row["is_open"],
+                        "stake_usd": row["stake_usd"],
+                        "value_usd": row["value_usd"],
+                        "pnl_usd": row["pnl_usd"],
+                        "entry_cents": row["entry_cents"],
+                    }
+                )
+        s = self.risk.settings()
+        spent = self._event_spent_today(now)
+        fee_rate = None
+        if ev["outcomes"]:
+            m = self.db.one("SELECT * FROM markets WHERE market_id=?", (ev["outcomes"][0]["market_id"],))
+            fee_rate = fees.market_rate(m) if m else None
+        return {
+            "ok": True,
+            **ev,
+            "mine": mine,
+            "fee_rate": fee_rate,
+            "limits": {
+                # на одну ставку действует и общий лимит (доля банка, «Максимум на одну ставку»)
+                "max_bet_usd": min(
+                    float(s["events_max_bet_usd"]),
+                    float(s["max_bet_usd"]),
+                    self.p.max_bet_frac * float(s["bankroll_usd"]),
+                ),
+                "left_today_usd": round(max(0.0, float(s["events_daily_limit_usd"]) - spent), 2),
+                "daily_limit_usd": float(s["events_daily_limit_usd"]),
+            },
+            "mode": s.get("mode", "paper"),
+        }
+
+    def event_history(self, event_id: str, period: str = "1w", keys: list[str] | None = None) -> dict:
+        cat = self._events()
+        if cat is None:
+            return {"ok": False, "error": "Нет подключения к Polymarket"}
+        try:
+            return cat.history(event_id, period, keys)
+        except Exception as exc:
+            return {"ok": False, "error": f"История цен не загрузилась: {exc}"[:200]}
+
+    def event_live(self, event_id: str, tokens: list[str]) -> dict:
+        """Живые цены исходов открытой страницы. Исходы на 2 минуты попадают в поток стаканов (realtime),
+        пока поток не подхватил их — цены берутся прямо из стаканов."""
+        cat = self._events()
+        if cat is None:
+            return {"ok": False, "error": "Нет подключения к Polymarket", "quotes": {}}
+        tokens = [t for t in dict.fromkeys(tokens) if t][:24]
+        watch_tokens(self.db, tokens)
+        live = {}
+        for t in tokens:
+            q = self.quote(t)
+            if q and q.get("live"):
+                live[t] = q
+        try:
+            qs = cat.quotes(tokens, live)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)[:200], "quotes": {}}
+        return {"ok": True, "ts": time.time(), "quotes": qs}
+
+    def event_buy(self, event_id: str, token_id: str, usd: float, max_price: float | None = None) -> dict:
+        """Виртуальная покупка исхода со страницы события: лимиты модуля «События» и общие стопы."""
+        now = int(self.clock())
+        s = self.risk.settings()
+        if s.get("mode", "paper") != "paper":
+            return {"ok": False, "error": "Реальные ставки отключены — работает только пробный режим"}
+        ev = self.event_detail(event_id)
+        if not ev or not ev.get("ok"):
+            return {"ok": False, "error": (ev or {}).get("error") or "Событие не найдено"}
+        row = next((r for r in ev["outcomes"] if token_id in (r["yes_token"], r["no_token"])), None)
+        if row is None:
+            return {"ok": False, "error": "Такого исхода нет в событии"}
+        if row["closed"]:
+            return {"ok": False, "error": "Рынок уже закрыт"}
+        try:
+            usd = float(usd)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "Укажите сумму"}
+        if usd <= 0:
+            return {"ok": False, "error": "Сумма должна быть больше нуля"}
+        limits = ev["limits"]
+        size = min(usd, limits["max_bet_usd"], limits["left_today_usd"])
+        if size < 1:
+            return {"ok": False, "error": "Лимит ставок по событиям на сегодня исчерпан"}
+        market = self.db.one("SELECT * FROM markets WHERE market_id=?", (row["market_id"],)) or {}
+        rr = self.risk.cap(size, market=market, entity_id="", now=now)
+        if rr.blocked:
+            return {"ok": False, "error": ", ".join(REASONS_RU.get(r, r) for r in rr.reasons)}
+        try:
+            bids, asks = self.clob.book(token_id)
+        except Exception as exc:
+            return {"ok": False, "error": f"Стакан не загрузился: {exc}"[:200]}
+        if not asks:
+            return {"ok": False, "error": "Нет заявок на продажу — купить сейчас нельзя"}
+        from .execution.paper import PaperBroker
+
+        limit = float(max_price) if max_price else min(asks[0][0] + 0.02, 0.99)  # защита от проскальзывания
+        res = PaperBroker(self.db).buy(
+            f"ev:{event_id}", token_id, rr.size_usd, asks, ts=now, fee_rate=fees.market_rate(market), limit_price=limit
+        )
+        if not res:
+            return {"ok": False, "error": "По этой цене купить не получилось — цена ушла"}
+        self.db.publish("bet", token_id=token_id)
+        capped = rr.size_usd < usd - 0.01
+        return {
+            "ok": True,
+            **res,
+            "capped": capped,
+            "message": f"Куплено {res['shares']:.1f} акций по {res['avg_price'] * 100:.1f}¢ на ${res['usd']:.2f}".replace(
+                ".", ","
+            )
+            + (" (сумма урезана лимитом)" if capped else ""),
+        }
+
     # ------------------------------------------------------------ плагины (экран «Плагины»)
     def plugins_list(self) -> dict:
         from . import plugins
@@ -2025,7 +2214,13 @@ class Services:
                 if v != "paper":
                     errors[k] = "Реальные ставки в этой версии отключены: сначала пробный режим и юридическая проверка"
                     continue
-            if k in ("bankroll_usd", "max_bet_usd", "daily_limit_usd") and (not isinstance(v, (int, float)) or v <= 0):
+            if k in (
+                "bankroll_usd",
+                "max_bet_usd",
+                "daily_limit_usd",
+                "events_max_bet_usd",
+                "events_daily_limit_usd",
+            ) and (not isinstance(v, (int, float)) or v <= 0):
                 errors[k] = "должно быть положительным числом"
                 continue
             if k == "ai_mode" and v not in ("ai", "manual"):

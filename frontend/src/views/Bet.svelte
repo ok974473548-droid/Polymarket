@@ -66,8 +66,12 @@
         <h1 style="font-size:36px">{b.question}</h1>
         <div class="row" style="margin-top:12px;gap:8px">
           <span class="chip b">«{b.side}»</span><span class="chip n">{b.category}</span>
-          <button class="chip n" data-player={b.entity_id} onclick={() => (app.panel = { kind: "player", id: b.entity_id })}>кит {b.whale}</button>
-          {#if b.is_open}<WhaleState st={b.whale_state} />{:else}<span class="chip {b.pnl_usd > 0 ? 'g' : 'r'}">{b.result || "закрыта"}</span>{/if}
+          {#if b.origin === "event"}
+            <a class="chip i" href="#/events/{encodeURIComponent(b.event_id)}">своя ставка · к событию</a>
+          {:else}
+            <button class="chip n" data-player={b.entity_id} onclick={() => (app.panel = { kind: "player", id: b.entity_id })}>кит {b.whale}</button>
+          {/if}
+          {#if b.is_open}{#if b.origin !== "event"}<WhaleState st={b.whale_state} />{/if}{:else}<span class="chip {b.pnl_usd > 0 ? 'g' : 'r'}">{b.result || "закрыта"}</span>{/if}
         </div>
       </div>
     </div>

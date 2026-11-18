@@ -95,7 +95,11 @@
           <Seal code={r.whale} />
           <div class="grow">
             <div class="t">{r.question}</div>
-            <div class="m"><span>«{r.side}»</span><span>кит {r.whale}</span><span>{r.category}</span>{#if open}<WhaleState st={r.whale_state} />{/if}</div>
+            <div class="m">
+              <span>«{r.side}»</span>
+              {#if r.origin === "event"}<span class="chip i sm">своя ставка по событию</span>{:else}<span>кит {r.whale}</span>{/if}
+              <span>{r.category}</span>{#if open && r.origin !== "event"}<WhaleState st={r.whale_state} />{/if}
+            </div>
           </div>
         </div>
         <div class="n"><div class="tnum">{cents(r.entry_cents)}</div><div class="sub">кит {cents(r.whale_cents)}</div></div>

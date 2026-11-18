@@ -157,8 +157,10 @@ class Scheduler:
                 (self.books_max_tokens,),
             )
         ]
+        from .services import watched_tokens
+
         seen, out = set(), []
-        for t in ours + pend + whales:
+        for t in watched_tokens(self.db) + ours + pend + whales:  # открытая страница события — первой
             if t not in seen:
                 seen.add(t)
                 out.append(t)
