@@ -8,7 +8,7 @@
 Файл `.env` пользователя никогда не попадает в архивы и коммиты.
 
 ## Запуск и проверка
-- `pip install -e ".[dev,api]"`, тесты: `python -m pytest -q` (≈150 тестов, ~45 с, без сети —
+- `pip install -e ".[dev]"`, тесты: `python -m pytest -q` (≈165 тестов, ~45 с, без сети —
   синтетический мир в `tests/synthetic.py`).
 - Docker: `docker compose up --build`, интерфейс на :8787, база в томе `/data`.
 - CLI: `whalefollow run` (сервер + планировщик + агент + потоки), `whalefollow check` (доступность API).
@@ -16,7 +16,8 @@
 ## Карта модулей (`whalefollow/`)
 | Модуль | Что делает |
 |---|---|
-| `ingest/polymarket.py` | Клиенты Gamma / Data API v2 / CLOB (`_Http`: пул соединений, ограничитель-ведро, повторы на 429/5xx), разбор рынков/сделок |
+| `net.py` | Общий клиент httpx (HTTP/2, пул, таймауты, повторы 429/5xx с Retry-After, async-вариант) |
+| `ingest/polymarket.py` | Клиенты Gamma / Data API v2 / CLOB (`_Http` поверх `net.py`, ограничитель-ведро), разбор рынков/сделок |
 | `ingest/pipeline.py` | Загрузка сделок (дедупликация по id и по «существу» сделки), рынки, цены, split/merge |
 | `players.py` | Готовые данные Polymarket: карточка игрока, форма по неделям, панель рынка (кэш 5 мин) |
 | `positions.py` | Позиции из сделок: VWAP входа, выход, PnL, даты |
@@ -25,10 +26,12 @@
 | `decision/` | Решение (оценка кита + ИИ, запас выгоды, Келли с комиссией), лимиты и стопы |
 | `execution/paper.py` | Виртуальные покупки/продажи/расчёт, портфель из fills |
 | `agent.py` | Цикл: опрос/поток → склейка исполнений одной заявки → сигнал → решение |
-| `streams.py`, `ws.py` | WebSocket: стаканы (CLOB market) и лента сделок (RTDS) — сейчас свой клиент на stdlib |
+| `streams.py`, `ws.py` | WebSocket: стаканы (CLOB market) и лента сделок (RTDS) — клиент на библиотеке websockets (sync API, потоки) |
 | `scheduler.py` | Фоновые задачи (рынки, цены, пересчёт китов, резервные копии…) |
 | `services.py` | Всё для экранов интерфейса (большой файл — читать частями по grep) |
-| `api/server.py`, `api/routes.py` | Свой HTTP-сервер на stdlib (keep-alive, gzip, ETag, SSE `/api/events`) + маршруты; есть заготовка FastAPI |
+| `api/app.py`, `api/routes.py`, `api/schemas.py`, `api/static.py`, `api/server.py` | FastAPI: вход/CSRF/заголовки (ASGI-слой), маршруты, модели pydantic, статика с ETag, SSE; `serve()` — обёртка uvicorn |
+| `migrations/` | Alembic: `0001_baseline` = `schema.sql` + старые колонки; `DB.init_schema()` = upgrade head |
+| `logs.py` | structlog: JSON в Docker, консоль локально, Sentry по `SENTRY_DSN` |
 | `web/` | Интерфейс без сборки: `index.html`, `panels.js` (грузится ДО `app.js`), `app.js`, `app.css` |
 | `fees.py`, `categories.py` | Комиссии Polymarket по темам; единый список тем |
 | `diagnostics.py` | Экран «Диагностика»: проверки всех API и потоков |
@@ -39,6 +42,8 @@
 - Комиссия тейкера: `акции × ставка × p × (1−p)`, ставки по темам — в `fees.py`.
 - Всё «на момент now», без заглядывания в будущее. Чек-лист ошибок — навык `trading-math-audit`.
 - Выпуск версии — навык `whalefollow-release`; проверка интерфейса — навык `whalefollow-ui-check`.
+- Качество: `ruff check . && ruff format --check . && mypy` (настройки в `pyproject.toml`), pre-commit, CI в `.github/workflows/ci.yml`.
+- Схема базы меняется только новой миграцией (`alembic revision -m ...`), `schema.sql` не правится.
 - Версия — в двух местах: `whalefollow/__init__.py` и `pyproject.toml`. История — разделы «Что нового» в README.
 
 ## Мажорное обновление 1.0 — план работ
@@ -59,6 +64,9 @@
 - Новый код — с типами и тестами; тяжёлые модули читать частями.
 
 ### [ ] Этап 1. Фундамент
+> Статус: сделано в v0.14.0. Не отмечен [x], пока пользователь не примет два отклонения: API медленнее
+> на 0,2–0,4 мс на запрос (цена FastAPI) и проверка Kalshi в «Диагностике» даёт 429 из среды разработки
+> (общий исходящий адрес; на сервере пользователя не проверено).
 1. **Сервер:** FastAPI + uvicorn вместо `api/server.py` на stdlib. Сохранить: SSE `/api/events`, gzip,
    ETag/304 для статики, вход по паролю (`auth.py`, cookie), CORS выключен по умолчанию, заголовки
    безопасности. Все маршруты из `api/routes.py`, модели запросов/ответов на pydantic, документация `/docs`.
