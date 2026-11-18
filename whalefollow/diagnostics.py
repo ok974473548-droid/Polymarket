@@ -13,9 +13,9 @@ import os
 import threading
 import time
 
-import requests
-import requests.adapters
+import httpx
 
+from . import net
 from .config import Endpoints
 from .db import DB, now_ts
 from .util import pmap
@@ -50,26 +50,14 @@ STATUS = {
 }
 ACCESS = (401, 403, 451)
 
-_session: requests.Session | None = None
-_session_lock = threading.Lock()
+def session() -> httpx.Client:
+    """Общий пул соединений приложения: проверка идёт тем же путём, что и рабочие запросы,
+    повторный запрос — без новой установки связи."""
+    return net.client()
 
 
-def session() -> requests.Session:
-    """Общее соединение для проверок: повторный запрос идёт без новой установки связи."""
-    global _session
-    with _session_lock:
-        if _session is None:
-            s = requests.Session()
-            ad = requests.adapters.HTTPAdapter(pool_connections=16, pool_maxsize=16)
-            s.mount("https://", ad)
-            s.mount("http://", ad)
-            s.headers.update(UA)
-            _session = s
-        return _session
-
-
-def _get(url: str, params: dict | None = None, headers: dict | None = None):
-    r = session().get(url, params=params, headers=headers, timeout=TIMEOUT)
+def _get(url: str, params: dict | None = None, headers: dict | None = None) -> httpx.Response:
+    r = session().get(url, params=params, headers={**UA, **(headers or {})}, timeout=TIMEOUT)
     r.content                                                    # дочитываем: соединение вернётся в пул
     return r
 
@@ -95,7 +83,7 @@ def speed_label(ms: int | None) -> str | None:
 
 def _ws_probe(url: str, subscribe: dict | None, want_message: bool, wait_s: float = 6.0) -> tuple[bool, str]:
     """Открывает поток, подписывается и ждёт первое сообщение с данными."""
-    from .ws import WSConnection
+    from .ws import KEEPALIVE_TEXT, WSConnection
     t0 = time.perf_counter()
     c = WSConnection(url, timeout=TIMEOUT)
     c.connect()
@@ -103,22 +91,17 @@ def _ws_probe(url: str, subscribe: dict | None, want_message: bool, wait_s: floa
     try:
         if subscribe is None:
             return True, f"соединение открыто за {hs} мс"
-        c.sock.settimeout(wait_s)
         c.send_text(json.dumps(subscribe))
         t1 = time.perf_counter()
         deadline = t1 + wait_s
-        while time.perf_counter() < deadline:
+        while (left := deadline - time.perf_counter()) > 0:
             try:
-                op, data = c.recv_message()
-            except (TimeoutError, OSError):
+                text = c.recv(timeout=left).strip()
+            except TimeoutError:
                 break
-            if op == 0x9:
-                c.send_frame(0xA, data)
-                continue
-            if op == 0x8:
+            except Exception:  # noqa: BLE001 — сервер закрыл соединение
                 return False, "сервер закрыл поток сразу после подписки"
-            text = data.decode("utf-8", "replace").strip()
-            if op == 0x1 and text and text.upper() not in ("PONG", "PING"):
+            if text and text not in KEEPALIVE_TEXT:
                 return True, f"соединение {hs} мс, первые данные через {int((time.perf_counter() - t1) * 1000)} мс"
         if want_message:
             return False, f"соединение {hs} мс, но данных за {int(wait_s)} с не пришло"
@@ -149,7 +132,7 @@ def probes(db: DB) -> list[dict]:
                 try:
                     r = _get(f"{ep.data}/v2/leaderboard", {"time_period": "week", "category": "overall",
                                                            "sort_by": "PNL", "limit": 1})
-                    rows = (r.json() or {}).get("data") or [] if r.ok else []
+                    rows = (r.json() or {}).get("data") or [] if r.is_success else []
                     picked["w"] = str(rows[0].get("user_id") or rows[0].get("proxy_wallet")).lower() if rows \
                         else FALLBACK_WALLET
                 except Exception:  # noqa: BLE001
@@ -303,9 +286,9 @@ def _call(p: dict) -> tuple[bool, str, str | None]:
     try:
         ok, detail = p["fn"]()
         return bool(ok), detail, None if ok else HINTS.get(p["group"])
-    except requests.Timeout:
+    except httpx.TimeoutException:
         return False, f"нет ответа за {int(TIMEOUT)} с", HINTS.get(p["group"])
-    except requests.HTTPError as exc:
+    except httpx.HTTPStatusError as exc:
         code = exc.response.status_code if exc.response is not None else "?"
         detail, hint = explain_status(code, p["group"])
         if code == 400 and exc.response is not None:                 # причину отказа пишет сам сервер
@@ -313,7 +296,7 @@ def _call(p: dict) -> tuple[bool, str, str | None]:
             if why:
                 detail += f": {why}"
         return False, detail, hint
-    except requests.RequestException as exc:
+    except httpx.HTTPError as exc:
         return False, f"нет соединения: {type(exc).__name__}", HINTS.get(p["group"])
     except TimeoutError:
         return False, f"нет ответа за {int(TIMEOUT)} с", HINTS.get(p["group"])

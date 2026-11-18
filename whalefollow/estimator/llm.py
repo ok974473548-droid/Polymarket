@@ -11,7 +11,7 @@ import logging
 import os
 import re
 
-import requests
+from .. import net
 
 from ..config import Endpoints
 from .base import Estimate, MarketContext
@@ -97,10 +97,10 @@ class ClaudeEstimator:
                 "messages": [{"role": "user", "content": build_prompt(ctx)}]}
         headers = {"x-api-key": self.api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
         try:
-            r = requests.post(self.url, headers=headers, json=body, timeout=self.timeout)
+            r = net.client().post(self.url, headers=headers, json=body, timeout=self.timeout)
             r.raise_for_status()
             text = "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text")
-        except requests.RequestException as exc:
+        except net.HTTPError as exc:
             log.warning("LLM недоступна: %s", exc)
             return None
         est = parse_reply(text, self.model)

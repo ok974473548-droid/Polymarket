@@ -100,14 +100,14 @@ def test_sse_endpoint_over_http(db):
         c.request("GET", "/api/events")
         r = c.getresponse()
         assert r.status == 200 and r.getheader("Content-Type").startswith("text/event-stream")
-        assert r.fp.readline() == b"retry: 2000\n"
-        r.fp.readline()
-        assert r.fp.readline() == b"event: hello\n"
+        assert r.readline() == b"retry: 2000\n"
+        r.readline()
+        assert r.readline() == b"event: hello\n"
         _pending_signal(db, "s_http")
         bus.publish("signal", signal_id="s_http")
         lines = []
         while not any(b"s_http" in x for x in lines):
-            lines.append(r.fp.readline())
+            lines.append(r.readline())
         assert b"event: change\n" in lines
         c.close()
     finally:

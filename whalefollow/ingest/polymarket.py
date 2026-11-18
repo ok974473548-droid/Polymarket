@@ -15,59 +15,43 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Iterator
+from typing import Any, Iterator
 
-import requests
-import requests.adapters
-
-from .. import fees
+from .. import fees, net
 from ..config import Endpoints
+from ..net import ApiError  # noqa: F401 — прежнее место импорта
 from ..util import RateLimiter, pmap
 
 log = logging.getLogger(__name__)
 
 
-class ApiError(RuntimeError):
-    pass
-
-
 class _Http:
-    """GET с повторами, общим пулом соединений (для параллельных запросов) и ограничением частоты."""
+    """GET с повторами (429/5xx и обрывы, с учётом Retry-After), общим пулом соединений httpx (HTTP/2)
+    и ограничением частоты «ведром жетонов». session — любой объект с методом get (в тестах — подделка)."""
 
-    def __init__(self, base: str, timeout: float = 15.0, retries: int = 4, session: requests.Session | None = None,
+    def __init__(self, base: str, timeout: float = 15.0, retries: int = 4, session: Any = None,
                  rps: float = 15.0):
         self.base = base.rstrip("/")
         self.timeout = timeout
         self.retries = retries
-        if session is None:
-            session = requests.Session()
-            adapter = requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=32)
-            session.mount("https://", adapter)
-            session.mount("http://", adapter)
-        self.s = session
-        from .. import __version__
-        self.s.headers.update({"User-Agent": f"whalefollow/{__version__}"})
+        self.s = session if session is not None else net.client()
         self.limiter = RateLimiter(rps)
 
-    def get(self, path: str, params: dict | None = None):
+    def get(self, path: str, params: dict | None = None) -> Any:
         url = f"{self.base}{path}"
-        delay = 1.0
-        for attempt in range(self.retries):
-            try:
-                self.limiter.wait()
-                r = self.s.get(url, params=params, timeout=self.timeout)
-                if r.status_code == 429 or r.status_code >= 500:
-                    raise ApiError(f"HTTP {r.status_code}")
-                if r.status_code >= 400:
-                    raise ApiError(f"HTTP {r.status_code}: {r.text[:200]}")
-                return r.json()
-            except (requests.RequestException, ApiError) as exc:
-                if attempt == self.retries - 1 or (isinstance(exc, ApiError) and "HTTP 4" in str(exc) and "429" not in str(exc)):
-                    raise ApiError(f"GET {url} failed: {exc}") from exc
-                log.warning("GET %s: %s, повтор через %.1f с", url, exc, delay)
-                time.sleep(delay)
-                delay *= 2
-        raise ApiError(f"GET {url} failed")
+        return net.get_json(self.s, url, params=params, timeout=self.timeout, retries=self.retries,
+                            before=self.limiter.wait,
+                            on_retry=lambda err, d: log.warning("GET %s: %s, повтор через %.1f с", url, err, d))
+
+    async def aget(self, path: str, params: dict | None = None, session: Any = None) -> Any:
+        """Асинхронный GET с теми же повторами и общим ограничителем частоты."""
+        url = f"{self.base}{path}"
+        if session is not None:
+            return await net.aget_json(session, url, params=params, timeout=self.timeout, retries=self.retries,
+                                       before=self.limiter.await_)
+        async with net.async_client() as s:
+            return await net.aget_json(s, url, params=params, timeout=self.timeout, retries=self.retries,
+                                       before=self.limiter.await_)
 
     def warm(self, path: str, params: dict | None = None, timeout: float = 5.0) -> int:
         """Один лёгкий запрос без повторов: держит соединение (TLS) открытым, чтобы рабочие запросы

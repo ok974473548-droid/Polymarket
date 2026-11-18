@@ -1,187 +1,94 @@
-"""Минимальный клиент WebSocket (RFC 6455) на стандартной библиотеке — без внешних зависимостей.
+"""Клиент WebSocket на библиотеке websockets (синхронный интерфейс — работает в обычных потоках).
 
-Возможности: wss/ws, прокси через CONNECT (HTTPS_PROXY), маскирование кадров клиента,
-сборка фрагментов, ответы на ping, текстовый keepalive (PING раз в N секунд — так требует Polymarket),
-переподключение с нарастающей паузой, статистика для диагностики.
+Что сохранено от прежнего самописного клиента: wss/ws, прокси через CONNECT (HTTPS_PROXY, с учётом NO_PROXY),
+текстовый keepalive (PING раз в N секунд — так требует Polymarket), ответ на текстовый PING сервера,
+переподключение с нарастающей паузой, повторная подписка в on_open, статистика для «Диагностики».
+Маскирование кадров, сборка фрагментов и ответы на служебные ping делает библиотека.
 Колбэки вызываются в потоке чтения; исключения в них логируются и не рвут соединение.
 """
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
 import logging
 import os
-import socket
-import ssl
-import struct
 import threading
 import time
-from typing import Callable
+from collections.abc import Callable
+from typing import Any
 from urllib.parse import urlparse
 
+from websockets.exceptions import WebSocketException
+from websockets.sync.client import ClientConnection, connect
+
+from . import __version__
+
 log = logging.getLogger(__name__)
-GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+MAX_MESSAGE = 32 * 1024 * 1024            # снимок стакана бывает большим; без предела было раньше
+KEEPALIVE_TEXT = {"PING", "PONG", "ping", "pong"}
 
 
 class WSError(RuntimeError):
     pass
 
 
-def _mask(data: bytes, key: bytes) -> bytes:
-    """XOR с 4-байтным ключом (маскирование кадров) — одним целочисленным действием, без цикла по байтам."""
-    n = len(data)
-    if not n:
-        return data
-    k = (key * (n // 4 + 1))[:n]
-    return (int.from_bytes(data, "big") ^ int.from_bytes(k, "big")).to_bytes(n, "big")
-
-
-def _proxy_for(host: str, scheme: str) -> str | None:
-    if scheme != "wss":
+def _proxy_for(host: str | None, scheme: str) -> str | None:
+    """Прокси только для wss (как раньше) и только если хост не в NO_PROXY."""
+    if scheme != "wss" or not host:
         return None
     no = [h.strip() for h in (os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or "").split(",") if h.strip()]
-    if any(host == h or host.endswith("." + h.lstrip(".")) for h in no):
+    if any(host == h or host.endswith("." + h.lstrip(".*")) for h in no):
         return None
-    return os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    return os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or None
 
 
 class WSConnection:
-    """Одно соединение: рукопожатие, отправка и чтение кадров."""
+    """Одно соединение: открыть, отправить текст, прочитать сообщение, закрыть."""
 
     def __init__(self, url: str, timeout: float = 10.0, headers: dict | None = None):
         self.url = url
         u = urlparse(url)
         self.scheme, self.host = u.scheme, u.hostname
-        self.port = u.port or (443 if u.scheme == "wss" else 80)
-        self.path = (u.path or "/") + (f"?{u.query}" if u.query else "")
         self.timeout = timeout
         self.headers = headers or {}
-        self.sock: socket.socket | None = None
-        self._buf = bytearray()
-        self._wlock = threading.Lock()
+        self.conn: ClientConnection | None = None
 
-    # ---------- соединение
     def connect(self) -> None:
-        proxy = _proxy_for(self.host, self.scheme)
-        if proxy:
-            p = urlparse(proxy)
-            raw = socket.create_connection((p.hostname, p.port or 80), timeout=self.timeout)
-            req = f"CONNECT {self.host}:{self.port} HTTP/1.1\r\nHost: {self.host}:{self.port}\r\n"
-            if p.username:
-                cred = base64.b64encode(f"{p.username}:{p.password or ''}".encode()).decode()
-                req += f"Proxy-Authorization: Basic {cred}\r\n"
-            raw.sendall((req + "\r\n").encode())
-            head = self._read_head(raw)
-            if b" 200" not in head.split(b"\r\n", 1)[0]:
-                raw.close()
-                raise WSError("прокси не открыл соединение: " + head.split(b"\r\n", 1)[0].decode(errors="replace"))
-        else:
-            raw = socket.create_connection((self.host, self.port), timeout=self.timeout)
-        raw.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)    # без задержки Нейгла: кадры уходят сразу
-        if self.scheme == "wss":
-            ctx = ssl.create_default_context()
-            raw = ctx.wrap_socket(raw, server_hostname=self.host)
-        self.sock = raw
-        key = base64.b64encode(os.urandom(16)).decode()
-        lines = [f"GET {self.path} HTTP/1.1", f"Host: {self.host}", "Upgrade: websocket", "Connection: Upgrade",
-                 f"Sec-WebSocket-Key: {key}", "Sec-WebSocket-Version: 13", "User-Agent: whalefollow"]
-        lines += [f"{k}: {v}" for k, v in self.headers.items()]
-        self.sock.sendall(("\r\n".join(lines) + "\r\n\r\n").encode())
-        head = self._read_head(self.sock)
-        status = head.split(b"\r\n", 1)[0]
-        if b" 101" not in status:
-            raise WSError("сервер не перешёл на WebSocket: " + status.decode(errors="replace"))
-        expect = base64.b64encode(hashlib.sha1((key + GUID).encode()).digest()).decode().lower()
-        if expect.encode() not in head.lower():
-            raise WSError("неверный ответ рукопожатия")
-
-    def _read_head(self, s: socket.socket) -> bytes:
-        data = bytearray()
-        while b"\r\n\r\n" not in data:
-            chunk = s.recv(4096)
-            if not chunk:
-                raise WSError("соединение закрыто во время рукопожатия")
-            data += chunk
-            if len(data) > 65536:
-                raise WSError("слишком длинный ответ рукопожатия")
-        head, _, rest = bytes(data).partition(b"\r\n\r\n")
-        self._buf += rest                                          # кадры, пришедшие сразу за ответом
-        return head
-
-    def close(self) -> None:
         try:
-            if self.sock:
-                self.send_frame(0x8, struct.pack("!H", 1000))
-        except OSError:
-            pass
-        try:
-            if self.sock:
-                self.sock.close()
-        finally:
-            self.sock = None
-
-    # ---------- кадры
-    def send_frame(self, opcode: int, payload: bytes) -> None:
-        n = len(payload)
-        head = bytearray([0x80 | opcode])
-        if n < 126:
-            head.append(0x80 | n)
-        elif n < 65536:
-            head.append(0x80 | 126)
-            head += struct.pack("!H", n)
-        else:
-            head.append(0x80 | 127)
-            head += struct.pack("!Q", n)
-        mask = os.urandom(4)
-        head += mask
-        masked = _mask(payload, mask)
-        with self._wlock:
-            if not self.sock:
-                raise WSError("нет соединения")
-            self.sock.sendall(bytes(head) + masked)
+            self.conn = connect(self.url, open_timeout=self.timeout, close_timeout=2,
+                                proxy=_proxy_for(self.host, self.scheme),
+                                additional_headers=self.headers or None,
+                                user_agent_header=f"whalefollow/{__version__}",
+                                ping_interval=None,          # keepalive — текстовый PING (требование Polymarket)
+                                max_size=MAX_MESSAGE, legacy=True)   # закрываем сами (close)
+        except (WebSocketException, OSError, TimeoutError) as exc:
+            raise WSError(f"{type(exc).__name__}: {exc}") from exc
 
     def send_text(self, text: str) -> None:
-        self.send_frame(0x1, text.encode("utf-8"))
+        if self.conn is None:
+            raise WSError("нет соединения")
+        self.conn.send(text)
 
-    def _read_exact(self, n: int) -> bytes:
-        while len(self._buf) < n:
-            chunk = self.sock.recv(max(65536, n - len(self._buf)))
-            if not chunk:
-                raise WSError("соединение закрыто сервером")
-            self._buf += chunk
-        out = bytes(self._buf[:n])
-        del self._buf[:n]
-        return out
+    def recv(self, timeout: float | None = None) -> str:
+        """Следующее сообщение (текст). TimeoutError — ничего не пришло за timeout секунд."""
+        if self.conn is None:
+            raise WSError("нет соединения")
+        data = self.conn.recv(timeout=timeout)
+        return data if isinstance(data, str) else data.decode("utf-8", errors="replace")
 
-    def recv_message(self) -> tuple[int, bytes]:
-        """Следующее сообщение целиком: (opcode, данные). Управляющие кадры возвращаются отдельно."""
-        parts, first_op = [], None
-        while True:
-            b1, b2 = self._read_exact(2)
-            fin, op = b1 & 0x80, b1 & 0x0F
-            n = b2 & 0x7F
-            if n == 126:
-                n = struct.unpack("!H", self._read_exact(2))[0]
-            elif n == 127:
-                n = struct.unpack("!Q", self._read_exact(8))[0]
-            mask = self._read_exact(4) if b2 & 0x80 else None
-            data = self._read_exact(n) if n else b""
-            if mask:
-                data = _mask(data, mask)
-            if op >= 0x8:                                          # управляющий кадр — не фрагментируется
-                return op, data
-            if op != 0:
-                first_op = op
-            parts.append(data)
-            if fin:
-                return first_op or 0x1, b"".join(parts)
+    def close(self) -> None:
+        c, self.conn = self.conn, None
+        if c is not None:
+            try:
+                c.close()
+            except (WebSocketException, OSError):
+                pass
 
 
 class WSClient:
-    """Соединение с переподключением и keepalive. on_message(text) — каждый текстовый кадр (кроме PING/PONG)."""
+    """Соединение с переподключением и keepalive. on_message(text) — каждое сообщение (кроме PING/PONG)."""
 
-    def __init__(self, url: str, on_message: Callable[[str], None], on_open: Callable[["WSClient"], None] | None = None,
+    def __init__(self, url: str, on_message: Callable[[str], None],
+                 on_open: Callable[[WSClient], None] | None = None,
                  name: str = "ws", ping_text: str | None = "PING", ping_interval: float = 10.0,
                  read_timeout: float | None = None, max_backoff: float = 30.0):
         self.url, self.name = url, name
@@ -192,8 +99,9 @@ class WSClient:
         self.conn: WSConnection | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self.stats = {"connected": False, "connects": 0, "messages": 0, "last_msg_ts": None, "last_rx_ts": None,
-                      "last_error": None, "connected_since": None, "connect_ms": None}
+        self.stats: dict[str, Any] = {"connected": False, "connects": 0, "messages": 0, "last_msg_ts": None,
+                                      "last_rx_ts": None, "last_error": None, "connected_since": None,
+                                      "connect_ms": None}
         self.generation = 0                                        # растёт с каждым новым соединением
 
     @property
@@ -205,7 +113,7 @@ class WSClient:
         rx = self.stats.get("last_rx_ts") or self.stats.get("connected_since") or 0
         return self.connected and time.time() - rx <= max_silence_s
 
-    def start(self) -> "WSClient":
+    def start(self) -> WSClient:
         self._thread = threading.Thread(target=self._run, name=f"ws-{self.name}", daemon=True)
         self._thread.start()
         threading.Thread(target=self._pinger, name=f"ws-{self.name}-ping", daemon=True).start()
@@ -213,16 +121,17 @@ class WSClient:
 
     def stop(self) -> None:
         self._stop.set()
-        if self.conn:
-            self.conn.close()
+        c = self.conn
+        if c is not None:
+            c.close()
 
-    def send(self, obj) -> bool:
+    def send(self, obj: Any) -> bool:
         text = obj if isinstance(obj, str) else json.dumps(obj)
         try:
             if self.conn and self.connected:
                 self.conn.send_text(text)
                 return True
-        except (OSError, WSError) as exc:
+        except (OSError, WSError, WebSocketException) as exc:
             self.stats["last_error"] = repr(exc)[:200]
         return False
 
@@ -238,7 +147,6 @@ class WSClient:
             try:
                 self.conn = WSConnection(self.url)
                 self.conn.connect()
-                self.conn.sock.settimeout(self.read_timeout)
                 self.generation += 1
                 self.stats.update(connected=True, connects=self.stats["connects"] + 1, connected_since=time.time(),
                                   connect_ms=int((time.time() - t0) * 1000), last_error=None)
@@ -252,28 +160,18 @@ class WSClient:
                     log.info("WebSocket %s: %s", self.name, self.stats["last_error"])
             finally:
                 self.stats["connected"] = False
-                if self.conn:
-                    try:
-                        self.conn.sock and self.conn.sock.close()
-                    except OSError:
-                        pass
+                c = self.conn
+                if c is not None:
+                    c.close()
             if self._stop.wait(backoff):
                 break
             backoff = min(backoff * 2, self.max_backoff)
 
     def _read_loop(self) -> None:
-        while not self._stop.is_set():
-            op, data = self.conn.recv_message()
-            self.stats["last_rx_ts"] = time.time()                 # любой кадр, включая PONG: связь жива
-            if op == 0x9:                                          # ping сервера → pong
-                self.conn.send_frame(0xA, data)
-                continue
-            if op == 0xA:
-                continue
-            if op == 0x8:
-                raise WSError("сервер закрыл соединение")
-            text = data.decode("utf-8", errors="replace")
-            if text in ("PONG", "PING", "pong", "ping"):
+        while not self._stop.is_set() and self.conn is not None:
+            text = self.conn.recv(timeout=self.read_timeout)      # тишина дольше read_timeout — обрыв
+            self.stats["last_rx_ts"] = time.time()                # любое сообщение, включая PONG: связь жива
+            if text in KEEPALIVE_TEXT:
                 if text in ("PING", "ping"):
                     self.send("PONG" if text == "PING" else "pong")
                 continue

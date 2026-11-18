@@ -2,7 +2,7 @@
 import time
 
 import pytest
-import requests
+import httpx
 
 from conftest import fast_params
 from synthetic import FakeData, SyntheticWorld, load_world
@@ -118,12 +118,11 @@ def test_diagnostics_run_and_report(db):
         return True, "отвечает"
 
     def timeout():
-        raise requests.Timeout()
+        raise httpx.ReadTimeout("timeout")
 
     def forbidden():
-        resp = requests.Response()
-        resp.status_code = 403
-        raise requests.HTTPError(response=resp)
+        resp = httpx.Response(403, request=httpx.Request("GET", "https://x.test"))
+        resp.raise_for_status()
     items = [{"key": "a", "label": "A", "group": "polymarket", "fn": ok},
              {"key": "b", "label": "B", "group": "kalshi", "fn": timeout},
              {"key": "c", "label": "C", "group": "polymarket", "fn": forbidden}]
@@ -142,14 +141,12 @@ def test_diagnostics_run_and_report(db):
 
 def test_diagnostics_status_codes_and_warm_timing(db):
     def gone():
-        resp = requests.Response()
-        resp.status_code = 410
-        raise requests.HTTPError(response=resp)
+        resp = httpx.Response(410, request=httpx.Request("GET", "https://x.test"))
+        resp.raise_for_status()
 
     def busy():
-        resp = requests.Response()
-        resp.status_code = 503
-        raise requests.HTTPError(response=resp)
+        resp = httpx.Response(503, request=httpx.Request("GET", "https://x.test"))
+        resp.raise_for_status()
     calls = {"n": 0}
 
     def slow_then_fast():                      # первый запрос — с установкой соединения

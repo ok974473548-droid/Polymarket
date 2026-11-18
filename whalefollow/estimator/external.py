@@ -13,6 +13,8 @@ Kalshi (публичный API, без ключа): у API нет поиска �
 """
 from __future__ import annotations
 
+from typing import Any
+
 import json
 import logging
 import os
@@ -20,7 +22,7 @@ import re
 import statistics
 from datetime import datetime
 
-import requests
+from .. import net
 
 from ..db import DB, now_ts
 from .sources import STOP, Forecast
@@ -72,9 +74,9 @@ def _f(x) -> float | None:
 
 # ---------------------------------------------------------------- Kalshi
 class KalshiClient:
-    def __init__(self, base: str = KALSHI_BASE, timeout: float = 20.0, session: requests.Session | None = None):
+    def __init__(self, base: str = KALSHI_BASE, timeout: float = 20.0, session: Any = None):
         self.base, self.timeout = base.rstrip("/"), timeout
-        self.s = session or requests.Session()
+        self.s = session if session is not None else net.client()
 
     def open_events(self, max_pages: int = 60):
         cursor = None
@@ -173,9 +175,9 @@ class KalshiSource:
 
 # ---------------------------------------------------------------- букмекеры
 class OddsClient:
-    def __init__(self, api_key: str, base: str = ODDS_BASE, timeout: float = 20.0, session: requests.Session | None = None):
+    def __init__(self, api_key: str, base: str = ODDS_BASE, timeout: float = 20.0, session: Any = None):
         self.key, self.base, self.timeout = api_key, base.rstrip("/"), timeout
-        self.s = session or requests.Session()
+        self.s = session if session is not None else net.client()
         self.remaining: str | None = None
 
     @classmethod
@@ -232,7 +234,7 @@ def sync_odds(db: DB, client: OddsClient, sports: list[str] | None = None) -> in
     for sp in sports:
         try:
             rows += odds_rows(client.odds(sp.strip()), sp.strip(), now)
-        except requests.RequestException as exc:
+        except net.HTTPError as exc:
             log.warning("букмекеры %s: %s", sp, exc)
     with db.tx():
         db.upsert_many("ext_markets", rows, ["source", "ext_id"])

@@ -25,7 +25,13 @@ from whalefollow.scoring.scorer import run_scoring
 from whalefollow.scoring.sybil import run_antisybil
 from whalefollow.services import Services
 from whalefollow.streams import LiveBooks, Streams, TradeStream, to_trade_row
-from whalefollow.ws import GUID, WSClient, _mask
+from whalefollow.ws import WSClient
+
+GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+
+def _mask(data: bytes, key: bytes) -> bytes:
+    return bytes(b ^ key[i % 4] for i, b in enumerate(data))
 
 
 def wait_for(cond, timeout=5.0):

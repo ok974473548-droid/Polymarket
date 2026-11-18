@@ -19,7 +19,7 @@ from typing import Protocol
 
 from urllib.parse import quote_plus
 
-import requests
+from .. import net
 
 from ..db import DB, new_id, now_ts
 
@@ -58,7 +58,7 @@ class RssSource:
 
     def search(self, query: str, since_ts: int) -> list[NewsItem]:
         try:
-            r = requests.get(self.url, timeout=self.timeout, headers={"User-Agent": "whalefollow/0.1"})
+            r = net.client().get(self.url, timeout=self.timeout, headers={"User-Agent": "whalefollow/0.1"})
             r.raise_for_status()
             root = ET.fromstring(r.content)
         except Exception as exc:
@@ -134,7 +134,7 @@ class GoogleNewsSource:
         if not q:
             return []
         try:
-            r = requests.get(self.url(q), timeout=self.timeout, headers={"User-Agent": "whalefollow/0.1"})
+            r = net.client().get(self.url(q), timeout=self.timeout, headers={"User-Agent": "whalefollow/0.1"})
             r.raise_for_status()
             return parse_rss(r.content, self.name, self.source_type, since_ts)[:15]
         except Exception as exc:
@@ -175,7 +175,7 @@ class ManifoldSource:
         if not q:
             return []
         try:
-            r = requests.get(f"{self.base}/v0/search-markets",
+            r = net.client().get(f"{self.base}/v0/search-markets",
                              params={"term": q, "limit": 5, "filter": "open", "contractType": "BINARY"},
                              timeout=self.timeout)
             r.raise_for_status()
@@ -268,7 +268,7 @@ class TelegramChannelSource:
             return out
         for ch in self.channels:
             try:
-                r = requests.get(f"https://t.me/s/{ch}", params={"q": q}, timeout=self.timeout,
+                r = net.client().get(f"https://t.me/s/{ch}", params={"q": q}, timeout=self.timeout,
                                  headers={"User-Agent": "Mozilla/5.0 (compatible; whalefollow/0.1)"})
                 r.raise_for_status()
                 out.extend(parse_tme(r.text, ch, since_ts)[-self.per_channel:])
@@ -303,7 +303,7 @@ class RedditSource:
         if not q:
             return []
         try:
-            r = requests.get("https://www.reddit.com/search.json",
+            r = net.client().get("https://www.reddit.com/search.json",
                              params={"q": q, "sort": "new", "t": "week", "limit": 15},
                              headers={"User-Agent": "whalefollow/0.1 (research bot)"}, timeout=self.timeout)
             r.raise_for_status()

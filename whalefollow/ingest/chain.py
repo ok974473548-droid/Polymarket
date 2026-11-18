@@ -12,11 +12,13 @@
 """
 from __future__ import annotations
 
+from typing import Any
+
 import logging
 import os
 import time
 
-import requests
+from .. import net
 
 from ..db import DB, now_ts
 
@@ -39,7 +41,7 @@ class ChainError(RuntimeError):
 class ExplorerClient:
     def __init__(self, provider: str = "etherscan", api_key: str | None = None, base: str | None = None,
                  chain_id: int = 137, timeout: float = 20.0, min_interval_s: float = 0.25,
-                 session: requests.Session | None = None):
+                 session: Any = None):
         cfg = PROVIDERS[provider]
         self.provider = provider
         self.base = base or cfg["base"]
@@ -48,7 +50,7 @@ class ExplorerClient:
         self.chain_id = chain_id
         self.timeout = timeout
         self.min_interval_s = min_interval_s   # бесплатные тарифы — несколько запросов в секунду
-        self.s = session or requests.Session()
+        self.s = session if session is not None else net.client()
         self._last = 0.0
 
     @classmethod

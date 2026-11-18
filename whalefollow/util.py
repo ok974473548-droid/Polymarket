@@ -67,14 +67,25 @@ class RateLimiter:
     def interval(self) -> float:
         return 1.0 / self.rate if self.rate else 0.0
 
-    def wait(self) -> None:
+    def reserve(self) -> float:
+        """Берёт жетон и возвращает, сколько секунд подождать до запроса (0 — можно сразу)."""
         if not self.rate:
-            return
+            return 0.0
         with self._lock:
             now = time.monotonic()
             self._tokens = min(self.capacity, self._tokens + (now - self._t) * self.rate)
             self._t = now
             self._tokens -= 1.0                       # жетон берётся сразу; долг отрабатывается паузой
-            delay = -self._tokens / self.rate if self._tokens < 0 else 0.0
+            return -self._tokens / self.rate if self._tokens < 0 else 0.0
+
+    def wait(self) -> None:
+        delay = self.reserve()
         if delay > 0:
             time.sleep(delay)
+
+    async def await_(self) -> None:
+        """То же для асинхронного кода: пауза не блокирует цикл событий."""
+        import asyncio
+        delay = self.reserve()
+        if delay > 0:
+            await asyncio.sleep(delay)

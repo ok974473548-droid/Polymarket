@@ -170,8 +170,9 @@ def _serve(db, params, agent, data, gamma, port, clock=None, with_loop: bool = F
     print("Вход в интерфейс:", "по паролю (WF_UI_PASSWORD)" if auth.required else
           "без пароля — не открывайте порт в интернет (задайте WF_UI_PASSWORD)")
     print(f"API: http://{host}:{port}/api/dashboard  (Ctrl+C — остановить)")
+    print(f"Документация API: http://{host}:{port}/docs")
     try:
-        httpd.serve_forever()
+        httpd.serve_forever()                     # Ctrl+C / SIGTERM — плавная остановка (uvicorn)
     except KeyboardInterrupt:
         httpd.shutdown()
 
@@ -215,7 +216,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--llm", action="store_true")
     sub.add_parser("check", help="проверить доступ к API Polymarket")
     args = ap.parse_args(argv)
-    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    from .logs import setup_logging
+    setup_logging(logging.DEBUG if args.verbose else logging.INFO)
     params = Params.load(args.params)
 
     if args.cmd == "check":

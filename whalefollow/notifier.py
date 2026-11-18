@@ -12,13 +12,15 @@
 """
 from __future__ import annotations
 
+from typing import Any
+
 import logging
 import os
 import queue
 import threading
 import time
 
-import requests
+from . import net
 
 from .config import DEFAULT_SETTINGS
 from .db import DB
@@ -35,10 +37,10 @@ HELP = ("Команды:\n/status — состояние системы\n/stop �
 
 class TelegramNotifier:
     def __init__(self, db: DB, token: str, chat_id: str, public_url: str | None = None,
-                 session: requests.Session | None = None, poll: bool = False):
+                 session: Any = None, poll: bool = False):
         self.db, self.token, self.chat_id = db, token, str(chat_id)
         self.public_url = (public_url or os.environ.get("WF_PUBLIC_URL", "http://localhost:8787")).rstrip("/")
-        self.s = session or requests.Session()
+        self.s = session if session is not None else net.client()
         self.api = f"https://api.telegram.org/bot{token}"
         self.q: queue.Queue = queue.Queue()
         self.sent = 0
@@ -116,7 +118,7 @@ class TelegramNotifier:
                     payload["reply_markup"] = msg["reply_markup"]
                 self._call("sendMessage", payload)
                 self.sent += 1
-            except requests.RequestException as exc:
+            except net.HTTPError as exc:
                 log.warning("Telegram: не удалось отправить: %s", exc)
             finally:
                 self.q.task_done()
@@ -151,7 +153,7 @@ class TelegramNotifier:
                     self._call("editMessageText", {"chat_id": self.chat_id, "message_id": msg["message_id"],
                                                    "text": f"{msg.get('text', '')}\n\n→ {text}",
                                                    "disable_web_page_preview": True})
-            except requests.RequestException as exc:
+            except net.HTTPError as exc:
                 log.warning("Telegram: ответ на нажатие: %s", exc)
             return text
         msg = upd.get("message") or {}
