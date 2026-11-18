@@ -57,6 +57,7 @@
       daily_limit_usd: v("daily_limit_usd"),
       events_max_bet_usd: v("events_max_bet_usd"),
       events_daily_limit_usd: v("events_daily_limit_usd"),
+      events_ai_daily_limit: v("events_ai_daily_limit"),
       daily_loss_stop_frac: v("daily_loss_stop_frac") / 100,
       monthly_loss_stop_frac: v("monthly_loss_stop_frac") / 100,
       categories: f.getAll("cat"),
@@ -159,9 +160,13 @@
               <input type="radio" name="ai_mode" value="manual" checked={s.ai_mode === "manual" || !s.ai.available} />
               <span>
                 <b>Без ИИ</b>
-                <span class="sub" style="display:block">Данные собираются и анализируются так же, но каждую ставку решаете вы — система показывает историю кита, цены, другие рынки и новости</span>
+                <span class="sub" style="display:block">Данные собираются и анализируются так же, но каждую ставку решаете вы — система показывает историю кита, цены, другие рынки и новости. В «Событиях» вероятность считает аналитическая модель</span>
               </span>
             </label>
+            <div class="fld">
+              <label for="events_ai_daily_limit">«События»: анализов с ИИ в день</label>
+              <input id="events_ai_daily_limit" class="inp" type="number" min="0" step="1" value={s.events_ai_daily_limit} />
+            </div>
           </fieldset>
         </div>
         <div class="card">

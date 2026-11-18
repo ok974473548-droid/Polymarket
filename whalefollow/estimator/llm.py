@@ -18,6 +18,8 @@ from .base import Estimate, MarketContext
 
 log = logging.getLogger(__name__)
 
+DEFAULT_MODEL = "claude-sonnet-5-5"
+
 SYSTEM = (
     "You are a careful superforecaster. You estimate the probability that a prediction-market "
     "question resolves YES. You are NOT told the market price; do not guess it or reason about it. "
@@ -94,7 +96,7 @@ class ClaudeEstimator:
         timeout: float = 60.0,
     ):
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-        self.model = model or os.environ.get("WF_LLM_MODEL", "claude-sonnet-5-5")
+        self.model = model or os.environ.get("WF_LLM_MODEL", DEFAULT_MODEL)
         self.url = (endpoints or Endpoints()).anthropic.rstrip("/") + "/v1/messages"
         self.timeout = timeout
         if not self.api_key:

@@ -174,6 +174,7 @@ test("события: список по темам, страница событ�
 
 test("досье события: сбор в фоне, прогнозы других площадок, данные и новости", async ({ page }) => {
   await page.goto("/#/events/9001");
+  await page.locator("[data-tab=dossier]").click();
   const dz = page.locator("#dossier");
   await expect(dz).toBeVisible();
   await expect(dz).toContainText(/факт(а|ов)? из \d/, { timeout: 20000 });
@@ -184,4 +185,20 @@ test("досье события: сбор в фоне, прогнозы друг
   await expect(dz.locator(".dz-src")).toContainText("Демо-источник");
   await dz.locator("[data-act=dossier-refresh]").click();
   await expect(dz).toContainText(/факт(а|ов)? из \d/, { timeout: 20000 });
+});
+
+test("модель события: оценка по исходам, лестница оценок, режим без ИИ", async ({ page }) => {
+  await page.goto("/#/events/9001");
+  const panel = page.locator("[data-model-panel]");
+  await expect(page.locator("[data-tab=model]")).toHaveAttribute("aria-pressed", "true");
+  // досье собирается само, оценка обновляется: прогноз демо-площадки 33% к каждому кандидату
+  await expect(panel.locator("[data-model-outcome]")).toHaveCount(4, { timeout: 20000 });
+  await expect(page.locator(".ev-row [data-model]").first()).toContainText(/модель \d/, { timeout: 20000 });
+  const first = panel.locator("[data-model-outcome]").first();
+  await first.locator("summary").click();
+  await expect(first).toContainText("Другие площадки прогнозов");
+  await expect(first).toContainText("Цена Polymarket сейчас");
+  await expect(first).toContainText(/80% интервал/);
+  await expect(panel.locator("[data-mode=manual]")).toHaveAttribute("aria-pressed", "true");
+  await expect(panel.locator("[data-mode=ai]")).toBeDisabled(); // в демо нет ключа ИИ
 });

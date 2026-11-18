@@ -85,7 +85,8 @@
     for (const l of lines) {
       const s = api.chart.addSeries(lcRef.LineSeries, {
         color: l.color,
-        lineWidth: 2,
+        lineWidth: l.dashed ? 1 : 2,
+        lineStyle: l.dashed ? lcRef.LineStyle.Dashed : lcRef.LineStyle.Solid,
         priceLineVisible: false,
         lastValueVisible: true,
         crosshairMarkerRadius: 4,
@@ -98,8 +99,12 @@
       api.series.set(l.key, s);
       api.last.set(l.key, data.length ? (data[data.length - 1].time as unknown as number) : 0);
     }
-    api.chart.timeScale().fitContent();
+    // масштаб сбрасываем только при смене набора линий (а не при обновлении оценки модели раз в минуту)
+    const sig = lines.map((l) => l.key).join();
+    if (sig !== lastSig) api.chart.timeScale().fitContent();
+    lastSig = sig;
   }
+  let lastSig = "";
 
   // новые линии (период/выбор) — перерисовать
   $effect(() => {
@@ -131,7 +136,7 @@
 
 <div class="ev-chart">
   <div class="ev-legend" aria-live="off">
-    {#each lines as l (l.key)}
+    {#each lines.filter((x) => !x.dashed) as l (l.key)}
       <span class="ev-leg"><i style="background:{l.color}"></i><b class="tnum">{pctOf(shown[l.key])}</b> {l.title}</span>
     {/each}
     {#if hoverTs}<span class="sub ev-leg-time">{new Date(hoverTs * 1000).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>{/if}

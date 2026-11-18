@@ -43,6 +43,7 @@ def event_info(ev: dict) -> EventInfo:
         description=ev.get("description") or "",
         end_ts=ev.get("end_ts"),
         tags=list(ev.get("tags") or []),
+        exclusive=bool(ev.get("neg_risk")) and len(rows) > 1,
         outcomes=[
             OutcomeInfo(
                 key=r["key"],

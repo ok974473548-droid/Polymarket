@@ -61,4 +61,5 @@ export interface ChartLine {
   title: string;
   color: string;
   points: { ts: number; p: number }[];
+  dashed?: boolean; // оценка модели — пунктиром
 }

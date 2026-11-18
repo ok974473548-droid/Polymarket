@@ -167,6 +167,7 @@ DEFAULT_SETTINGS = {
     "daily_limit_usd": 200.0,
     "events_max_bet_usd": 25.0,  # модуль «События»: максимум на одну ставку (общий банк, отдельный лимит)
     "events_daily_limit_usd": 100.0,  # модуль «События»: лимит в день (входит в общий дневной лимит)
+    "events_ai_daily_limit": 30,  # модуль «События»: сколько анализов с ИИ в день (каждый — несколько запросов к Claude)
     "daily_loss_stop_frac": 0.05,
     "monthly_loss_stop_frac": 0.10,
     "categories": ["politics", "sports", "esports", "finance", "economics", "tech", "other"],  # см. categories.py

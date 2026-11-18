@@ -2023,6 +2023,87 @@ class Services:
             job = dossier.start(self.db, ev, self._dossier_clients())
         return {"ok": True, **cur, "job": job, "stale": stale}
 
+    def event_analysis(self, event_id: str, mode: str = "") -> dict:
+        """Оценка модели по исходам события (этап C): цена рынка → независимые оценки → итог со сжатием к цене.
+        mode: ai | manual (пусто — как в настройках). В режиме «с ИИ» ответ Claude готовится в фоне (дневной лимит)."""
+        from .eventhub import ai, model
+        from .eventhub import dossier as dz
+
+        cat = self._events()
+        if cat is None:
+            return {"ok": False, "error": "Нет подключения к Polymarket"}
+        s = self.risk.settings()
+        want = mode or str(s.get("ai_mode") or "manual")
+        if want not in ("ai", "manual"):
+            want = "manual"
+        ai_note = None
+        if want == "ai" and not ai.available():
+            want, ai_note = "manual", "ИИ не подключён (нет ANTHROPIC_API_KEY) — оценка без ИИ"
+        try:
+            ev = cat.get(event_id)
+        except Exception as exc:
+            return {"ok": False, "error": f"Polymarket не ответил: {exc}"[:200]}
+        if ev is None:
+            return {"ok": False, "error": "Событие не найдено"}
+        open_rows = [r for r in ev["outcomes"] if not r["closed"]]
+        try:
+            qs = cat.quotes([r["yes_token"] for r in open_rows])
+        except Exception:
+            qs = {}
+        market: dict[str, float] = {}
+        for r in open_rows:
+            q = qs.get(r["yes_token"]) or {}
+            bid, ask = q.get("bid"), q.get("ask")
+            # как на Polymarket: середина спроса и предложения, при широком спреде — последняя цена
+            if bid is not None and ask is not None and ask - bid <= 0.10:
+                market[r["key"]] = (bid + ask) / 2
+            elif r.get("price") is not None:
+                market[r["key"]] = float(r["price"])
+        ev_open = {**ev, "outcomes": open_rows}
+        # модель живёт на досье: если его нет или оно старое — собрать в фоне (как при открытии вкладки «Досье»)
+        dj = dz.job_state(event_id)
+        cur_ts = dz.load(self.db, event_id)["collected_ts"]
+        if not (dj and dj["state"] == "running") and (cur_ts is None or time.time() - cur_ts > dz.STALE_S):
+            dj = dz.start(self.db, ev, self._dossier_clients())
+        job = None
+        if want == "ai":
+            d = dz.load(self.db, event_id)
+            if d["collected_ts"] is not None and ai.cached(self.db, event_id, d["collected_ts"]) is None:
+                job = ai.job_state(event_id)
+                retry = bool(job and job["state"] == "error" and time.time() - float(job.get("finished") or 0) > 600)
+                if not job or job["state"] == "done" or retry:
+                    job = ai.start(
+                        self.db,
+                        dz.event_info(ev_open),
+                        d["items"],
+                        d["collected_ts"],
+                        int(s.get("events_ai_daily_limit") or 0),
+                    )
+            elif d["collected_ts"] is None:
+                job = {"state": "wait_dossier"}
+        try:
+            res = model.analyze(self.db, ev_open, want, market)
+        except Exception as exc:
+            return {"ok": False, "error": f"Модель не посчиталась: {exc}"[:200]}
+        cached = ai.cached(self.db, event_id) if want == "ai" else None
+        return {
+            "ok": True,
+            **res,
+            "ai": {
+                "available": ai.available(),
+                "note": ai_note,
+                "job": job,
+                "used_today": ai.used_today(self.db),
+                "limit": int(s.get("events_ai_daily_limit") or 0),
+                "key_factors": (cached or {}).get("key_factors") or [],
+                "what_would_change": (cached or {}).get("what_would_change") or [],
+                "base_rate": (cached or {}).get("base_rate"),
+                "ts": (cached or {}).get("ts"),
+            },
+            "dossier_job": (dj or {}).get("state"),
+            "line": model.history(self.db, event_id, want, int(time.time()) - 30 * DAY),
+        }
+
     def event_buy(self, event_id: str, token_id: str, usd: float, max_price: float | None = None) -> dict:
         """Виртуальная покупка исхода со страницы события: лимиты модуля «События» и общие стопы."""
         now = int(self.clock())
@@ -2248,6 +2329,11 @@ class Services:
             ) and (not isinstance(v, (int, float)) or v <= 0):
                 errors[k] = "должно быть положительным числом"
                 continue
+            if k == "events_ai_daily_limit" and (not isinstance(v, (int, float)) or v < 0):
+                errors[k] = "должно быть числом от 0"
+                continue
+            if k == "events_ai_daily_limit":
+                v = int(v)
             if k == "ai_mode" and v not in ("ai", "manual"):
                 errors[k] = "ai | manual"
                 continue

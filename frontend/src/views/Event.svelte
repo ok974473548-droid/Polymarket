@@ -5,6 +5,7 @@
   import BuyDialog from "../components/BuyDialog.svelte";
   import Dossier from "../components/Dossier.svelte";
   import EventChart from "../components/EventChart.svelte";
+  import ModelPanel from "../components/ModelPanel.svelte";
   import { api, type Json } from "../lib/api";
   import { centsOf, type ChartLine, changeText, endText, LINE_COLORS, mid, pctOf, type Quote, TOPIC_LABEL } from "../lib/events";
   import { compactMoney, money, safeUrl, tone } from "../lib/format";
@@ -23,7 +24,34 @@
   let open = $state<string | null>(null); // раскрытый исход (стакан)
   let showAll = $state(false);
   let order = $state<{ token: string; title: string; side: string; ask: number | null } | null>(null);
-  let tab = $state("dossier");
+  let tab = $state("model");
+  let an = $state<Json>(null); // оценка модели (этап C)
+  let anErr = $state("");
+  let anMode = $state(""); // пусто — как в настройках
+
+  async function loadAnalysis() {
+    try {
+      const m = untrack(() => anMode);
+      const r = await api(`/catalog/${encodeURIComponent(untrack(() => id))}/analysis${m ? "?mode=" + m : ""}`);
+      if (r.ok) {
+        an = r;
+        anErr = "";
+        if (!m) anMode = r.mode;
+      } else anErr = r.error;
+    } catch (e) {
+      anErr = (e as Error).message;
+    }
+    scheduleAn();
+  }
+  function setMode(m: string) {
+    anMode = m;
+    void loadAnalysis();
+  }
+  const modelOf = $derived.by(() => {
+    const out: Record<string, Json> = {};
+    for (const r of (an?.outcomes || []) as Json[]) out[r.key] = r;
+    return out;
+  });
 
   async function loadEvent() {
     try {
@@ -81,9 +109,11 @@
     ev = null;
     keys = [];
     hist = null;
+    an = null;
     untrack(() => loadEvent()).then(() => {
       void loadHistory();
       void loadLive();
+      void loadAnalysis();
     });
   });
   $effect(() => {
@@ -110,7 +140,15 @@
   const tHist = setInterval(() => {
     if (!document.hidden && (period === "1h" || period === "6h" || period === "1d")) void loadHistory();
   }, 60000);
+  // оценка модели: раз в минуту (досье и цены меняются), пока ИИ думает — раз в 5 с
+  let tAn: ReturnType<typeof setTimeout> | undefined;
+  function scheduleAn() {
+    clearTimeout(tAn);
+    const busy = an?.ai?.job?.state === "running" || an?.ai?.job?.state === "wait_dossier" || an?.dossier_job === "running";
+    tAn = setTimeout(() => (document.hidden ? scheduleAn() : void loadAnalysis()), busy ? 3000 : 60000);
+  }
   onDestroy(() => {
+    clearTimeout(tAn);
     clearInterval(tLive);
     clearInterval(tEvent);
     clearInterval(tHist);
@@ -140,7 +178,17 @@
 
   const lines = $derived.by<ChartLine[]>(() => {
     if (!hist) return [];
-    return (hist.lines as Json[]).map((l, i) => ({ key: l.key, title: l.title, color: colorOf(l.key, i), points: l.points }));
+    const base = (hist.lines as Json[]).map((l, i) => ({ key: l.key, title: l.title, color: colorOf(l.key, i), points: l.points }));
+    // пунктир — итог модели во времени (в пределах периода графика), последняя точка — текущая оценка
+    const from = Math.min(...base.map((l) => (l.points.length ? l.points[0].ts : Infinity)));
+    const model: ChartLine[] = [];
+    for (const l of base) {
+      const pts = ((an?.line || {})[l.key] || []).filter((p: Json) => p.ts >= from);
+      const cur = modelOf[l.key];
+      if (cur) pts.push({ ts: Math.floor(Date.now() / 1000), p: cur.final });
+      if (pts.length) model.push({ key: "model:" + l.key, title: "Модель: " + l.title, color: l.color, points: pts, dashed: true });
+    }
+    return [...base, ...model];
   });
   function colorOf(key: string, i: number): string {
     const idx = keys.indexOf(key);
@@ -215,7 +263,7 @@
       <div class="skeleton" style="height:320px"></div>
     {/if}
     <div class="row" style="justify-content:space-between">
-      <span class="sub">{ev.neg_risk ? "Исходы взаимоисключающие: сбудется только один." : ""} Колёсиком — масштаб; линии — флажками у исходов.</span>
+      <span class="sub">{ev.neg_risk ? "Исходы взаимоисключающие: сбудется только один." : ""} Колёсиком — масштаб; линии — флажками у исходов; пунктир — оценка модели.</span>
       <div class="seg" role="group" aria-label="Период графика">
         {#each PERIODS as [k, l] (k)}<button aria-pressed={period === k} data-period={k} onclick={() => (period = k)}>{l}</button>{/each}
       </div>
@@ -256,6 +304,10 @@
         <div class="n ev-pct">
           <b class="tnum">{r.single && r.yes_label !== "Да" ? centsOf(p) : pctOf(p)}</b>
           {#if changeText(r.change_1d)}<span class="ev-chg {r.change_1d > 0 ? 'up' : 'down'}">{changeText(r.change_1d)}</span>{/if}
+          {#if modelOf[r.key] && modelOf[r.key].model !== null}
+            {@const mo = modelOf[r.key]}
+            <button class="ev-model {mo.diff > 0.005 ? 'up' : mo.diff < -0.005 ? 'down' : ''}" data-model={r.key} onclick={() => (tab = "model")} title="Оценка модели — подробности во вкладке «Модель»">модель {pctOf(mo.final)}</button>
+          {/if}
         </div>
         <div class="ev-buy">
           {#if !r.closed}
@@ -292,11 +344,14 @@
 
   <section class="card col" style="gap:10px">
     <div class="seg" role="group" aria-label="Подробности">
+      <button aria-pressed={tab === "model"} data-tab="model" onclick={() => (tab = "model")}>Модель</button>
       <button aria-pressed={tab === "dossier"} data-tab="dossier" onclick={() => (tab = "dossier")}>Досье</button>
       <button aria-pressed={tab === "rules"} onclick={() => (tab = "rules")}>Правила</button>
       <button aria-pressed={tab === "about"} onclick={() => (tab = "about")}>О ставках</button>
     </div>
-    {#if tab === "dossier"}
+    {#if tab === "model"}
+      <ModelPanel a={an} err={anErr} mode={anMode || an?.mode || "manual"} onMode={setMode} />
+    {:else if tab === "dossier"}
       <Dossier eventId={id} outcomes={openRows} {priceOf} />
     {:else if tab === "rules"}
       <div class="ev-rules">{ev.description || "Правила не указаны"}</div>
@@ -304,7 +359,7 @@
     {:else}
       <div class="sub">
         Ставки здесь виртуальные, из общего банка, с отдельным лимитом: до {money(ev.limits.max_bet_usd)} на одну, {money(ev.limits.daily_limit_usd)} в день (осталось сегодня {money(ev.limits.left_today_usd)}).
-        Покупка проходит по стакану с комиссией Polymarket; продать можно в «Моих ставках». Совет «что и сколько покупать» появится на следующих этапах модуля.
+        Покупка проходит по стакану с комиссией Polymarket; продать можно в «Моих ставках». Совет «что и сколько покупать» появится на следующем этапе модуля; пока — оценка модели во вкладке «Модель».
       </div>
     {/if}
   </section>

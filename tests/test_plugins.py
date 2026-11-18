@@ -417,7 +417,7 @@ def test_plugins_api(world_db):
         by = {i["name"]: i for i in lst["items"]}
         assert by["copy_whale"]["state"] in ("idle", "ok") and by["copy_whale"]["enabled"]
         assert by["bookmakers"]["state"] in ("unavailable", "off")
-        assert [k["kind"] for k in lst["kinds"]] == ["source", "notifier", "strategy"]
+        assert [k["kind"] for k in lst["kinds"]] == ["source", "estimator", "notifier", "strategy"]
         r = call("PATCH", "/plugins/copy_whale", {"enabled": False})
         assert r["ok"] and r["warning"] == "Все стратегии выключены — новых сигналов не будет"
         assert call("PATCH", "/plugins/copy_whale", {"enabled": True})["warning"] is None

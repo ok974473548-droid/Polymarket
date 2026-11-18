@@ -18,8 +18,13 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
-KINDS = ("source", "notifier", "strategy")
-KIND_TITLES = {"source": "Источники данных", "notifier": "Уведомления", "strategy": "Стратегии"}
+KINDS = ("source", "estimator", "notifier", "strategy")
+KIND_TITLES = {
+    "source": "Источники данных",
+    "estimator": "Модели оценки (модуль «События»)",
+    "notifier": "Уведомления",
+    "strategy": "Стратегии",
+}
 
 
 @dataclass
@@ -79,6 +84,7 @@ class EventInfo:
     end_ts: int | None = None
     tags: list[str] = field(default_factory=list)
     outcomes: list[OutcomeInfo] = field(default_factory=list)  # открытые исходы, по убыванию цены
+    exclusive: bool = False  # исходы взаимоисключающие (сбудется ровно один): сумма вероятностей = 1
 
 
 @dataclass
@@ -236,4 +242,40 @@ class StrategyPlugin(Plugin):
     default_enabled = False
 
     def accept(self, c: Candidate) -> Verdict:
+        raise NotImplementedError
+
+
+# ---------------------------------------------------------------- модели оценки (модуль «События», этап C)
+@dataclass
+class ComponentEstimate:
+    """Оценка одного оценщика для одного исхода: вероятность «Да» и качество данных (0–1)."""
+
+    outcome_key: str
+    p: float
+    quality: float = 1.0
+    note: str = ""
+    meta: dict = field(default_factory=dict)
+
+
+class EstimatorPlugin(Plugin):
+    """Независимая оценка вероятностей исходов события по досье (без цены Polymarket в расчёте, кроме «якоря»).
+
+    role: "independent" — своя вероятность (сводится с другими); "anchor" — поправка самой цены рынка.
+    weight — вес по умолчанию при сведении (на этапе E подбирается по прошлой точности).
+    needs_ai — работает только в режиме «с ИИ».
+    estimate(ctx, ev, dossier, market) → оценки по исходам; dossier — факты досье (dict), market — цены рынка
+    (ключ исхода → вероятность), их можно использовать только для проверок (например, отсечь явное несовпадение).
+    """
+
+    kind = "estimator"
+    role: str = "independent"
+    weight: float = 1.0
+    needs_ai: bool = False
+
+    def applies(self, ev: EventInfo, dossier: list[dict]) -> bool:
+        return True
+
+    def estimate(
+        self, ctx: PluginContext, ev: EventInfo, dossier: list[dict], market: dict[str, float]
+    ) -> list[ComponentEstimate]:
         raise NotImplementedError

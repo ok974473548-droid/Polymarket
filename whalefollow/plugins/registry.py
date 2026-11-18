@@ -78,9 +78,9 @@ class Registry:
         return True
 
     def load_builtin(self) -> None:
-        from .builtin import event_sources, notifiers, sources, strategies
+        from .builtin import estimators, event_sources, notifiers, sources, strategies
 
-        for mod in (sources, event_sources, notifiers, strategies):
+        for mod in (sources, event_sources, estimators, notifiers, strategies):
             for p in mod.PLUGINS:
                 self.register(p, "встроенный")
 

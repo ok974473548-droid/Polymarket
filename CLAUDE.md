@@ -40,8 +40,8 @@
 | `logs.py` | structlog: JSON в Docker, консоль локально, Sentry по `SENTRY_DSN` |
 | `web/` | Готовая сборка интерфейса (не править руками — собирается из `frontend/`), PWA: `sw.js`, `manifest.webmanifest`, иконки |
 | `frontend/` | Интерфейс: Svelte 5 + TypeScript + Vite. `src/views/` — экраны, `src/components/` — блоки (графики: `PriceChart` — lightweight-charts, `Plot` — uPlot), `src/lib/` — API, состояние, роутер, живые события, горячие клавиши, push; `public/` — sw.js, манифест, иконки; `e2e/` — сценарии Playwright |
-| `plugins/` | Плагины: `base` (виды: SourcePlugin, NotifierPlugin, StrategyPlugin; Candidate, Verdict, Notice), `registry` (встроенные → entry points `whalefollow.plugins` → файлы из `WF_PLUGINS_DIR`/`/data/plugins`; включение; состояние в `risk_state` «plugin:имя»), `notify` (диспетчер уведомлений), `strategy` (фильтр в `agent.evaluate` и бэктест на `whale_sim`), `builtin/` (6 источников, 4 канала, 3 стратегии) |
-| `eventhub/` | Модуль «События»: `catalog` (Gamma `/events`, поиск, разбор исходов, история цен по периодам, живые цены, сохранение открытого события); `dossier` (досье: факты из плагинов-источников, `SourcePlugin.dossier/applies`, таблицы `evidence`, `event_dossiers`); API `/api/catalog*`; ставки с `orders.signal_id = "ev:<id>"`, лимиты `events_*` |
+| `plugins/` | Плагины: `base` (виды: SourcePlugin, EstimatorPlugin, NotifierPlugin, StrategyPlugin; Candidate, Verdict, Notice), `registry` (встроенные → entry points `whalefollow.plugins` → файлы из `WF_PLUGINS_DIR`/`/data/plugins`; включение; состояние в `risk_state` «plugin:имя»), `notify` (диспетчер уведомлений), `strategy` (фильтр в `agent.evaluate` и бэктест на `whale_sim`), `builtin/` (источники, `event_sources`, оценщики `estimators`, 4 канала, 3 стратегии) |
+| `eventhub/` | Модуль «События»: `model` (оценка: цена → оценщики-плагины `EstimatorPlugin` → итог со сжатием λ; анализы в `event_analyses`), `ai` (Claude вслепую, фон, дневной лимит), `calibration` (кривые «цена → частота», `scripts/fit_event_calibration.py`); `catalog` (Gamma `/events`, поиск, разбор исходов, история цен по периодам, живые цены, сохранение открытого события); `dossier` (досье: факты из плагинов-источников, `SourcePlugin.dossier/applies`, таблицы `evidence`, `event_dossiers`); API `/api/catalog*`; ставки с `orders.signal_id = "ev:<id>"`, лимиты `events_*` |
 | `push.py` | Push-уведомления (Web Push: шифрование RFC 8291, подпись VAPID), подписки устройств, отправка в фоне |
 | `fees.py`, `categories.py` | Комиссии Polymarket по темам; единый список тем |
 | `diagnostics.py` | Экран «Диагностика»: проверки всех API и потоков |
@@ -213,7 +213,10 @@ Polymarket, в нашем дизайне: график вероятностей 
 погода (Open-Meteo), экономический календарь/консенсус. Таблицы — новой миграцией. Экран «Досье».
 Готово: на 10 реальных событиях разных тем досье собирается; ошибки источников видны на «Плагинах».
 
-### [ ] Этап C. Модель (1.3)
+### [x] Этап C. Модель (1.3)
+> Выполнен в v1.3.0: `eventhub/model.py` (сведение, λ, интервал, сумма = сумме цен), `eventhub/ai.py` (Claude вслепую),
+> `eventhub/calibration.py`, оценщики — `plugins/builtin/estimators.py`, таблица `event_analyses` (миграция 0007).
+> Проверка на закрытых рынках: поправка цены не лучше рынка (выключена), Manifold помогает только с отсечкой 30 п.п.
 Оценщики-плагины, кривая калибровки цены, консенсус площадок, расчётные модели по темам, сведение, неопределённость,
 режимы с ИИ и без ИИ. Тесты на синтетике; trading-math-audit. Лестница оценок на странице события, линия оценки
 модели на графике. Готово: поправка цены и консенсус проверены на истории закрытых рынков (Brier против цены).
