@@ -86,7 +86,7 @@ def check(db: DB, cat: Any, clients: dict, caps_fn: Any, settings: dict, now: fl
             if mode == "ai" and not ai.available():
                 mode = "manual"
             ex = advisor.evaluate(
-                db, cat, ev, mode, clients, int(settings.get("events_ai_daily_limit") or 0), sync=True
+                db, cat, ev, mode, clients, int(settings.get("events_ai_daily_limit") or 0), sync=True, origin="watch"
             )
             caps = caps_fn(now)
             adv = advisor.advise(

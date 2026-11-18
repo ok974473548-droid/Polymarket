@@ -75,6 +75,7 @@
         .split(/[\s,;]+/)
         .filter(Boolean),
       auto_discover: f.has("auto_discover"),
+      shadow: { enabled: f.has("shadow_enabled"), per_topic: v("shadow_per_topic"), every_h: v("shadow_every_h") },
     };
     saving = true;
     try {
@@ -193,6 +194,25 @@
                 </span>
               </span>
             </label>
+            <label class="opt">
+              <input type="checkbox" name="shadow_enabled" checked={s.shadow?.enabled !== false} />
+              <span>
+                <b>Теневые анализы событий (самообучение модели)</b>
+                <span class="sub" style="display:block">
+                  Модель сама разбирает выборку событий по всем темам (без ИИ, бесплатно) и запоминает свою оценку и цену рынка. Когда события закрываются, по ним проверяется и настраивается точность. Порциями в фоне, по несколько минут раз в 15 минут.
+                </span>
+              </span>
+            </label>
+            <div class="row" style="gap:12px">
+              <div class="fld">
+                <label for="shadow_per_topic">Событий на тему за круг</label>
+                <input id="shadow_per_topic" class="inp" type="number" min="0" max="50" step="1" value={s.shadow?.per_topic ?? 10} />
+              </div>
+              <div class="fld">
+                <label for="shadow_every_h">Круг раз в, часов</label>
+                <input id="shadow_every_h" class="inp" type="number" min="1" max="48" step="1" value={s.shadow?.every_h ?? 6} />
+              </div>
+            </div>
             <div id="data-usage" class="sub">
               {#if usageErr}{usageErr}{:else if !usage}Считаем объём данных…{:else}
                 <div>

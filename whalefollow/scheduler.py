@@ -113,6 +113,7 @@ class Scheduler:
             Job("rotation", DAY, self.job_rotation, "heavy"),
             Job("event_watch", 300, self.job_event_watch, "slow"),
             Job("event_selfcheck", 3600, self.job_event_selfcheck, "slow"),
+            Job("shadow", 900, self.job_shadow, "heavy"),
         ]
         # фоновые задачи плагинов-источников (кэш Kalshi, коэффициенты букмекеров, свои плагины)
         from . import plugins
@@ -525,6 +526,18 @@ class Scheduler:
         n = selfcheck.resolve(self.db, self.gamma) if self.gamma is not None else 0
         selfcheck.learn(self.db, self.clock())
         return n
+
+    def job_shadow(self):
+        """Теневые анализы событий (данные для самообучения): порция из очереди с бюджетом времени."""
+        from .eventhub import shadow
+        from .eventhub.catalog import EventsCatalog
+        from .plugins import user_settings
+
+        if self.gamma is None:
+            return None
+        cat = EventsCatalog(self.gamma, self.clob, self.db)
+        clients = {k: v for k, v in (("data", self.data), ("gamma", self.gamma), ("clob", self.clob)) if v is not None}
+        return shadow.run(self.db, cat, clients, user_settings(self.db), self.clock()).get("saved")
 
     def job_weekly(self):
         if next(j for j in self.jobs if j.name == "weekly").runs == 0:

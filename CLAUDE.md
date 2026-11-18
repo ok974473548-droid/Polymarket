@@ -41,7 +41,7 @@
 | `web/` | Готовая сборка интерфейса (не править руками — собирается из `frontend/`), PWA: `sw.js`, `manifest.webmanifest`, иконки |
 | `frontend/` | Интерфейс: Svelte 5 + TypeScript + Vite. `src/views/` — экраны, `src/components/` — блоки (графики: `PriceChart` — lightweight-charts, `Plot` — uPlot), `src/lib/` — API, состояние, роутер, живые события, горячие клавиши, push; `public/` — sw.js, манифест, иконки; `e2e/` — сценарии Playwright |
 | `plugins/` | Плагины: `base` (виды: SourcePlugin, EstimatorPlugin, NotifierPlugin, StrategyPlugin; Candidate, Verdict, Notice), `registry` (встроенные → entry points `whalefollow.plugins` → файлы из `WF_PLUGINS_DIR`/`/data/plugins`; включение; состояние в `risk_state` «plugin:имя»), `notify` (диспетчер уведомлений), `strategy` (фильтр в `agent.evaluate` и бэктест на `whale_sim`), `builtin/` (источники, `event_sources`, оценщики `estimators`, 4 канала, 3 стратегии) |
-| `eventhub/` | Модуль «События»: `selfcheck` (самопроверка: исходы закрытых рынков, Brier модели против рынка, λ и веса только по прошлому, состояние `event_model_params`); `advisor` (совет: что/по какой цене/сколько; `evaluate` — досье → ИИ → модель → стаканы), `watch` («Следить», уведомление `event_edge`); `model` (оценка: цена → оценщики-плагины `EstimatorPlugin` → итог со сжатием λ; анализы в `event_analyses`), `ai` (Claude вслепую, фон, дневной лимит), `calibration` (кривые «цена → частота», `scripts/fit_event_calibration.py`); `catalog` (Gamma `/events`, поиск, разбор исходов, история цен по периодам, живые цены, сохранение открытого события); `dossier` (досье: факты из плагинов-источников, `SourcePlugin.dossier/applies`, таблицы `evidence`, `event_dossiers`); API `/api/catalog*`; ставки с `orders.signal_id = "ev:<id>"`, лимиты `events_*` |
+| `eventhub/` | Модуль «События»: `shadow` (теневые анализы для самообучения: выборка по темам, очередь порциями, `origin='shadow'`); `selfcheck` (самопроверка: исходы закрытых рынков, Brier модели против рынка, λ и веса только по прошлому, состояние `event_model_params`); `advisor` (совет: что/по какой цене/сколько; `evaluate` — досье → ИИ → модель → стаканы), `watch` («Следить», уведомление `event_edge`); `model` (оценка: цена → оценщики-плагины `EstimatorPlugin` → итог со сжатием λ; анализы в `event_analyses`), `ai` (Claude вслепую, фон, дневной лимит), `calibration` (кривые «цена → частота», `scripts/fit_event_calibration.py`); `catalog` (Gamma `/events`, поиск, разбор исходов, история цен по периодам, живые цены, сохранение открытого события); `dossier` (досье: факты из плагинов-источников, `SourcePlugin.dossier/applies`, таблицы `evidence`, `event_dossiers`); API `/api/catalog*`; ставки с `orders.signal_id = "ev:<id>"`, лимиты `events_*` |
 | `push.py` | Push-уведомления (Web Push: шифрование RFC 8291, подпись VAPID), подписки устройств, отправка в фоне |
 | `fees.py`, `categories.py` | Комиссии Polymarket по темам; единый список тем |
 | `diagnostics.py` | Экран «Диагностика»: проверки всех API и потоков |
@@ -248,7 +248,9 @@ Polymarket, в нашем дизайне: график вероятностей 
 скоро закрывающихся); scikit-learn — только если понадобится на F6; советник сам свои пороги не меняет без согласия
 пользователя (решить на F6); объём — модуль «События».
 
-### [ ] F1. Теневые анализы (1.6)
+### [x] F1. Теневые анализы (1.6)
+> Выполнен в v1.6.0: `eventhub/shadow.py` (выборка, очередь, порции с бюджетом, чистка фактов), задача `shadow`
+> (worker, группа heavy, раз в 15 мин), `event_analyses.origin` (миграция 0009), настройка `shadow`; на живом — 90 событий/круг.
 Фоновая выборка событий по всем темам (скоро закрывающиеся + крупные, с минимальным объёмом), досье и модель без ИИ,
 анализ сохраняется с пометкой «теневой» — данные для самопроверки и обучения. Очередь, порции, бюджет времени,
 настройка вкл/выкл и объёма, чистка старых фактов досье. Готово: на живом Polymarket за прогон сохраняются анализы

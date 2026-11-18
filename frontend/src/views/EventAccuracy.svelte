@@ -79,6 +79,26 @@
     </section>
   {/each}
 
+  {#if r.shadow}
+    <section class="card col" style="gap:6px" data-acc-shadow>
+      <h2 style="margin:0">Сбор данных для самообучения</h2>
+      <div class="sub">
+        {#if r.shadow.enabled}
+          Теневые анализы: модель сама разбирает по {r.shadow.per_topic} событий каждой темы раз в {r.shadow.every_h} ч (без ИИ) и запоминает оценку и цену рынка.
+        {:else}
+          Теневые анализы выключены (Настройки → Сбор данных) — модель учится только на событиях, которые вы открываете.
+        {/if}
+      </div>
+      <div class="row" style="gap:28px;flex-wrap:wrap">
+        <div class="fact"><div class="label">Теневых событий</div><div class="v">{r.shadow.events}</div><div class="sub">{r.shadow.outcomes} {plural(r.shadow.outcomes, "исход", "исхода", "исходов")}</div></div>
+        <div class="fact"><div class="label">Уже закрылось</div><div class="v">{r.closed_by_origin?.shadow || 0}</div><div class="sub">из них проверено</div></div>
+        <div class="fact"><div class="label">Ждут закрытия рынков</div><div class="v">{r.pending_markets}</div></div>
+        <div class="fact"><div class="label">В очереди</div><div class="v">{r.shadow.queue}</div><div class="sub">{r.shadow.last_ts ? "последний проход " + when(r.shadow.last_ts) : "ещё не было"}</div></div>
+      </div>
+      {#if r.shadow.last_error}<div class="sub">Последняя ошибка: {r.shadow.last_error}</div>{/if}
+    </section>
+  {/if}
+
   <section class="card col" style="gap:8px" data-acc-params>
     <h2 style="margin:0">Чему модель научилась</h2>
     <div class="sub">

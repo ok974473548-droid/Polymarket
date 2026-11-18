@@ -249,7 +249,15 @@ def market_quotes(cat: Any, ev: dict) -> tuple[dict[str, float], dict[str, dict]
 
 
 def evaluate(
-    db: Any, cat: Any, ev: dict, mode: str, clients: dict, ai_limit: int, start_jobs: bool = True, sync: bool = False
+    db: Any,
+    cat: Any,
+    ev: dict,
+    mode: str,
+    clients: dict,
+    ai_limit: int,
+    start_jobs: bool = True,
+    sync: bool = False,
+    origin: str = "page",
 ) -> dict:
     """Досье (собрать в фоне, если нет или устарело) → ИИ (в режиме «с ИИ», в фоне, дневной лимит) → модель.
     Возвращает анализ модели + стаканы + состояние фоновых задач."""
@@ -282,7 +290,7 @@ def evaluate(
                 job = ai.start(db, dz.event_info(ev_open), d["items"], d["collected_ts"], ai_limit)
         elif d["collected_ts"] is None:
             job = {"state": "wait_dossier"}
-    res = model.analyze(db, ev_open, mode, market)
+    res = model.analyze(db, ev_open, mode, market, origin=origin)
     return {"analysis": res, "quotes": qs, "ai_job": job, "dossier_job": (dj or {}).get("state")}
 
 

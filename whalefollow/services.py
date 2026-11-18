@@ -1674,6 +1674,7 @@ class Services:
         "rotation": "Форма китов (стратегия «Ротация»)",
         "event_watch": "«Следить» за событиями",
         "event_selfcheck": "Самопроверка модели событий",
+        "shadow": "Теневые анализы событий (самообучение)",
     }
 
     def trial(self, target_signals: int = 200, min_weeks: int = 4, max_drawdown: float = 0.15) -> dict:
@@ -2133,10 +2134,11 @@ class Services:
     def events_accuracy(self) -> dict:
         """Экран «Точность модели событий»: итог модели против цены рынка на закрытых событиях, калибровка,
         темы, оценщики, выученные λ и веса, результат ставок по совету."""
-        from .eventhub import selfcheck
+        from .eventhub import selfcheck, shadow
 
         rep = selfcheck.report(self.db, self.clock())
         rep["bets"] = self.results("all").get("events") or []
+        rep["shadow"] = {**shadow.status(self.db), **shadow.settings_of(self.risk.settings())}
         return rep
 
     def events_watched(self) -> dict:
@@ -2383,6 +2385,19 @@ class Services:
                 continue
             if k == "events_ai_daily_limit":
                 v = int(v)
+            if k == "shadow":
+                if not isinstance(v, dict) or set(v) - {"enabled", "per_topic", "every_h"}:
+                    errors[k] = "ожидается {enabled, per_topic, every_h}"
+                    continue
+                try:
+                    v = {
+                        "enabled": bool(v.get("enabled", True)),
+                        "per_topic": max(0, min(50, int(v.get("per_topic", 10)))),
+                        "every_h": max(1, min(48, int(v.get("every_h", 6)))),
+                    }
+                except (TypeError, ValueError):
+                    errors[k] = "per_topic и every_h — целые числа"
+                    continue
             if k == "ai_mode" and v not in ("ai", "manual"):
                 errors[k] = "ai | manual"
                 continue

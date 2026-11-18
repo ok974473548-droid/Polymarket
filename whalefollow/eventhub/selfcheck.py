@@ -73,7 +73,7 @@ def samples(db: DB, now: float | None = None, mode: str | None = None) -> list[d
     """Анализы до закрытия рынка с известным исходом; у каждого — вес 1/число анализов этого исхода и режима."""
     now = now or time.time()
     rows = db.query(
-        "SELECT ea.event_id, ea.outcome_key, ea.mode, ea.ts, ea.market_p, ea.anchor_p, ea.model_p, ea.final_p, "
+        "SELECT ea.event_id, ea.outcome_key, ea.mode, ea.origin, ea.ts, ea.market_p, ea.anchor_p, ea.model_p, ea.final_p, "
         "ea.lam, ea.components, t.payout AS y, m.category AS topic, m.resolved_ts, m.end_ts "
         "FROM event_analyses ea JOIN tokens t ON t.token_id=ea.outcome_key JOIN markets m ON m.market_id=t.market_id "
         "WHERE t.payout IS NOT NULL AND ea.market_p IS NOT NULL" + (" AND ea.mode=?" if mode else ""),
@@ -335,7 +335,16 @@ def report(db: DB, now: float | None = None) -> dict:
                 "mult": mult_for(par, name),
             }
         )
-    pending = len(pending_markets(db, 10_000))
+    pending = len(pending_markets(db, 100_000))
+    by_origin = {
+        str(r["o"] or "page"): int(r["n"])
+        for r in db.query(
+            "SELECT origin AS o, COUNT(DISTINCT event_id || '|' || outcome_key) AS n FROM event_analyses GROUP BY origin"
+        )
+    }
+    closed_by_origin: dict[str, int] = defaultdict(int)
+    for key in {(r["event_id"], r["outcome_key"], r.get("origin") or "page") for r in rows}:
+        closed_by_origin[key[2]] += 1
     total = db.scalar("SELECT COUNT(DISTINCT event_id || '|' || outcome_key) AS n FROM event_analyses", (), 0) or 0
     return {
         "ok": True,
@@ -345,5 +354,7 @@ def report(db: DB, now: float | None = None) -> dict:
         "params": par,
         "analyses_outcomes": int(total),
         "pending_markets": pending,
+        "by_origin": by_origin,  # исходов с анализами: страница / «Следить» / теневые
+        "closed_by_origin": dict(closed_by_origin),
         "min_outcomes": MIN_OUTCOMES,
     }

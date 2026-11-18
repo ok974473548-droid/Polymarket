@@ -65,6 +65,7 @@ def test_bootstrap_from_empty_db(live):
         "weekly",
         "backup",
         "rotation",  # расписание формы для стратегии «Ротация» (стратегия выключена — задача ничего не делает)
+        "shadow",  # теневые анализы событий: порция из очереди
     ]
     assert all(j.last_ok for j in live["sched"].jobs if j.group in ("slow", "heavy")), [
         j.last_error for j in live["sched"].jobs

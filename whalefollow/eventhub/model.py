@@ -43,7 +43,14 @@ def _news_spike(items: list[dict], now: float) -> bool:
     return len(fresh) >= 5
 
 
-def analyze(db: DB, ev: dict, mode: str = "manual", market: dict[str, float] | None = None, save: bool = True) -> dict:
+def analyze(
+    db: DB,
+    ev: dict,
+    mode: str = "manual",
+    market: dict[str, float] | None = None,
+    save: bool = True,
+    origin: str = "page",
+) -> dict:
     """ev — событие из каталога (detail), market — цены исходов сейчас (ключ → вероятность «Да»)."""
     now = time.time()
     info = dz.event_info(ev)
@@ -166,7 +173,7 @@ def analyze(db: DB, ev: dict, mode: str = "manual", market: dict[str, float] | N
         "explanation": explain(rows, spike, d["collected_ts"] is not None, lam0, learned["n"]),
     }
     if save:
-        _save(db, res)
+        _save(db, res, origin)
     return res
 
 
@@ -214,7 +221,7 @@ def explain(rows: list[dict], spike: bool, has_dossier: bool, lam0: float = LAMB
     return out
 
 
-def _save(db: DB, res: dict) -> None:
+def _save(db: DB, res: dict, origin: str = "page") -> None:
     last = db.one(
         "SELECT ts, dossier_ts, components FROM event_analyses WHERE event_id=? AND mode=? ORDER BY ts DESC LIMIT 1",
         (res["event_id"], res["mode"]),
@@ -233,6 +240,7 @@ def _save(db: DB, res: dict) -> None:
     rows = [
         {
             "id": new_id("ea_"),
+            "origin": origin,
             "event_id": res["event_id"],
             "ts": res["ts"],
             "mode": res["mode"],

@@ -252,4 +252,5 @@ test("точность модели событий: модель против р
   await expect(p).toContainText("λ сейчас");
   await expect(p).toContainText("по 80 закрытым исходам");
   await expect(p.locator("[data-est=platforms]")).toBeVisible();
+  await expect(page.locator("[data-acc-shadow]")).toContainText("Теневые анализы");
 });
