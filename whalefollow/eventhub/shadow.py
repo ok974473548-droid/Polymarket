@@ -18,8 +18,8 @@ import time
 from typing import Any
 
 from ..db import DB
+from . import advisor, consistency, model
 from . import dossier as dz
-from . import model
 from .catalog import TOPIC_TAG
 
 STATE = "shadow_queue"
@@ -97,6 +97,11 @@ def analyze_one(db: DB, cat: Any, event_id: str, clients: dict) -> int:
         dz.collect(db, ev, clients)
     # цена — как показывает Polymarket (Gamma); стаканы для каждого исхода не запрашиваем, чтобы не нагружать CLOB
     market = {r["key"]: float(r["price"]) for r in rows}
+    # связанные исходы (лестницы, взаимоисключающие) — стаканы нужны: ищем комбинации без риска и копим статистику
+    open_rows = [r for r in ev["outcomes"] if not r["closed"]]
+    if ev.get("neg_risk") or consistency.ladders(open_rows):
+        _, qs = advisor.market_quotes(cat, ev)
+        consistency.log_arbs(db, ev, consistency.arbitrage(ev, qs, advisor.event_fee_rate(db, ev)))
     res = model.analyze(db, {**ev, "outcomes": rows}, "manual", market, origin="shadow")
     return len(res["outcomes"])
 

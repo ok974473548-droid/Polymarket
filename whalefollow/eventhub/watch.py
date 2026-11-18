@@ -56,8 +56,11 @@ def set_watch(db: DB, event_id: str, on: bool, title: str = "", mode: str = "") 
 
 
 def gains(advice: dict) -> dict[str, float]:
-    """Выгодные стороны: «ключ|сторона» → выгода на акцию (после комиссии)."""
-    return {f"{x['key']}|{x['side']}": float(x["edge"]) for x in advice.get("buys") or []}
+    """Выгодные стороны: «ключ|сторона» → выгода на акцию (после комиссии); без риска — «arb|токены» → прибыль на пару."""
+    out = {f"{x['key']}|{x['side']}": float(x["edge"]) for x in advice.get("buys") or []}
+    for a in advice.get("arbs") or []:
+        out["arb|" + "|".join(sorted(leg["token_id"] for leg in a["legs"]))] = float(a["profit"])
+    return out
 
 
 def news(prev: dict[str, float], cur: dict[str, float]) -> list[str]:
@@ -102,7 +105,27 @@ def check(db: DB, cat: Any, clients: dict, caps_fn: Any, settings: dict, now: fl
             cur = gains(adv)
             prev = json.loads(w["state"] or "{}")
             fresh = news(prev, cur)
-            if fresh:
+            from . import consistency
+
+            consistency.log_arbs(db, ev, adv.get("arbs") or [], now)
+            fresh_arbs = [
+                a
+                for a in adv.get("arbs") or []
+                if "arb|" + "|".join(sorted(leg["token_id"] for leg in a["legs"])) in fresh
+            ]
+            if fresh_arbs:
+                a = fresh_arbs[0]
+                legs = " + ".join(
+                    f"«{leg['label']}» {leg['title']} по {leg['price'] * 100:.1f}¢" for leg in a["legs"][:3]
+                )
+                db.notify(
+                    "event_edge",
+                    f"Без риска: {ev['title'][:80]}",
+                    f"{legs}: прибыль {a['profit'] * 100:.1f}¢ на пару при любом исходе".replace(".", ","),
+                    ref=eid,
+                )
+                notified += 1
+            elif fresh:
                 best = max((x for x in adv["buys"] if f"{x['key']}|{x['side']}" in fresh), key=lambda x: x["edge"])
                 title = f"Выгода: {ev['title'][:80]}"
                 body = (

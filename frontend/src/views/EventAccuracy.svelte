@@ -95,6 +95,13 @@
         <div class="fact"><div class="label">Ждут закрытия рынков</div><div class="v">{r.pending_markets}</div></div>
         <div class="fact"><div class="label">В очереди</div><div class="v">{r.shadow.queue}</div><div class="sub">{r.shadow.last_ts ? "последний проход " + when(r.shadow.last_ts) : "ещё не было"}</div></div>
       </div>
+      {#if r.arbs}
+        <div class="sub" data-acc-arbs>
+          Без риска (рынки не согласованы) за {r.arbs.days} дней: {r.arbs.n
+            ? `замечено ${r.arbs.n} раз в ${r.arbs.events} ${plural(r.arbs.events, "событии", "событиях", "событиях")}, лучшее +${(Math.round(r.arbs.best * 1000) / 10).toString().replace(".", ",")}¢ на комплект`
+            : "не замечено — ликвидные рынки согласованы"}.
+        </div>
+      {/if}
       {#if r.shadow.last_error}<div class="sub">Последняя ошибка: {r.shadow.last_error}</div>{/if}
     </section>
   {/if}

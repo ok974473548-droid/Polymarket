@@ -209,8 +209,25 @@ def advise(
         (x for x in items if x.get("edge") is not None and x["verdict"] != "buy"),
         key=lambda x: -(x["edge"] - x["need"]),
     )
+    # без риска: по лучшим ценам стакана с комиссией; размер — по глубине и лимитам (сумма обеих частей)
+    from . import consistency
+
+    arbs = []
+    for a in consistency.arbitrage(ev, quotes, rate):
+        pairs = min(a["shares"], cap_usd / a["cost"]) if a["cost"] > 0 else 0.0
+        if pairs * a["cost"] < MIN_BET_USD:
+            continue
+        arbs.append(
+            {
+                **a,
+                "pairs": round(pairs, 2),
+                "usd": round(pairs * a["cost"], 2),
+                "profit_usd": round(pairs * a["profit"], 2),
+            }
+        )
     return {
         "items": items,
+        "arbs": arbs[:5],
         "best": buys[0] if buys else None,
         "buys": buys,
         "closest": near[0] if near and not buys else None,  # ближе всего к выгоде — «что должно измениться»
@@ -246,6 +263,16 @@ def market_quotes(cat: Any, ev: dict) -> tuple[dict[str, float], dict[str, dict]
         elif r.get("price") is not None:
             market[r["key"]] = float(r["price"])
     return market, qs
+
+
+def liquid_keys(ev: dict, quotes: dict[str, dict]) -> set[str]:
+    """Исходы с живым двусторонним стаканом (спред не больше 10¢) — их цене можно верить."""
+    out = set()
+    for r in ev.get("outcomes") or []:
+        q = quotes.get(r["yes_token"]) or {}
+        if q.get("bid") is not None and q.get("ask") is not None and q["ask"] - q["bid"] <= 0.10:
+            out.add(r["key"])
+    return out
 
 
 def evaluate(

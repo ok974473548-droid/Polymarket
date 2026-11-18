@@ -745,7 +745,13 @@ class Services:
             "is_open": is_open,
             # откуда ставка: повтор за китом или своя — со страницы события (модуль «События»)
             "origin": (
-                ("event_model" if str(p.get("signal_id")).endswith(":adv") else "event")
+                (
+                    "event_arb"
+                    if str(p.get("signal_id")).endswith(":arb")
+                    else "event_model"
+                    if str(p.get("signal_id")).endswith(":adv")
+                    else "event"
+                )
                 if str(p.get("signal_id") or "").startswith("ev:")
                 else "whale"
             ),
@@ -1596,13 +1602,17 @@ class Services:
         # ставки модуля «События» — отдельно от ставок за китами: по совету модели и свои
         ev_groups = {
             k: {"title": t, "bets": 0, "won": 0, "lost": 0, "waiting": 0, "stake_usd": 0.0, "pnl_usd": 0.0}
-            for k, t in (("event_model", "По совету модели"), ("event", "Свои ставки по событиям"))
+            for k, t in (
+                ("event_model", "По совету модели"),
+                ("event_arb", "Без риска (согласованность рынков)"),
+                ("event", "Свои ставки по событиям"),
+            )
         }
         for tok, p in allpos.items():
             sid = str(p.get("signal_id") or "")
             if not sid.startswith("ev:") or (p.get("opened_ts") or 0) < start:
                 continue
-            g = ev_groups["event_model" if sid.endswith(":adv") else "event"]
+            g = ev_groups["event_model" if sid.endswith(":adv") else "event_arb" if sid.endswith(":arb") else "event"]
             fees_paid = p.get("fees", 0.0)
             spent = p["cost"] + p.get("cost_removed", 0.0)
             px = self.pf.mark_price(tok) or 0
@@ -2094,6 +2104,9 @@ class Services:
         caps = self._event_caps(now)
         adv = advisor.advise(res, ev, ex["quotes"], advisor.event_fee_rate(self.db, ev), caps["bank"], caps["cap"], now)
         adv["caps"] = caps
+        from .eventhub import consistency
+
+        consistency.log_arbs(self.db, ev, adv["arbs"], now)
         cached = ai.cached(self.db, event_id) if want == "ai" else None
         return {
             "ok": True,
@@ -2113,6 +2126,49 @@ class Services:
             },
             "dossier_job": ex["dossier_job"],
             "line": model.history(self.db, event_id, want, int(now) - 30 * DAY),
+        }
+
+    def event_buy_arb(self, event_id: str, tokens: list[str], pairs: float) -> dict:
+        """Без риска: купить обе (все) части комбинации. Перед покупкой комбинация проверяется заново по свежему
+        стакану; каждая часть — не дороже её цены в комбинации (иначе выгода исчезает)."""
+        from .eventhub import advisor, consistency
+
+        s = self.risk.settings()
+        if s.get("mode", "paper") != "paper":
+            return {"ok": False, "error": "Реальные ставки отключены — работает только пробный режим"}
+        cat = self._events()
+        ev = cat.get(event_id) if cat else None
+        if ev is None:
+            return {"ok": False, "error": "Событие не найдено"}
+        _, qs = advisor.market_quotes(cat, ev)
+        rate = advisor.event_fee_rate(self.db, ev)
+        want = sorted(tokens)
+        arb = next(
+            (a for a in consistency.arbitrage(ev, qs, rate) if sorted(leg["token_id"] for leg in a["legs"]) == want),
+            None,
+        )
+        if arb is None:
+            return {"ok": False, "error": "Комбинации без риска уже нет — цены изменились"}
+        caps = self._event_caps(time.time())
+        try:
+            pairs = float(pairs)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "Укажите количество"}
+        pairs = min(pairs, arb["shares"], caps["cap"] / arb["cost"] if arb["cost"] else 0.0)
+        if pairs * arb["cost"] < advisor.MIN_BET_USD:
+            return {"ok": False, "error": "Лимит ставок по событиям на сегодня исчерпан или в стакане слишком мало"}
+        bought = []
+        for leg in arb["legs"]:
+            r = self.event_buy(event_id, leg["token_id"], round(pairs * leg["price"], 2), leg["price"], kind="arb")
+            if not r.get("ok"):
+                return {"ok": False, "error": f"Часть «{leg['title']}» не куплена: {r.get('error')}", "bought": bought}
+            bought.append(r)
+        got = min(b["shares"] for b in bought)
+        return {
+            "ok": True,
+            "bought": bought,
+            "message": f"Куплено {got:.1f} пар без риска на ${sum(b['usd'] for b in bought):.2f}: при любом исходе "
+            f"выплата не меньше ${got:.2f}".replace(".", ","),
         }
 
     def event_watch(self, event_id: str, on: bool) -> dict:
@@ -2139,6 +2195,9 @@ class Services:
         rep = selfcheck.report(self.db, self.clock())
         rep["bets"] = self.results("all").get("events") or []
         rep["shadow"] = {**shadow.status(self.db), **shadow.settings_of(self.risk.settings())}
+        from .eventhub import consistency
+
+        rep["arbs"] = consistency.arb_stats(self.db, 30, self.clock())
         return rep
 
     def events_watched(self) -> dict:
@@ -2147,7 +2206,13 @@ class Services:
         return {"ok": True, "items": watch.listing(self.db)}
 
     def event_buy(
-        self, event_id: str, token_id: str, usd: float, max_price: float | None = None, advice: bool = False
+        self,
+        event_id: str,
+        token_id: str,
+        usd: float,
+        max_price: float | None = None,
+        advice: bool = False,
+        kind: str = "",
     ) -> dict:
         """Виртуальная покупка исхода со страницы события: лимиты модуля «События» и общие стопы.
         advice — покупка по совету модели (помечается отдельно в «Моих ставках» и «Итогах»)."""
@@ -2187,7 +2252,7 @@ class Services:
 
         limit = float(max_price) if max_price else min(asks[0][0] + 0.02, 0.99)  # защита от проскальзывания
         res = PaperBroker(self.db).buy(
-            f"ev:{event_id}:adv" if advice else f"ev:{event_id}",
+            f"ev:{event_id}:arb" if kind == "arb" else f"ev:{event_id}:adv" if advice else f"ev:{event_id}",
             token_id,
             rr.size_usd,
             asks,

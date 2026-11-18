@@ -97,7 +97,7 @@
             <div class="t">{r.question}</div>
             <div class="m">
               <span>«{r.side}»</span>
-              {#if r.origin === "event_model"}<span class="chip i sm">по совету модели</span>{:else if r.origin === "event"}<span class="chip i sm">своя ставка по событию</span>{:else}<span>кит {r.whale}</span>{/if}
+              {#if r.origin === "event_arb"}<span class="chip i sm">без риска</span>{:else if r.origin === "event_model"}<span class="chip i sm">по совету модели</span>{:else if r.origin === "event"}<span class="chip i sm">своя ставка по событию</span>{:else}<span>кит {r.whale}</span>{/if}
               <span>{r.category}</span>{#if open && r.origin === "whale"}<WhaleState st={r.whale_state} />{/if}
             </div>
           </div>

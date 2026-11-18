@@ -21,8 +21,8 @@ from typing import Any
 
 from ..db import DB, new_id
 from ..plugins import EstimatorPlugin, context, record, registry
+from . import consistency, selfcheck
 from . import dossier as dz
-from . import selfcheck
 
 LAMBDA0 = 0.3  # исходное λ: насколько итог может отойти от цены; дальше его подбирает самопроверка (selfcheck)
 SAVE_EVERY_S = 600  # в историю анализов — не чаще раза в 10 мин на событие и режим (или при новом досье/ИИ)
@@ -142,6 +142,20 @@ def analyze(
                 "components": comps[o.key],
             }
         )
+    # Лестницы (пороги, даты): итог обязан соблюдать порядок — «коснётся 130 тыс.» не вероятнее «коснётся 120 тыс.».
+    # Смесь цены и оценок разной силы по ступеням может его нарушить → проекция на допустимое (иначе советник
+    # предложил бы противоречивые ставки).
+    by_key = {r["key"]: r for r in rows}
+    for lad in consistency.ladders([{"key": o.key, "title": o.title, "question": o.question} for o in info.outcomes]):
+        rr = [by_key[g.key] for g in lad.rungs if g.key in by_key]
+        if len(rr) < 2:
+            continue
+        proj = consistency.isotonic_down([r["final"] for r in rr])
+        for r, q in zip(rr, proj, strict=True):
+            if abs(q - r["final"]) > 1e-9:
+                shift = q - r["final"]
+                r["final"], r["lo"], r["hi"] = q, min(max(r["lo"] + shift, 0.0), q), max(min(r["hi"] + shift, 1.0), q)
+                r["consistency"] = round(shift, 4)
     # Взаимоисключающие исходы: сумма итогов = сумме цен рынка (у полного события ≈100%). Исходы с независимыми
     # оценками двигаются, остальные — пропорционально в обратную сторону, чтобы сумма не менялась. Нормировать к ровно
     # 100% нельзя: при сумме середин 97% или неполном списке исходов это дало бы «выгоду» на пустом месте.

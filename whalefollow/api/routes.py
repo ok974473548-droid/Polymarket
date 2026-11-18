@@ -40,6 +40,7 @@ GET  /api/catalog/{id}/history?period=1w&keys=a,b   история цен исх
 GET  /api/catalog/{id}/live?tokens=a,b живые цены исходов (поток стаканов или стакан CLOB)
 GET  /api/catalog/{id}/dossier?collect=auto|force|no  досье события: факты из источников и ход сбора
 GET  /api/catalog/{id}/analysis?mode=ai|manual  оценка модели по исходам (цена → независимые оценки → итог)
+POST /api/catalog/{id}/buy_arb        {tokens, pairs} — без риска: купить все части комбинации
 PUT  /api/catalog/{id}/watch          {on} — «Следить»: уведомление, когда у модели появилась выгода
 GET  /api/watched                     события, за которыми следим
 GET  /api/accuracy/events             точность модели событий против рынка на закрытых событиях
@@ -355,6 +356,11 @@ def build_router(svc: Services) -> APIRouter:
     def event_buy(request: Request, event_id: str, body: S.EventBuyIn | None = None) -> Response:
         b = body or S.EventBuyIn()
         return J(request, svc.event_buy(event_id, b.token_id, b.usd, b.max_price, b.advice))
+
+    @r.post("/catalog/{event_id}/buy_arb", tags=["События"])
+    def event_buy_arb(request: Request, event_id: str, body: S.EventArbIn | None = None) -> Response:
+        b = body or S.EventArbIn()
+        return J(request, svc.event_buy_arb(event_id, b.tokens, b.pairs))
 
     @r.put("/catalog/{event_id}/watch", tags=["События"])
     def event_watch(request: Request, event_id: str, body: S.EventWatchIn | None = None) -> Response:

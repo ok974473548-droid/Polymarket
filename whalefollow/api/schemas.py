@@ -72,6 +72,11 @@ class PushSubscribeIn(_In):
     label: str = Field(default="", description="Браузер/устройство — для списка")
 
 
+class EventArbIn(_In):
+    tokens: list[str] = Field(default_factory=list, description="Токены частей комбинации без риска")
+    pairs: float = Field(default=0, description="Сколько пар (комплектов) купить")
+
+
 class EventWatchIn(_In):
     on: bool = Field(default=True, description="Следить (true) или перестать (false)")
 
