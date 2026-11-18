@@ -56,6 +56,7 @@ def test_bootstrap_from_empty_db(live):
         "activity",
         "recategorize",
         "event_watch",  # «Следить» в «Событиях»: список пуст — сразу выходит
+        "event_selfcheck",  # самопроверка модели событий: анализов нет — сразу выходит
         "kalshi",
         "odds",
         "score",

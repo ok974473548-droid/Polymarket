@@ -112,6 +112,7 @@ class Scheduler:
             Job("backup", DAY, self.job_backup, "heavy"),
             Job("rotation", DAY, self.job_rotation, "heavy"),
             Job("event_watch", 300, self.job_event_watch, "slow"),
+            Job("event_selfcheck", 3600, self.job_event_selfcheck, "slow"),
         ]
         # фоновые задачи плагинов-источников (кэш Kalshi, коэффициенты букмекеров, свои плагины)
         from . import plugins
@@ -514,6 +515,16 @@ class Scheduler:
         risk = RiskManager(self.db, self.p)
         clients = {k: v for k, v in (("data", self.data), ("gamma", self.gamma), ("clob", self.clob)) if v is not None}
         watch.check(self.db, cat, clients, lambda now: advisor.caps(self.db, risk, now), user_settings(self.db))
+
+    def job_event_selfcheck(self):
+        """Самопроверка модели событий: исходы закрытых рынков из анализов, затем λ и веса — только по прошлому."""
+        from .eventhub import selfcheck
+
+        if not self.db.scalar("SELECT COUNT(*) AS n FROM event_analyses", (), 0):
+            return None
+        n = selfcheck.resolve(self.db, self.gamma) if self.gamma is not None else 0
+        selfcheck.learn(self.db, self.clock())
+        return n
 
     def job_weekly(self):
         if next(j for j in self.jobs if j.name == "weekly").runs == 0:

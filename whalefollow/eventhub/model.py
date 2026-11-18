@@ -22,8 +22,9 @@ from typing import Any
 from ..db import DB, new_id
 from ..plugins import EstimatorPlugin, context, record, registry
 from . import dossier as dz
+from . import selfcheck
 
-LAMBDA0 = 0.3  # насколько далеко итог может отойти от цены при сильных данных (этап E подберёт по точности)
+LAMBDA0 = 0.3  # исходное λ: насколько итог может отойти от цены; дальше его подбирает самопроверка (selfcheck)
 SAVE_EVERY_S = 600  # в историю анализов — не чаще раза в 10 мин на событие и режим (или при новом досье/ИИ)
 Z80 = 1.2816  # 80% интервал
 
@@ -54,6 +55,9 @@ def analyze(db: DB, ev: dict, mode: str = "manual", market: dict[str, float] | N
             market[r["key"]] = float(r["price"])
     ctx = context(db)
     plugs = [p for p in registry().active("estimator", ctx) if isinstance(p, EstimatorPlugin)]
+    # выученное по закрытым событиям: λ (общий или по теме) и множители весов оценщиков
+    learned = selfcheck.params(db)
+    lam0 = selfcheck.lambda_for(learned, info.topic)
     anchor = dict(market)
     comps: dict[str, list[dict]] = {o.key: [] for o in info.outcomes}
     used: dict[str, dict] = {}
@@ -69,7 +73,8 @@ def analyze(db: DB, ev: dict, mode: str = "manual", market: dict[str, float] | N
             record(db, p.name, ok=False, error=f"{type(exc).__name__}: {exc}")
             used[p.name] = {"title": p.title, "error": str(exc)[:200]}
             continue
-        used[p.name] = {"title": p.title, "n": len(est), "role": p.role, "weight": p.weight}
+        mult = selfcheck.mult_for(learned, p.name)
+        used[p.name] = {"title": p.title, "n": len(est), "role": p.role, "weight": p.weight, "mult": mult}
         for e in est:
             if e.outcome_key not in comps:
                 continue
@@ -81,7 +86,7 @@ def analyze(db: DB, ev: dict, mode: str = "manual", market: dict[str, float] | N
                     "title": p.title,
                     "p": round(float(e.p), 5),
                     "q": round(float(e.quality), 3),
-                    "w": round(p.weight * float(e.quality), 3) if p.role != "anchor" else None,
+                    "w": round(p.weight * mult * float(e.quality), 3) if p.role != "anchor" else None,
                     "role": p.role,
                     "note": e.note,
                 }
@@ -99,7 +104,7 @@ def analyze(db: DB, ev: dict, mode: str = "manual", market: dict[str, float] | N
             lm = sum(c["w"] * _logit(c["p"]) for c in ind) / wsum
             model_p = _sig(lm)
             strength = min(1.0, wsum)
-            lam = LAMBDA0 * strength
+            lam = lam0 * strength
             final = _sig(_logit(a) + lam * (lm - _logit(a)))
             sd = math.sqrt(sum(c["w"] * (_logit(c["p"]) - lm) ** 2 for c in ind) / wsum) if len(ind) > 1 else 0.6
         else:
@@ -153,11 +158,12 @@ def analyze(db: DB, ev: dict, mode: str = "manual", market: dict[str, float] | N
         "mode": mode,
         "ts": int(now),
         "dossier_ts": d["collected_ts"],
-        "lambda0": LAMBDA0,
+        "lambda0": lam0,
+        "learned": {"n": learned["n"], "fitted_ts": learned["fitted_ts"]},
         "news_spike": spike,
         "estimators": used,
         "outcomes": rows,
-        "explanation": explain(rows, spike, d["collected_ts"] is not None),
+        "explanation": explain(rows, spike, d["collected_ts"] is not None, lam0, learned["n"]),
     }
     if save:
         _save(db, res)
@@ -172,7 +178,7 @@ def _pct(p: float, nd: int = 1) -> str:
     return _num(p * 100, nd) + "%"
 
 
-def explain(rows: list[dict], spike: bool, has_dossier: bool) -> list[str]:
+def explain(rows: list[dict], spike: bool, has_dossier: bool, lam0: float = LAMBDA0, learned_n: int = 0) -> list[str]:
     """Объяснение без ИИ — по шаблону из тех же данных."""
     out: list[str] = []
     if not has_dossier:
@@ -198,7 +204,12 @@ def explain(rows: list[dict], spike: bool, has_dossier: bool) -> list[str]:
     if spike:
         out.append("За сутки много свежих новостей — цена может не успеть их учесть; неопределённость увеличена.")
     out.append(
-        "Модель осторожна: итог отходит от цены не больше чем на 30% разницы, пока на закрытых событиях не доказано, что она точнее рынка."
+        f"Модель осторожна: итог отходит от цены не больше чем на {round(lam0 * 100)}% разницы"
+        + (
+            f" (подобрано по {learned_n} закрытым исходам)."
+            if learned_n
+            else ", пока на закрытых событиях не доказано, что она точнее рынка."
+        )
     )
     return out
 

@@ -10,6 +10,7 @@ const ROUTES: [RegExp, string, string | null][] = [
   [/^#\/signal\/([^/]+)$/, "signal", "signals"],
   [/^#\/journal$/, "journal", "signals"],
   [/^#\/events$/, "events", "events"],
+  [/^#\/events-accuracy$/, "accuracy", "events"],
   [/^#\/events\/([^/]+)$/, "event", "events"],
   [/^#\/positions(?:\/(open|closed))?$/, "positions", "positions"],
   [/^#\/bet\/([^/]+)$/, "bet", "positions"],

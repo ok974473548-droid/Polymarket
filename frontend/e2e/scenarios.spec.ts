@@ -238,3 +238,18 @@ test("советник: найти событие → совет → поста�
   await page.goto("/#/events");
   await expect(page.locator("[data-watched]")).toContainText("Кто победит на выборах мэра?");
 });
+
+test("точность модели событий: модель против рынка на закрытых событиях", async ({ page }) => {
+  await page.goto("/#/events");
+  await page.locator("[data-nav-acc]").click();
+  await expect(page).toHaveURL(/#\/events-accuracy$/);
+  const m = page.locator("[data-acc-mode=manual]");
+  await expect(m).toContainText("Без ИИ");
+  await expect(m).toContainText("Brier модели");
+  await expect(m.locator("[data-verdict]")).toHaveText(/Лучше рынка|Пока не лучше рынка|Хуже рынка|Мало данных/);
+  await expect(m).toContainText("Калибровка");
+  const p = page.locator("[data-acc-params]");
+  await expect(p).toContainText("λ сейчас");
+  await expect(p).toContainText("по 80 закрытым исходам");
+  await expect(p.locator("[data-est=platforms]")).toBeVisible();
+});

@@ -98,7 +98,7 @@
           <b class={tone(g.pnl_usd)}>{money(g.pnl_usd, { sign: true })}</b>
         </div>
       {/each}
-      <div class="sub">Учитываются отдельно от ставок за китами; итог периода выше — общий по банку.</div>
+      <div class="sub">Учитываются отдельно от ставок за китами; итог периода выше — общий по банку. <a class="link" href="#/events-accuracy">Точность модели событий →</a></div>
     </div>
   {/if}
 {/if}

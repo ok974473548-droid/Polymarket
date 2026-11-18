@@ -95,6 +95,7 @@
     <h1>События</h1>
     <div class="lede">Все события Polymarket по темам. Откройте событие — увидите вероятности исходов во времени, стакан и правила; ставки — виртуальные.</div>
   </div>
+  <a class="btn" href="#/events-accuracy" data-nav-acc>Точность модели</a>
 </div>
 {#if watched.length}
   <section class="card col ev-watched" style="gap:6px" aria-label="Слежу" data-watched>

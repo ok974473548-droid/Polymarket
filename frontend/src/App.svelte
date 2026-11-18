@@ -31,6 +31,7 @@
     plugins: () => import("./views/Plugins.svelte"),
     events: () => import("./views/Events.svelte"),
     event: () => import("./views/Event.svelte"),
+    accuracy: () => import("./views/EventAccuracy.svelte"),
     trial: () => import("./views/Trial.svelte"),
     welcome: () => import("./views/Welcome.svelte"),
   };

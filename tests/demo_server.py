@@ -109,6 +109,78 @@ def _demo_source():
     return Demo()
 
 
+def _closed_analyses(db: DB, now: int) -> None:
+    """Экран «Точность модели событий»: 80 закрытых исходов с анализами до закрытия (модель чуть точнее шумной
+    цены) — без сети, затем подбор λ и весов, как это делает worker раз в час."""
+    import json
+    import math
+    import random
+
+    from whalefollow.eventhub import selfcheck
+
+    rnd = random.Random(7)
+    sig = lambda x: 1 / (1 + math.exp(-x))
+    lg = lambda p: math.log(p / (1 - p))
+    for i in range(80):
+        topic = ("politics", "crypto", "sports", "weather")[i % 4]
+        q = rnd.uniform(0.1, 0.9)
+        y = 1 if rnd.random() < q else 0
+        market = sig(lg(q) + rnd.gauss(0, 0.5))
+        mdl = sig(lg(q) + rnd.gauss(0, 0.4))
+        final = sig(lg(market) + 0.3 * (lg(mdl) - lg(market)))
+        close = now - (i + 1) * 3 * 3600
+        mid, tok = f"demo-closed-m{i}", f"demo-closed-t{i}"
+        db.upsert(
+            "markets",
+            {
+                "market_id": mid,
+                "event_id": f"demo-closed-{i}",
+                "category": topic,
+                "status": "resolved",
+                "resolved_ts": close,
+                "end_ts": close,
+                "question": f"Закрытый вопрос {i}",
+            },
+            ["market_id"],
+        )
+        db.upsert(
+            "tokens", {"token_id": tok, "market_id": mid, "outcome_label": "Yes", "payout": float(y)}, ["token_id"]
+        )
+        comp = [
+            {
+                "name": "platforms",
+                "title": "Другие площадки прогнозов",
+                "p": round(mdl, 4),
+                "w": 0.65,
+                "role": "independent",
+                "note": "",
+            }
+        ]
+        db.upsert(
+            "event_analyses",
+            {
+                "id": f"demo-closed-a{i}",
+                "event_id": f"demo-closed-{i}",
+                "ts": close - 86400,
+                "mode": "manual",
+                "outcome_key": tok,
+                "market_id": mid,
+                "market_p": market,
+                "anchor_p": market,
+                "model_p": mdl,
+                "final_p": final,
+                "lo": 0.0,
+                "hi": 1.0,
+                "confidence": "средняя",
+                "lam": 0.3,
+                "dossier_ts": close - 86400,
+                "components": json.dumps(comp, ensure_ascii=False),
+            },
+            ["id"],
+        )
+    selfcheck.learn(db, now)
+
+
 def build(db_url: str = "sqlite://:memory:") -> tuple[Services, dict]:
     _mix(DemoData, ReadyData)
     _mix(FakeGamma, ReadyGamma)
@@ -129,6 +201,7 @@ def build(db_url: str = "sqlite://:memory:") -> tuple[Services, dict]:
     from whalefollow import plugins
 
     plugins.registry().register(_demo_source(), "демо")
+    _closed_analyses(db, w.now)
     data = DemoData(w)
     ReadyData.__init__(data)
     gamma = EventsGamma(w, evs)

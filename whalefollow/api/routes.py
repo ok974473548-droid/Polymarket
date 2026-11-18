@@ -42,6 +42,7 @@ GET  /api/catalog/{id}/dossier?collect=auto|force|no  досье события:
 GET  /api/catalog/{id}/analysis?mode=ai|manual  оценка модели по исходам (цена → независимые оценки → итог)
 PUT  /api/catalog/{id}/watch          {on} — «Следить»: уведомление, когда у модели появилась выгода
 GET  /api/watched                     события, за которыми следим
+GET  /api/accuracy/events             точность модели событий против рынка на закрытых событиях
 POST /api/catalog/{id}/buy            {token_id, usd, max_price?} — виртуальная покупка исхода
 GET  /api/plugins                     экран «Плагины»: источники, уведомления, стратегии, состояние и ошибки
 PATCH /api/plugins/{name}             {enabled} — включить/выключить плагин
@@ -358,6 +359,10 @@ def build_router(svc: Services) -> APIRouter:
     @r.put("/catalog/{event_id}/watch", tags=["События"])
     def event_watch(request: Request, event_id: str, body: S.EventWatchIn | None = None) -> Response:
         return J(request, svc.event_watch(event_id, body.on if body else True))
+
+    @r.get("/accuracy/events", tags=["События"])
+    def events_accuracy(request: Request) -> Response:
+        return J(request, svc.events_accuracy())
 
     @r.get("/watched", tags=["События"])
     def events_watched(request: Request) -> Response:

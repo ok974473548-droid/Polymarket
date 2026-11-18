@@ -49,6 +49,8 @@ def watched_tokens(db: DB) -> list[str]:
 
 
 # Причины решений простыми словами (для «Недавние решения», журнала и уведомлений)
+_AFTER_CHECK_LOCK = threading.Lock()  # список «копировать после проверки» правят параллельные проверки
+
 REASONS_RU = {
     "too_late": "Сигнал пришёл слишком поздно",
     "price_moved": "Цена уже выросла, выгода пропала",
@@ -1671,6 +1673,7 @@ class Services:
         "weekly": "Итоги недели",
         "rotation": "Форма китов (стратегия «Ротация»)",
         "event_watch": "«Следить» за событиями",
+        "event_selfcheck": "Самопроверка модели событий",
     }
 
     def trial(self, target_signals: int = 200, min_weeks: int = 4, max_drawdown: float = 0.15) -> dict:
@@ -2126,6 +2129,15 @@ class Services:
                 return {"ok": False, "error": "Событие не найдено"}
             title = ev["title"]
         return {"ok": True, "watch": watch.set_watch(self.db, event_id, on, title)}
+
+    def events_accuracy(self) -> dict:
+        """Экран «Точность модели событий»: итог модели против цены рынка на закрытых событиях, калибровка,
+        темы, оценщики, выученные λ и веса, результат ставок по совету."""
+        from .eventhub import selfcheck
+
+        rep = selfcheck.report(self.db, self.clock())
+        rep["bets"] = self.results("all").get("events") or []
+        return rep
 
     def events_watched(self) -> dict:
         from .eventhub import watch
@@ -2732,8 +2744,7 @@ class Services:
         addrs = list(dict.fromkeys(a for a in (_parse_address(w) for w in wallets or []) if a))[:100]
         if not addrs:
             return {"ok": False, "error": "Нет адресов"}
-        pending = set(self.db.get_state("copy_after_check") or [])
-        added = []
+        rows = []
         for a in addrs:
             e = self.db.scalar("SELECT entity_id FROM entity_wallets WHERE wallet=?", (a,), a)
             sc = self.db.one(
@@ -2741,11 +2752,17 @@ class Services:
             )
             want = "copy" if mode == "copy" and sc and sc["status"] == "approved" else "watch"
             self.set_whale(e, mode=want)
-            if mode == "copy" and want != "copy":
-                pending.add(a)
+            rows.append((a, e, want))
+        # «включить копирование после проверки» записываем ДО запуска проверок: быстрая проверка могла закончиться
+        # раньше записи и не найти себя в списке — копирование тогда не включалось (исправлено в 1.5.0)
+        with _AFTER_CHECK_LOCK:
+            pending = set(self.db.get_state("copy_after_check") or [])
+            pending |= {a for a, _, want in rows if mode == "copy" and want != "copy"}
+            self.db.set_state("copy_after_check", sorted(pending))
+        added = []
+        for a, e, want in rows:
             job = self.start_check(a, wait_s=0) if self.data is not None else {}
             added.append({"wallet": a, "entity_id": e, "mode": want, "job_id": job.get("job_id")})
-        self.db.set_state("copy_after_check", sorted(pending))
         n = len(added)
         return {
             "ok": True,
@@ -2755,11 +2772,13 @@ class Services:
         }
 
     def _after_check(self, wallet: str, result: dict | None) -> None:
-        pending = set(self.db.get_state("copy_after_check") or [])
-        if wallet not in pending or not result:
-            return
-        pending.discard(wallet)
-        self.db.set_state("copy_after_check", sorted(pending))
+        # проверки идут параллельно: чтение-изменение-запись списка — под замком, иначе одна правка теряется
+        with _AFTER_CHECK_LOCK:
+            pending = set(self.db.get_state("copy_after_check") or [])
+            if wallet not in pending or not result:
+                return
+            pending.discard(wallet)
+            self.db.set_state("copy_after_check", sorted(pending))
         e = result.get("entity_id") or wallet
         if result.get("fits"):
             self.set_whale(e, mode="copy")
