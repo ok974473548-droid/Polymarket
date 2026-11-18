@@ -3,10 +3,10 @@
 import numpy as np
 import pytest
 
-from conftest import fast_params
-from whalefollow.db import DB
 from whalefollow.rotation import WEEK, FormRule, Whale, merge_series, simulate_rotation
 from whalefollow.services import Services
+
+from conftest import fast_params
 
 DAY = 86400
 NOW = 1_790_000_000 - (1_790_000_000 % DAY)

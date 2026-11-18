@@ -466,3 +466,13 @@ body.drawer-open{overflow:hidden}
 }
 @media (max-width:1100px){ .lb-row{grid-template-columns:44px 40px minmax(0,1fr) 130px 120px} .lb-row>.hide-md{display:none} }
 @media (prefers-reduced-motion:reduce){ .drawer{transition:none} }
+
+/* ротация по форме */
+.rot-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.rot-form .fld { flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 6px; font-size: 13px; }
+.rot-form .inp { width: 100%; text-align: left; min-height: 40px; }
+.rot-legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13.5px; }
+.rot-legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; margin-right: 7px; vertical-align: middle; }
+@media (max-width: 760px) { .rot-form { grid-template-columns: 1fr 1fr; } }
+.rot-name { min-width: 0; max-width: 48%; flex-shrink: 1; }
+.rot-name .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

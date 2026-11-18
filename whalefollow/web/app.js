@@ -146,6 +146,102 @@ function lineChart(points, { height = 160, label = "", fmtY = (v) => v, color = 
     <circle cx="${x(xs[xs.length - 1])}" cy="${y(last.y)}" r="4.5" fill="${color}"/>
   </svg>`;
 }
+// дата с годом, если график длиннее ~10 месяцев (иначе «23 окт.» на обоих концах сбивает с толку)
+const dateLabelY = (ts, xs) => (xs[xs.length - 1] - xs[0] > 300 * 86400
+  ? new Date(ts * 1000).toLocaleDateString("ru-RU", { day: "numeric", month: "short", year: "numeric" }) : dateLabel(ts));
+
+// несколько кривых на одном графике (ротация, все, идеал, случайно) + полоса разброса
+function multiChart(xs, lines, { height = 220, band = null, label = "", fmtY = (v) => v } = {}) {
+  if (!xs || xs.length < 2) return `<div class="sub">Недостаточно данных для графика</div>`;
+  const W = 820, H = height, L = 66, R = 18, T = 14, B = 28;
+  const all = lines.flatMap((l) => l.values).concat(band ? band.lo.concat(band.hi) : []);
+  let lo = Math.min(...all, 0), hi = Math.max(...all, 0);
+  if (hi - lo < 1e-9) { lo -= 1; hi += 1; }
+  const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+  const x = (i) => L + (i * (W - L - R)) / (xs.length - 1);
+  const y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+  const pts = (vals) => vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const bandPoly = band ? `<polygon points="${pts(band.hi)} ${band.lo.map((v, i) => [i, v]).reverse().map(([i, v]) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ")}" fill="${band.color}" opacity=".13"/>` : "";
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(label)}">
+    <line x1="${L}" y1="${y(0)}" x2="${W - R}" y2="${y(0)}" stroke="rgba(236,230,218,.18)"/>
+    <g font-size="12" fill="#93A7AA" font-family="Golos Text,system-ui,sans-serif">
+      <text x="0" y="${y(hi - pad) + 4}">${esc(fmtY(hi - pad))}</text>${Math.abs(y(0) - y(hi - pad)) > 16 && Math.abs(y(0) - y(lo + pad)) > 16 ? `<text x="0" y="${y(0) + 4}">${esc(fmtY(0))}</text>` : ""}<text x="0" y="${y(lo + pad) + 4}">${esc(fmtY(lo + pad))}</text>
+      <text x="${L}" y="${H - 7}">${esc(dateLabelY(xs[0], xs))}</text><text x="${W - R}" y="${H - 7}" text-anchor="end">${esc(dateLabelY(xs[xs.length - 1], xs))}</text></g>
+    ${bandPoly}
+    ${lines.map((l) => `<polyline points="${pts(l.values)}" fill="none" stroke="${l.color}" stroke-width="${l.width || 2}" ${l.dash ? `stroke-dasharray="${l.dash}"` : ""} stroke-linejoin="round" stroke-linecap="round" opacity="${l.opacity || 1}"/>`).join("")}
+  </svg>`;
+}
+
+// ---------------------------------------------------------------- ротация китов по форме
+async function viewRotation(rule) {
+  const qs = rule ? "?" + new URLSearchParams(rule).toString() : "";
+  main().innerHTML = `<div class="sub" style="padding:40px 0">Считаю ротацию по готовым кривым прибыли Polymarket…</div>`;
+  const r = await api("/rotation" + qs);
+  const ru = r.rule || {};
+  const form = `<div class="card col" style="gap:12px"><h2>Правило «в форме»</h2>
+    <div class="sub">Каждую неделю кит считается «в форме», если за последние недели окна выполнены все условия. Решение — только по прошлым данным.</div>
+    <div class="rot-form">
+      <label class="fld"><span>Окно, недель</span><input class="inp" type="number" min="2" max="52" id="rot-window" value="${ru.window_weeks ?? 8}"></label>
+      <label class="fld"><span>Ставок в окне, не меньше</span><input class="inp" type="number" min="0" id="rot-bets" value="${ru.min_bets ?? 5}"></label>
+      <label class="fld"><span>Результат за окно, $, не ниже</span><input class="inp" type="number" step="100" id="rot-result" value="${ru.min_result_usd ?? 0}"></label>
+      <label class="fld"><span>Просадка в окне, % заработанного, не больше</span><input class="inp" type="number" min="0" max="100" step="5" id="rot-dd" value="${Math.round((ru.max_drawdown_share ?? 0.5) * 100)}"></label></div>
+    <div class="row"><button class="btn" data-act="rot-try">Примерить</button><button class="btn p" data-act="rot-save">Сохранить правило</button></div></div>`;
+  if (!r.ok) {
+    main().innerHTML = `<a class="back" href="#/whales">← Киты</a>
+      <div class="page-head"><div><h1>Ротация по форме</h1><div class="lede">Копировать только тех китов, кто сейчас в форме, — и проверить, держится ли форма вообще.</div></div></div>
+      <div class="card"><b>${esc(r.error || "Нет данных")}</b><div class="sub" style="margin-top:6px">Нужны киты в списке с историей дольше окна. ${r.pool === 0 ? "Список китов пуст — добавьте игроков." : ""}</div></div>${form}`;
+    return;
+  }
+  const v = r.verdict, p = r.persistence, t = r.total_pct, c = r.curves, h = r.hit_rate;
+  const vTone = v.holds === true ? "up" : v.holds === false ? "down" : "";
+  const pctF = (x) => signedPct(x);
+  const legend = [["#C8A464", "Ротация по форме", t.rotation], ["#86C9A8", "Копировать всех", t.all],
+    ["#93A7AA", "Случайный выбор (медиана)", t.random_median], ["#E58C7A", "Идеал задним числом — недостижимо", t.ideal]];
+  const current = r.current.map((w) => `<div class="bet"><span class="row rot-name" style="gap:8px;flex-wrap:nowrap" title="${esc(w.name)}"><span class="dot ${w.in_form ? "ok" : ""}" aria-hidden="true"></span><span class="ell">${esc(w.name)}</span></span>
+      <span class="sub" style="text-align:right">${w.in_form ? `<span class="up">в форме</span>` : esc(w.why)}${w.gain_usd !== undefined ? ` · за окно ${compactMoney(w.gain_usd, { sign: true })}, ставок ${w.bets}` : ""}</span></div>`).join("");
+  const hist = r.history.slice().reverse().slice(0, 12).map((w) => `<div class="bet"><span>${esc(dateLabel(w.ts))}</span>
+      <span class="sub">${w.n_in_form ? esc(w.in_form.join(", ")) : "никого — неделя в деньгах"} · ротация <b class="${tone(w.rotation_pct)}">${pctF(w.rotation_pct)}</b>, все ${pctF(w.all_pct)}</span></div>`).join("");
+  main().innerHTML = `<a class="back" href="#/whales">← Киты</a>
+    <div class="page-head"><div><h1>Ротация по форме</h1>
+      <div class="lede">Каждую неделю копируем только тех китов из списка, кто «в форме», и проверяем главное: держится ли форма — помогает ли прошлое предсказать следующее.</div></div></div>
+    <section class="statement" aria-label="Держится ли форма">
+      <div><div class="label">Держится ли форма</div><div class="figure ${vTone}" style="font-size:34px">${esc(v.title)}</div>
+        <div class="sub" style="margin-top:10px;max-width:60ch">${esc(v.text)}</div></div>
+      <div class="facts">
+        <div class="fact"><div class="label">Связь прошлого и будущего</div><div class="v" style="font-size:20px">${p.rho === null ? "—" : (p.rho > 0 ? "+" : "") + String(p.rho).replace(".", ",")}</div><div class="sub">от −1 до +1; пар ${p.pairs}</div></div>
+        <div class="fact"><div class="label">Вероятность случайности</div><div class="v" style="font-size:20px">${p.p_value === null ? "—" : (p.p_value * 100).toLocaleString("ru-RU", { maximumFractionDigits: 1 }) + "%"}</div></div>
+        <div class="fact"><div class="label">Неделя в плюсе: «в форме» / остальные</div><div class="v" style="font-size:20px">${h.in_form === null ? "—" : Math.round(h.in_form * 100) + "%"} / ${h.not_in_form === null ? "—" : Math.round(h.not_in_form * 100) + "%"}</div></div>
+        <div class="fact"><div class="label">Китов · недель</div><div class="v" style="font-size:20px">${r.whales} · ${r.weeks}</div><div class="sub">${r.weeks_in_cash ? `${r.weeks_in_cash} нед. никто не был в форме` : ""}</div></div>
+      </div></section>
+    <div class="card col" style="gap:10px"><h2>Если бы копировали так</h2>
+      <div class="sub">Доход на вложенный доллар, сумма по неделям (на вложенное ≈ 4 недели обычных покупок кита). Деньги делятся поровну между выбранными китами.</div>
+      ${multiChart(c.ts, [
+        { values: c.ideal, color: "#E58C7A", dash: "5 5", width: 1.6, opacity: 0.8 },
+        { values: c.random_median, color: "#93A7AA", width: 1.6 },
+        { values: c.all, color: "#86C9A8", width: 1.8 },
+        { values: c.rotation, color: "#C8A464", width: 2.6 },
+      ], { band: { lo: c.random_p10, hi: c.random_p90, color: "#93A7AA" }, label: "Кривые ротации", fmtY: (x) => signedPct(x),
+        height: window.innerWidth < 600 ? 460 : 220 })}
+      <div class="rot-legend">${legend.map(([col, name, val]) => `<span><i style="background:${col}"></i>${esc(name)} <b class="${tone(val)}">${signedPct(val)}</b></span>`).join("")}</div>
+      <div class="sub">Серая полоса — разброс случайного выбора (80% розыгрышей). Идеал задним числом каждую неделю берёт лучших по уже известному итогу — так выбрать нельзя, это только потолок.</div></div>
+    <div class="grid2">
+      <div class="card col" style="gap:6px"><h2>Кто в форме сейчас</h2>${current || `<div class="sub">Список китов пуст</div>`}</div>
+      <div class="card col" style="gap:6px"><h2>Последние пересмотры</h2>${hist}</div></div>
+    ${form}
+    <details><summary class="link" style="cursor:pointer;display:inline-block">Как считается</summary>
+      <div class="card col sub" style="gap:6px;margin-top:10px">
+        <div>Кривые прибыли китов — готовые из Polymarket (накопленная прибыль по дням). Объём и число ставок — из сохранённых сделок.</div>
+        <div>Пересмотр раз в неделю. «В форме» решается только по данным до момента пересмотра; результат выбора — следующая неделя.</div>
+        <div>Доход недели = прибыль кита за неделю / вложенное, где вложенное ≈ 4 недели его обычных покупок (среднее за 12 недель). Крупные киты ставят рывками, поэтому так, а не по покупкам одной недели. Неделя кита ограничена ±100%: потерять больше вложенного нельзя.</div>
+        <div>Недели, за которые у нас нет сделок кита, не учитываются.</div>
+        <div>Главная цифра — ранговая связь результата кита в прошлом окне и в следующем таком же окне (окна разных пар не пересекаются); вероятность случайности — проверкой перестановками.</div></div></details>`;
+}
+
+function rotationRuleFromForm() {
+  return { window_weeks: $("#rot-window").value, min_bets: $("#rot-bets").value, min_result_usd: $("#rot-result").value,
+    max_drawdown_share: String(Number($("#rot-dd").value || 0) / 100) };
+}
+
 // темы — как в меню Polymarket (тот же список, что в categories.py)
 const TOPICS = [["politics", "Политика"], ["sports", "Спорт"], ["esports", "Киберспорт"], ["crypto", "Крипто"], ["finance", "Финансы"],
   ["culture", "Культура"], ["mentions", "Упоминания"], ["weather", "Погода"], ["economics", "Экономика"], ["tech", "Технологии"]];
@@ -380,6 +476,7 @@ const routes = [
   [/^#\/bet\/([^/]+)$/, "positions", viewBet],
   [/^#\/whales$/, "whales", viewWhales],
   [/^#\/whales\/add$/, "whales", viewAdd],
+  [/^#\/rotation$/, "whales", viewRotation],
   [/^#\/whales\/([^/]+)$/, "whales", viewWhale],
   [/^#\/results(?:\/(week|month|all))?$/, "results", viewResults],
   [/^#\/settings$/, "settings", viewSettings],
@@ -799,7 +896,7 @@ async function viewWhales() {
   main().innerHTML = `${banners(state.status)}
     <div class="page-head"><div><h1>Киты</h1>
       <div class="lede">Игроки, за которыми вы следите. «Надёжный» — преимущество подтверждено на многих независимых событиях, а не удачей.</div></div>
-      <a class="btn p" href="#/whales/add">Добавить игрока</a></div>
+      <div class="row"><a class="btn" href="#/rotation">Ротация по форме</a><a class="btn p" href="#/whales/add">Добавить игрока</a></div></div>
     ${w.items.length ? `<div class="row" style="gap:28px">
       <div class="fact"><div class="label">В списке</div><div class="v">${w.items.length}</div></div>
       <div class="fact"><div class="label">Копируем</div><div class="v">${copying}</div></div>
@@ -1379,6 +1476,13 @@ document.addEventListener("click", async (e) => {
     }
     if (act === "lb-more") return loadLeaderboard(Number(el.dataset.v));
     if (act === "diag-run") return viewDiagnostics(true);
+    if (act === "rot-try") return viewRotation(rotationRuleFromForm());
+    if (act === "rot-save") {
+      const rr = rotationRuleFromForm();
+      await api("/rotation/rule", { method: "PUT", body: Object.fromEntries(Object.entries(rr).map(([k, v]) => [k, Number(v)])) });
+      toast("Правило сохранено");
+      return viewRotation();
+    }
     if (act === "diag-copy") {
       const txt = $("#diag-report").textContent;
       try { await navigator.clipboard.writeText(txt); toast("Отчёт скопирован"); }
