@@ -134,7 +134,7 @@ def cluster_table(closed: pd.DataFrame) -> pd.DataFrame:
 
 def bucket_edges(closed: pd.DataFrame, buckets: tuple) -> dict:
     """Edge и доля затрат по корзинам цены входа (6.6)."""
-    out = {}
+    out: dict = {}
     if closed.empty:
         return out
     labels = [f"{buckets[i]:.1f}-{min(buckets[i + 1], 1):.1f}" for i in range(len(buckets) - 1)]

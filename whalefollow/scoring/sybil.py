@@ -227,7 +227,7 @@ def run_antisybil(db: DB, params: Params, wallets: list[str] | None = None) -> d
     mapping, grey = cluster_wallets(links, params)
     ts = now_ts()
     scoped = wallets is not None and not isinstance(wallets, pd.DataFrame)
-    scope_list = list(wallets) if scoped else []
+    scope_list = list(wallets) if wallets is not None and scoped else []
     with db.tx():
         if scoped:
             # пересчёт только по своим кошелькам: чужие связи и объединения не трогаем

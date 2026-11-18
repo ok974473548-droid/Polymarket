@@ -42,9 +42,8 @@ class RiskManager:
             v = self.db.get_setting(k)
             if v is not None:
                 # вложенные настройки дополняются новыми ключами по умолчанию (например, новые источники)
-                s[k] = (
-                    {**DEFAULT_SETTINGS[k], **v} if isinstance(v, dict) and isinstance(DEFAULT_SETTINGS[k], dict) else v
-                )
+                base = DEFAULT_SETTINGS[k]
+                s[k] = {**base, **v} if isinstance(v, dict) and isinstance(base, dict) else v
         return s
 
     @property

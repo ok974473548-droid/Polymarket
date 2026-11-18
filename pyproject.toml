@@ -3,17 +3,28 @@ name = "whalefollow"
 version = "0.13.1"
 description = "WhaleFollow: отбор сильных игроков Polymarket и агент копирования ставок (v1: данные, скоринг, бэктест, бумажная торговля)"
 requires-python = ">=3.11"
+# Существующие зависимости — диапазонами (как в 0.13), новые пакеты этапа 1 — точными версиями
 dependencies = [
   "numpy>=1.26",
   "pandas>=2.1",
-  "requests>=2.31",
   "scipy>=1.11",
+  "fastapi==0.163.2",
+  "pydantic==2.14.3",
+  "uvicorn==0.54.0",
+  "httptools==0.9.0",
+  "uvloop==0.23.0; sys_platform != 'win32'",
+  "httpx[http2]==0.28.1",
+  "websockets==17.4",
+  "alembic==1.20.1",
+  "SQLAlchemy==2.1.9",
+  "structlog==26.1.0",
 ]
 
 [project.optional-dependencies]
-api = ["fastapi>=0.110", "uvicorn>=0.29"]
-postgres = ["psycopg[binary]>=3.1"]
-dev = ["pytest>=8"]
+api = []   # сервер FastAPI теперь в основных зависимостях; оставлено для старых команд установки
+postgres = ["psycopg[binary]>=3.1,<4"]
+sentry = ["sentry-sdk==2.75.0"]
+dev = ["pytest==9.2.0", "ruff==0.17.5", "mypy==2.4.1", "pre-commit==4.7.0"]
 
 [project.scripts]
 whalefollow = "whalefollow.cli:main"
@@ -26,7 +37,7 @@ build-backend = "setuptools.build_meta"
 include = ["whalefollow*"]
 
 [tool.setuptools.package-data]
-whalefollow = ["schema.sql", "web/*"]
+whalefollow = ["schema.sql", "web/*", "migrations/*.py", "migrations/*.mako", "migrations/versions/*.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -59,3 +70,15 @@ known-local-folder = ["conftest", "synthetic"]
 
 [tool.ruff.format]
 quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"   # линтер в CI работает на 3.12
+files = ["whalefollow/scoring", "whalefollow/decision", "whalefollow/execution", "whalefollow/positions.py",
+         "whalefollow/net.py", "whalefollow/api", "whalefollow/migrations/__init__.py", "whalefollow/logs.py",
+         "whalefollow/ws.py"]
+follow_imports = "silent"          # ошибки проверяются в перечисленных модулях; остальное — постепенно
+ignore_missing_imports = true      # pandas/scipy без заглушек типов (pandas заменяется на этапе 3)
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = true

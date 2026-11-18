@@ -36,6 +36,7 @@ def setup_logging(level: int | str = logging.INFO, fmt: str | None = None, strea
         structlog.stdlib.add_log_level,
         structlog.stdlib.add_logger_name,
         structlog.stdlib.ExtraAdder(),
+        _drop_color_message,
         structlog.processors.TimeStamper(fmt="iso", utc=fmt == "json"),
     ]
     structlog.configure(
@@ -71,13 +72,18 @@ def setup_logging(level: int | str = logging.INFO, fmt: str | None = None, strea
     handler._whalefollow = True  # type: ignore[attr-defined]
     root.addHandler(handler)
     root.setLevel(level)
-    for noisy in ("httpx", "httpcore", "hpack", "websockets", "uvicorn.access", "alembic.runtime.migration"):
+    for noisy in ("httpx", "httpcore", "hpack", "websockets", "uvicorn.access", "alembic"):
         logging.getLogger(noisy).setLevel(max(logging.WARNING, root.level))
     _configured = True
     _setup_sentry()
 
 
-def _keep(_: Any, __: str, event: dict) -> dict:
+def _drop_color_message(_: Any, __: str, event: Any) -> Any:
+    event.pop("color_message", None)  # uvicorn дублирует сообщение с цветовыми кодами
+    return event
+
+
+def _keep(_: Any, __: str, event: Any) -> Any:
     return event
 
 
