@@ -4,6 +4,7 @@
 Ответ — строго JSON. Ключ: переменная окружения ANTHROPIC_API_KEY.
 Модель задаётся WF_LLM_MODEL (по умолчанию claude-sonnet-5-5).
 """
+
 from __future__ import annotations
 
 import json
@@ -12,7 +13,6 @@ import os
 import re
 
 from .. import net
-
 from ..config import Endpoints
 from .base import Estimate, MarketContext
 
@@ -51,7 +51,9 @@ def build_prompt(ctx: MarketContext, max_items: int = 25) -> str:
     if not items:
         lines.append("- none found")
     for m in items:
-        lines.append(f"- [{m.get('source_type', '?')}] {m.get('source', '?')}: {m.get('title', '')} ({m.get('url', '')})")
+        lines.append(
+            f"- [{m.get('source_type', '?')}] {m.get('source', '?')}: {m.get('title', '')} ({m.get('url', '')})"
+        )
     lines += ["", "Return JSON with exactly these keys:", json.dumps(SCHEMA_HINT, ensure_ascii=False)]
     return "\n".join(lines)
 
@@ -76,15 +78,21 @@ def parse_reply(text: str, model: str) -> Estimate | None:
         arguments_against=[str(x) for x in data.get("arguments_against", [])][:10],
         key_uncertainties=[str(x) for x in data.get("key_uncertainties", [])][:10],
         sources=[str(x) for x in data.get("sources", [])][:20],
-        model_version=model, blind=True,
+        model_version=model,
+        blind=True,
     )
 
 
 class ClaudeEstimator:
     name = "claude"
 
-    def __init__(self, api_key: str | None = None, model: str | None = None,
-                 endpoints: Endpoints | None = None, timeout: float = 60.0):
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str | None = None,
+        endpoints: Endpoints | None = None,
+        timeout: float = 60.0,
+    ):
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         self.model = model or os.environ.get("WF_LLM_MODEL", "claude-sonnet-5-5")
         self.url = (endpoints or Endpoints()).anthropic.rstrip("/") + "/v1/messages"
@@ -93,8 +101,12 @@ class ClaudeEstimator:
             raise RuntimeError("Нужен ANTHROPIC_API_KEY для оценки через Claude")
 
     def estimate(self, ctx: MarketContext) -> Estimate | None:
-        body = {"model": self.model, "max_tokens": 1200, "system": SYSTEM,
-                "messages": [{"role": "user", "content": build_prompt(ctx)}]}
+        body = {
+            "model": self.model,
+            "max_tokens": 1200,
+            "system": SYSTEM,
+            "messages": [{"role": "user", "content": build_prompt(ctx)}],
+        }
         headers = {"x-api-key": self.api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
         try:
             r = net.client().post(self.url, headers=headers, json=body, timeout=self.timeout)

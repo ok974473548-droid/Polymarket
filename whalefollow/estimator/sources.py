@@ -4,6 +4,7 @@
 подключаются через тот же интерфейс NewsSource (нужны их API-ключи); их вес
 низкий, и они служат только триггером проверки.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -13,14 +14,12 @@ import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime
-from html.parser import HTMLParser
 from email.utils import parsedate_to_datetime
+from html.parser import HTMLParser
 from typing import Protocol
-
 from urllib.parse import quote_plus
 
 from .. import net
-
 from ..db import DB, new_id, now_ts
 
 log = logging.getLogger(__name__)
@@ -64,7 +63,7 @@ class RssSource:
         except Exception as exc:
             log.warning("RSS %s: %s", self.name, exc)
             return []
-        words = [w for w in re.findall(r"\w{4,}", query.lower())][:8]
+        words = list(re.findall(r"\w{4,}", query.lower()))[:8]
         out = []
         for it in root.iter():
             if not it.tag.endswith("item") and not it.tag.endswith("entry"):
@@ -84,8 +83,36 @@ class RssSource:
         return out
 
 
-STOP = {"will", "the", "a", "an", "be", "by", "in", "on", "of", "to", "for", "and", "or", "at", "is", "are",
-        "before", "after", "end", "this", "that", "with", "than", "more", "less", "2025", "2026", "2027"}
+STOP = {
+    "will",
+    "the",
+    "a",
+    "an",
+    "be",
+    "by",
+    "in",
+    "on",
+    "of",
+    "to",
+    "for",
+    "and",
+    "or",
+    "at",
+    "is",
+    "are",
+    "before",
+    "after",
+    "end",
+    "this",
+    "that",
+    "with",
+    "than",
+    "more",
+    "less",
+    "2025",
+    "2026",
+    "2027",
+}
 
 
 def keywords(question: str, n: int = 7) -> str:
@@ -120,14 +147,17 @@ def parse_rss(content: bytes, source_name: str, source_type: str, since_ts: int 
 
 class GoogleNewsSource:
     """Поиск Google News по ключевым словам вопроса (RSS, без ключа)."""
+
     name, source_type = "Google News", "media"
 
     def __init__(self, lang: str = "en-US", country: str = "US", timeout: float = 15.0):
         self.lang, self.country, self.timeout = lang, country, timeout
 
     def url(self, query: str) -> str:
-        return (f"https://news.google.com/rss/search?q={quote_plus(query)}+when:14d"
-                f"&hl={self.lang}&gl={self.country}&ceid={self.country}:{self.lang.split('-')[0]}")
+        return (
+            f"https://news.google.com/rss/search?q={quote_plus(query)}+when:14d"
+            f"&hl={self.lang}&gl={self.country}&ceid={self.country}:{self.lang.split('-')[0]}"
+        )
 
     def search(self, query: str, since_ts: int) -> list[NewsItem]:
         q = keywords(query)
@@ -157,14 +187,18 @@ def parse_manifold(rows: list) -> list[Forecast]:
         prob = m.get("probability")
         if prob is None or m.get("outcomeType") not in (None, "BINARY"):
             continue
-        out.append(Forecast("Manifold", str(m.get("question", "")), str(m.get("url", "")), float(prob),
-                            bool(m.get("isResolved"))))
+        out.append(
+            Forecast(
+                "Manifold", str(m.get("question", "")), str(m.get("url", "")), float(prob), bool(m.get("isResolved"))
+            )
+        )
     return out
 
 
 class ManifoldSource:
     """Похожие вопросы на Manifold Markets и их вероятности (публичный API без ключа).
     Совпадение вопросов не гарантировано — пользователь и ИИ видят формулировку."""
+
     name, source_type = "Manifold", "forecast"
 
     def __init__(self, base: str = "https://api.manifold.markets", timeout: float = 15.0):
@@ -175,9 +209,11 @@ class ManifoldSource:
         if not q:
             return []
         try:
-            r = net.client().get(f"{self.base}/v0/search-markets",
-                             params={"term": q, "limit": 5, "filter": "open", "contractType": "BINARY"},
-                             timeout=self.timeout)
+            r = net.client().get(
+                f"{self.base}/v0/search-markets",
+                params={"term": q, "limit": 5, "filter": "open", "contractType": "BINARY"},
+                timeout=self.timeout,
+            )
             r.raise_for_status()
             return [f for f in parse_manifold(r.json()) if not f.resolved][:3]
         except Exception as exc:
@@ -193,7 +229,12 @@ CHANNEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{3,63}$")
 def normalize_channel(raw: str) -> str | None:
     """@name, t.me/name, https://t.me/s/name → name. Некорректное имя → None."""
     s = (raw or "").strip()
-    s = re.sub(r"^(https?://)?(www\.)?(t|telegram)\.me/(s/)?", "", s, flags=re.I).lstrip("@").split("/")[0].split("?")[0]
+    s = (
+        re.sub(r"^(https?://)?(www\.)?(t|telegram)\.me/(s/)?", "", s, flags=re.I)
+        .lstrip("@")
+        .split("/")[0]
+        .split("?")[0]
+    )
     return s if CHANNEL_RE.match(s) else None
 
 
@@ -247,14 +288,16 @@ def parse_tme(html: str, channel: str, since_ts: int = 0) -> list[NewsItem]:
     for m in p.msgs:
         if not m["text"] or (m["ts"] or 0) < since_ts:
             continue
-        out.append(NewsItem(f"@{channel}", "telegram", m["ts"] or now_ts(), m["text"][:240],
-                            f"https://t.me/{m['post']}"))
+        out.append(
+            NewsItem(f"@{channel}", "telegram", m["ts"] or now_ts(), m["text"][:240], f"https://t.me/{m['post']}")
+        )
     return out
 
 
 class TelegramChannelSource:
     """Поиск по публичным каналам через t.me/s/<канал>?q=… (без ключей и бота).
     Вес Telegram низкий: это триггер «проверить», а не доказательство (ТЗ 9.3)."""
+
     name, source_type = "Telegram", "telegram"
 
     def __init__(self, channels: list[str], timeout: float = 15.0, per_channel: int = 5):
@@ -268,16 +311,21 @@ class TelegramChannelSource:
             return out
         for ch in self.channels:
             try:
-                r = net.client().get(f"https://t.me/s/{ch}", params={"q": q}, timeout=self.timeout,
-                                 headers={"User-Agent": "Mozilla/5.0 (compatible; whalefollow/0.1)"})
+                r = net.client().get(
+                    f"https://t.me/s/{ch}",
+                    params={"q": q},
+                    timeout=self.timeout,
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; whalefollow/0.1)"},
+                )
                 r.raise_for_status()
-                out.extend(parse_tme(r.text, ch, since_ts)[-self.per_channel:])
+                out.extend(parse_tme(r.text, ch, since_ts)[-self.per_channel :])
             except Exception as exc:
                 log.warning("Telegram @%s: %s", ch, exc)
         return out
 
 
 # ---------------------------------------------------------------- Reddit (соцсети)
+
 
 def parse_reddit(payload: dict, since_ts: int = 0) -> list[NewsItem]:
     out = []
@@ -286,13 +334,21 @@ def parse_reddit(payload: dict, since_ts: int = 0) -> list[NewsItem]:
         ts = int(d.get("created_utc") or 0)
         if not d.get("title") or ts < since_ts:
             continue
-        out.append(NewsItem(f"r/{d.get('subreddit', '?')}", "social", ts, str(d["title"])[:240],
-                            "https://www.reddit.com" + str(d.get("permalink", ""))))
+        out.append(
+            NewsItem(
+                f"r/{d.get('subreddit', '?')}",
+                "social",
+                ts,
+                str(d["title"])[:240],
+                "https://www.reddit.com" + str(d.get("permalink", "")),
+            )
+        )
     return out
 
 
 class RedditSource:
     """Открытый поиск Reddit за неделю (без ключа; при частых запросах Reddit может ограничить доступ)."""
+
     name, source_type = "Reddit", "social"
 
     def __init__(self, timeout: float = 15.0):
@@ -303,9 +359,12 @@ class RedditSource:
         if not q:
             return []
         try:
-            r = net.client().get("https://www.reddit.com/search.json",
-                             params={"q": q, "sort": "new", "t": "week", "limit": 15},
-                             headers={"User-Agent": "whalefollow/0.1 (research bot)"}, timeout=self.timeout)
+            r = net.client().get(
+                "https://www.reddit.com/search.json",
+                params={"q": q, "sort": "new", "t": "week", "limit": 15},
+                headers={"User-Agent": "whalefollow/0.1 (research bot)"},
+                timeout=self.timeout,
+            )
             r.raise_for_status()
             return parse_reddit(r.json(), since_ts)[:10]
         except Exception as exc:
@@ -313,8 +372,9 @@ class RedditSource:
             return []
 
 
-def build_sources(enabled: dict | None, telegram_channels: list[str] | None = None,
-                  db: DB | None = None) -> tuple[list, list]:
+def build_sources(
+    enabled: dict | None, telegram_channels: list[str] | None = None, db: DB | None = None
+) -> tuple[list, list]:
     """(источники новостей, источники прогнозов) по настройкам пользователя.
     Kalshi и букмекеры читают локальный кэш внешних рынков — нужен db."""
     enabled = enabled or {}
@@ -326,6 +386,7 @@ def build_sources(enabled: dict | None, telegram_channels: list[str] | None = No
     fc: list = [ManifoldSource()] if enabled.get("manifold", True) else []
     if db is not None:
         from .external import BookmakerSource, KalshiSource
+
         if enabled.get("kalshi", True):
             fc.append(KalshiSource(db))
         if enabled.get("bookmakers", True):
@@ -335,18 +396,30 @@ def build_sources(enabled: dict | None, telegram_channels: list[str] | None = No
 
 def gather_forecasts(db: DB, market: dict, sources: list) -> list[dict]:
     from ..util import pmap
+
     rows = []
     q = market.get("question") or ""
+
     def ask(s):
         return list(s.forecasts(q, market=market) if getattr(s, "needs_market", False) else s.forecasts(q))
+
     for src, found, exc in pmap(ask, sources, workers=4):
         if exc:
             log.warning("прогнозы %s: %s", type(src).__name__, exc)
             continue
         for f in found:
-            rows.append({"forecast_id": new_id("fc_"), "market_id": market["market_id"], "ts_fetched": now_ts(),
-                         "source": f.source, "title": f.title, "url": f.url, "probability": f.probability,
-                         "resolved": int(f.resolved)})
+            rows.append(
+                {
+                    "forecast_id": new_id("fc_"),
+                    "market_id": market["market_id"],
+                    "ts_fetched": now_ts(),
+                    "source": f.source,
+                    "title": f.title,
+                    "url": f.url,
+                    "probability": f.probability,
+                    "resolved": int(f.resolved),
+                }
+            )
     if rows:
         db.upsert_many("forecasts", rows, ["forecast_id"])
     return rows
@@ -355,6 +428,7 @@ def gather_forecasts(db: DB, market: dict, sources: list) -> list[dict]:
 def gather(db: DB, market: dict, sources: list, lookback_days: int = 14) -> list[dict]:
     """Собирает материалы по рынку и пишет их в news_items с весом источника."""
     from ..util import pmap
+
     since = now_ts() - lookback_days * 86400
     items: list[dict] = []
     q = market.get("question") or ""
@@ -365,9 +439,18 @@ def gather(db: DB, market: dict, sources: list, lookback_days: int = 14) -> list
             continue
         for it in found:
             w = source_weight(db, it.source, it.source_type)
-            row = {"item_id": new_id("ni_"), "market_id": market["market_id"], "ts_pub": it.ts_pub,
-                   "ts_fetched": now_ts(), "source": it.source, "source_type": it.source_type,
-                   "source_weight": w, "url": it.url, "title": it.title, "text_hash": it.text_hash}
+            row = {
+                "item_id": new_id("ni_"),
+                "market_id": market["market_id"],
+                "ts_pub": it.ts_pub,
+                "ts_fetched": now_ts(),
+                "source": it.source,
+                "source_type": it.source_type,
+                "source_weight": w,
+                "url": it.url,
+                "title": it.title,
+                "text_hash": it.text_hash,
+            }
             items.append(row)
     if items:
         db.insert_ignore("news_items", items)
@@ -386,12 +469,22 @@ def source_weight(db: DB, source: str, source_type: str, prior_n: float = 20.0) 
 def update_source_stats(db: DB, source: str, source_type: str, confirmed: bool) -> None:
     row = db.one("SELECT n, hits FROM source_stats WHERE source=?", (source,)) or {"n": 0, "hits": 0}
     n, hits = row["n"] + 1, row["hits"] + int(confirmed)
-    db.upsert("source_stats", {"source": source, "source_type": source_type, "n": n, "hits": hits,
-                               "weight": source_weight(db, source, source_type)}, ["source"])
+    db.upsert(
+        "source_stats",
+        {
+            "source": source,
+            "source_type": source_type,
+            "n": n,
+            "hits": hits,
+            "weight": source_weight(db, source, source_type),
+        },
+        ["source"],
+    )
 
 
-def manipulation_flags(items: list[dict], price_moves: list[tuple[int, float]] | None = None,
-                       now: int | None = None) -> dict:
+def manipulation_flags(
+    items: list[dict], price_moves: list[tuple[int, float]] | None = None, now: int | None = None
+) -> dict:
     """Проверки 9.4: подтверждения, время публикации против движения цены, копии текста."""
     now = now or now_ts()
     primary = {i["source"] for i in items if i["source_type"] in PRIMARY_TYPES}
@@ -430,8 +523,9 @@ def materials_for_prompt(items: list[dict], flags: dict) -> list[dict]:
             continue
         seen.add(i["text_hash"])
         tag = i["source_type"] if (i["source_weight"] or 0) >= 0.5 else f"{i['source_type']}, unverified"
-        out.append({"source": i["source"], "source_type": tag, "ts_pub": i["ts_pub"],
-                    "title": i["title"], "url": i["url"]})
+        out.append(
+            {"source": i["source"], "source_type": tag, "ts_pub": i["ts_pub"], "title": i["title"], "url": i["url"]}
+        )
     return out
 
 

@@ -1,4 +1,5 @@
 """Блок 2: пароль, защита от подделки запросов, параллельные запросы к API, Telegram-кнопки, копии, сбои."""
+
 import json
 import os
 import sqlite3
@@ -9,14 +10,15 @@ import urllib.request
 
 import pytest
 
-from conftest import fast_params
+from whalefollow.api.server import serve
 from whalefollow.auth import Auth
 from whalefollow.cli import resolve_db_url
 from whalefollow.db import DB
 from whalefollow.notifier import TelegramNotifier
 from whalefollow.scheduler import Scheduler
 from whalefollow.services import Services
-from whalefollow.api.server import serve
+
+from conftest import fast_params
 
 
 def _req(port, path, method="GET", body=None, cookie=None, ctype="application/json"):
@@ -48,10 +50,10 @@ def server(tmp_path):
 
 def test_password_login_flow(server):
     port, _, _ = server
-    assert _req(port, "/api/status")[0] == 401                           # без входа данных нет
+    assert _req(port, "/api/status")[0] == 401  # без входа данных нет
     assert _req(port, "/api/auth")[1] == {"required": True, "ok": False}
     with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=10) as r:
-        assert r.status == 200                                            # страница входа отдаётся
+        assert r.status == 200  # страница входа отдаётся
     assert _req(port, "/api/login", "POST", {"password": "wrong"})[0] == 401
     code, body, headers = _req(port, "/api/login", "POST", {"password": "s3cret"})
     assert code == 200 and "HttpOnly" in headers["Set-Cookie"] and "SameSite=Strict" in headers["Set-Cookie"]
@@ -68,8 +70,8 @@ def test_bruteforce_lockout():
     for _ in range(5):
         assert a.login("x", "1.2.3.4", now=1000) is None
     assert a.blocked("1.2.3.4", now=1001) and a.login("pw", "1.2.3.4", now=1002) is None
-    assert a.login("pw", "1.2.3.4", now=1000 + 601) is not None           # через 10 минут снова можно
-    assert a.login("pw", "5.6.7.8", now=1000) is not None                 # другой адрес не затронут
+    assert a.login("pw", "1.2.3.4", now=1000 + 601) is not None  # через 10 минут снова можно
+    assert a.login("pw", "5.6.7.8", now=1000) is not None  # другой адрес не затронут
 
 
 def test_password_change_invalidates_sessions():
@@ -83,7 +85,7 @@ def test_csrf_needs_json_and_no_cors(server):
     port, _, auth = server
     cookie = "wf_session=" + auth.token()
     code, _, headers = _req(port, "/api/stop", "POST", cookie=cookie, ctype="text/plain")
-    assert code == 415                                                    # «простой» запрос с чужого сайта отклонён
+    assert code == 415  # «простой» запрос с чужого сайта отклонён
     code, _, headers = _req(port, "/api/status", cookie=cookie)
     assert "Access-Control-Allow-Origin" not in headers and headers["X-Frame-Options"] == "DENY"
 
@@ -96,6 +98,7 @@ def test_api_requests_run_in_parallel(server):
     def slow_status():
         time.sleep(0.6)
         return orig()
+
     svc.status = slow_status
     t0 = time.time()
     th = [threading.Thread(target=_req, args=(port, "/api/status"), kwargs={"cookie": cookie}) for _ in range(4)]
@@ -103,7 +106,7 @@ def test_api_requests_run_in_parallel(server):
         t.start()
     for t in th:
         t.join()
-    assert time.time() - t0 < 1.5                                         # раньше шли по очереди: 4 × 0,6 с
+    assert time.time() - t0 < 1.5  # раньше шли по очереди: 4 × 0,6 с
 
 
 class _TgSession:
@@ -119,6 +122,7 @@ class _TgSession:
 
             def json(self):
                 return {"ok": True, "result": []}
+
         return R()
 
 
@@ -158,17 +162,31 @@ def test_telegram_buttons_and_commands():
     kb = payload["reply_markup"]["inline_keyboard"][0]
     assert [b["callback_data"] for b in kb] == ["c:s_abc", "r:s_abc"]
     # нажатие из нашего чата — покупка
-    text = tg.handle_update({"update_id": 1, "callback_query": {"id": "q1", "data": "c:s_abc",
-                                                                "message": {"message_id": 7, "chat": {"id": 42}, "text": "x"}}})
+    text = tg.handle_update(
+        {
+            "update_id": 1,
+            "callback_query": {
+                "id": "q1",
+                "data": "c:s_abc",
+                "message": {"message_id": 7, "chat": {"id": 42}, "text": "x"},
+            },
+        }
+    )
     assert "Куплено" in text and svc.agent.done == [("confirm", "s_abc")]
     assert {"answerCallbackQuery", "editMessageText"} <= {c[0] for c in sess.calls}
     # нажатие из чужого чата игнорируется
-    assert tg.handle_update({"update_id": 2, "callback_query": {"id": "q2", "data": "c:s_x",
-                                                                "message": {"chat": {"id": 666}}}}) is None
+    assert (
+        tg.handle_update(
+            {"update_id": 2, "callback_query": {"id": "q2", "data": "c:s_x", "message": {"chat": {"id": 666}}}}
+        )
+        is None
+    )
     assert len(svc.agent.done) == 1
     assert "Остановлено" in tg.handle_update({"update_id": 3, "message": {"chat": {"id": 42}, "text": "/stop"}})
     assert svc.risk.stopped()
-    assert tg.handle_update({"update_id": 4, "message": {"chat": {"id": 42}, "text": "/resume"}}) == "Работа продолжена."
+    assert (
+        tg.handle_update({"update_id": 4, "message": {"chat": {"id": 42}, "text": "/resume"}}) == "Работа продолжена."
+    )
     assert not svc.risk.stopped()
     assert tg.handle_update({"update_id": 5, "message": {"chat": {"id": 7}, "text": "/stop"}}) is None
 
@@ -185,13 +203,13 @@ def test_backup_and_failure_alerts(tmp_path, monkeypatch):
     c = sqlite3.connect(path)
     assert c.execute("SELECT COUNT(*) FROM settings").fetchone()[0] >= 1
     c.close()
-    for d in range(10):                                                   # хранится 7 последних
+    for _d in range(10):  # хранится 7 последних
         clock["t"] += 86400
         sch.job_backup()
     assert len(os.listdir(tmp_path / "bk")) == 7
     # три сбоя подряд → одно уведомление; восстановление → ещё одно
     for j in sch.jobs:
-        j.fn = lambda: None                                               # в тесте нет клиентов API
+        j.fn = lambda: None  # в тесте нет клиентов API
     job = next(j for j in sch.jobs if j.name == "markets")
     job.fn = lambda: (_ for _ in ()).throw(RuntimeError("нет сети"))
     for _ in range(4):

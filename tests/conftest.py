@@ -5,13 +5,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from whalefollow.config import Params  # noqa: E402
-from whalefollow.db import DB  # noqa: E402
-from synthetic import EXCHANGE, SyntheticWorld, load_world  # noqa: E402
+from whalefollow.config import Params
+from whalefollow.db import DB
+
+from synthetic import EXCHANGE, SyntheticWorld, load_world
 
 
 def fast_params(**kw) -> Params:
-    base = dict(bootstrap_b=1000, null_sims=2000, funder_allowlist=(EXCHANGE,), min_clusters_category=15)
+    base = {"bootstrap_b": 1000, "null_sims": 2000, "funder_allowlist": (EXCHANGE,), "min_clusters_category": 15}
     base.update(kw)
     return Params.load(**base)
 

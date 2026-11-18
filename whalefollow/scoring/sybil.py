@@ -10,6 +10,7 @@
 Ребро: L2 или L6, либо сумма весов ≥ 1.0. Серая зона 0.5–1.0 → ручной разбор.
 Компоненты связности (union-find) получают общий entity_id.
 """
+
 from __future__ import annotations
 
 import json
@@ -64,12 +65,19 @@ def update_funders(db: DB, allowlist: tuple = ()) -> None:
             continue
         if w not in first or r["ts"] < first[w][0]:
             first[w] = (r["ts"], r["from_wallet"])
-    db.executemany("UPDATE wallets SET funder_wallet=?, first_funded_ts=? WHERE wallet=?",
-                   [(src, ts, w) for w, (ts, src) in first.items()])
+    db.executemany(
+        "UPDATE wallets SET funder_wallet=?, first_funded_ts=? WHERE wallet=?",
+        [(src, ts, w) for w, (ts, src) in first.items()],
+    )
 
 
-def compute_links(trades: pd.DataFrame, wallets: pd.DataFrame, transfers: pd.DataFrame, params: Params,
-                  max_wallets_per_market: int = 300) -> dict[tuple[str, str], dict]:
+def compute_links(
+    trades: pd.DataFrame,
+    wallets: pd.DataFrame,
+    transfers: pd.DataFrame,
+    params: Params,
+    max_wallets_per_market: int = 300,
+) -> dict[tuple[str, str], dict]:
     w = params.sybil_weights
     allow = {a.lower() for a in params.funder_allowlist}
     links: dict[tuple[str, str], dict] = defaultdict(dict)
@@ -102,8 +110,10 @@ def compute_links(trades: pd.DataFrame, wallets: pd.DataFrame, transfers: pd.Dat
     t = trades.dropna(subset=["market_id"])[["wallet", "market_id"]].drop_duplicates()
     wcode, wuniq = pd.factorize(t["wallet"])
     mcode, _ = pd.factorize(t["market_id"])
-    n_mk = np.bincount(wcode, minlength=len(wuniq))                  # рынков у кошелька (все)
-    full = sparse.csr_matrix((np.ones(len(t), dtype=np.int32), (wcode, mcode)), shape=(len(wuniq), mcode.max() + 1 if len(t) else 0))
+    n_mk = np.bincount(wcode, minlength=len(wuniq))  # рынков у кошелька (все)
+    full = sparse.csr_matrix(
+        (np.ones(len(t), dtype=np.int32), (wcode, mcode)), shape=(len(wuniq), mcode.max() + 1 if len(t) else 0)
+    )
     per_market = np.bincount(mcode, minlength=full.shape[1]) if len(t) else np.zeros(0, int)
     keep = (per_market > 1) & (per_market <= max_wallets_per_market)
     small = full[:, np.flatnonzero(keep)] if len(t) else full
@@ -113,10 +123,13 @@ def compute_links(trades: pd.DataFrame, wallets: pd.DataFrame, transfers: pd.Dat
         ok = np.minimum(n_mk[a_i], n_mk[b_i]) >= params.sybil_jaccard_min_markets
         a_i, b_i, cnt = a_i[ok], b_i[ok], inter.data[ok]
         if len(a_i):
-            both = np.asarray(full[a_i].multiply(full[b_i]).sum(axis=1)).ravel()   # общие рынки, включая популярные
+            both = np.asarray(full[a_i].multiply(full[b_i]).sum(axis=1)).ravel()  # общие рынки, включая популярные
             jac = cnt / (n_mk[a_i] + n_mk[b_i] - both)
-            for ai, bi, j in zip(a_i[jac >= params.sybil_jaccard_min], b_i[jac >= params.sybil_jaccard_min],
-                                 jac[jac >= params.sybil_jaccard_min]):
+            for ai, bi, j in zip(
+                a_i[jac >= params.sybil_jaccard_min],
+                b_i[jac >= params.sybil_jaccard_min],
+                jac[jac >= params.sybil_jaccard_min],
+            ):
                 links[_pair(wuniq[ai], wuniq[bi])]["L3"] = {"jaccard": round(float(j), 3)}
 
     # L4 синхронность сделок по одному токену: пары сделок в окне ±win находятся сдвигами
@@ -143,7 +156,7 @@ def compute_links(trades: pd.DataFrame, wallets: pd.DataFrame, transfers: pd.Dat
         alive = alive[alive + k < n]
     if src:
         i_all = np.concatenate(src + dst)
-        j_all = np.concatenate(dst + src)                           # пары в обе стороны
+        j_all = np.concatenate(dst + src)  # пары в обе стороны
         # каждый другой кошелёк учитывается один раз на сделку
         pairs = np.unique(np.stack([i_all, wc[j_all]], axis=1), axis=0) if len(i_all) else np.zeros((0, 2), int)
         if len(pairs):
@@ -158,7 +171,7 @@ def compute_links(trades: pd.DataFrame, wallets: pd.DataFrame, transfers: pd.Dat
 
     # L5 похожие суммы — только для пар, уже связанных другими сигналами
     sizes = trades.assign(r=trades["size_usd"].round(0)).groupby("wallet")["r"].agg(lambda s: set(s))
-    for (a, b) in list(links):
+    for a, b in list(links):
         if a in sizes and b in sizes and sizes[a] and sizes[b]:
             common = len(sizes[a] & sizes[b]) / min(len(sizes[a]), len(sizes[b]))
             if common >= params.sybil_size_pattern_share:
@@ -184,7 +197,7 @@ def cluster_wallets(links: dict, params: Params) -> tuple[dict[str, str], list[t
         elif score >= params.sybil_grey_threshold:
             grey.append((a, b, score))
     mapping = {}
-    for root, members in uf.groups().items():
+    for members in uf.groups().values():
         if len(members) > 1:
             eid = "E-" + min(members)
             for m in members:
@@ -198,10 +211,14 @@ def run_antisybil(db: DB, params: Params, wallets: list[str] | None = None) -> d
     update_funders(db, params.funder_allowlist)
     if wallets is not None:
         ph = ",".join("?" for _ in wallets) or "''"
-        trades = db.frame(f"SELECT wallet, token_id, market_id, ts, size_usd FROM trades WHERE wallet IN ({ph})", wallets)
+        trades = db.frame(
+            f"SELECT wallet, token_id, market_id, ts, size_usd FROM trades WHERE wallet IN ({ph})", wallets
+        )
         wallets_df = db.frame(f"SELECT wallet, owner_eoa, funder_wallet FROM wallets WHERE wallet IN ({ph})", wallets)
-        transfers = db.frame(f"SELECT from_wallet, to_wallet, amount FROM transfers WHERE from_wallet IN ({ph}) "
-                             f"OR to_wallet IN ({ph})", wallets + wallets)
+        transfers = db.frame(
+            f"SELECT from_wallet, to_wallet, amount FROM transfers WHERE from_wallet IN ({ph}) OR to_wallet IN ({ph})",
+            wallets + wallets,
+        )
     else:
         trades = db.frame("SELECT wallet, token_id, market_id, ts, size_usd FROM trades")
         wallets_df = db.frame("SELECT wallet, owner_eoa, funder_wallet FROM wallets")
@@ -215,7 +232,7 @@ def run_antisybil(db: DB, params: Params, wallets: list[str] | None = None) -> d
         if scoped:
             # пересчёт только по своим кошелькам: чужие связи и объединения не трогаем
             for i in range(0, len(scope_list), 400):
-                ch = scope_list[i:i + 400]
+                ch = scope_list[i : i + 400]
                 ph = ",".join("?" for _ in ch)
                 db.execute(f"DELETE FROM wallet_links WHERE wallet_a IN ({ph}) OR wallet_b IN ({ph})", ch + ch)
                 db.execute(f"DELETE FROM entity_wallets WHERE wallet IN ({ph})", ch)
@@ -226,17 +243,37 @@ def run_antisybil(db: DB, params: Params, wallets: list[str] | None = None) -> d
             for code, ev in sig.items():
                 if code.startswith("_"):
                     continue
-                rows.append({"wallet_a": a, "wallet_b": b, "link_type": code,
-                             "strength": params.sybil_weights.get(code, 0), "evidence": json.dumps(ev),
-                             "computed_at": ts})
+                rows.append(
+                    {
+                        "wallet_a": a,
+                        "wallet_b": b,
+                        "link_type": code,
+                        "strength": params.sybil_weights.get(code, 0),
+                        "evidence": json.dumps(ev),
+                        "computed_at": ts,
+                    }
+                )
         db.upsert_many("wallet_links", rows, ["wallet_a", "wallet_b", "link_type"])
         if not scoped:
             db.execute("DELETE FROM entity_wallets")
-        db.upsert_many("entity_wallets", [{"wallet": w, "entity_id": e, "link_reason": "sybil_cluster",
-                                           "confidence": 1.0} for w, e in mapping.items()], ["wallet"])
+        db.upsert_many(
+            "entity_wallets",
+            [
+                {"wallet": w, "entity_id": e, "link_reason": "sybil_cluster", "confidence": 1.0}
+                for w, e in mapping.items()
+            ],
+            ["wallet"],
+        )
     for a, b, s in grey:
         for wlt in (a, b):
-            db.upsert("wallet_flags", {"entity_id": wlt, "flag": "sybil_manual_review", "value": s,
-                                       "computed_at": ts}, ["entity_id", "flag", "computed_at"])
-    return {"links": len(links), "merged_wallets": len(mapping),
-            "entities": len(set(mapping.values())), "grey_pairs": len(grey)}
+            db.upsert(
+                "wallet_flags",
+                {"entity_id": wlt, "flag": "sybil_manual_review", "value": s, "computed_at": ts},
+                ["entity_id", "flag", "computed_at"],
+            )
+    return {
+        "links": len(links),
+        "merged_wallets": len(mapping),
+        "entities": len(set(mapping.values())),
+        "grey_pairs": len(grey),
+    }

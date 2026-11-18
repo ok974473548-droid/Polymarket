@@ -1,14 +1,16 @@
 """Игроки и рынки по готовым данным Polymarket: поиск, карточка, форма, пачка, панель рынка, период «что было бы»."""
+
 import time
 
-from conftest import fast_params
-from synthetic import FakeClob, FakeData, FakeGamma, SyntheticWorld, load_world
 from whalefollow.backtest.whale_sim import simulate_whale
 from whalefollow.db import DB
 from whalefollow.ingest.polymarket import DataClient, GammaClient
 from whalefollow.players import Players, form_summary, form_weeks, max_drawdown
 from whalefollow.positions import build_positions
 from whalefollow.services import Services
+
+from conftest import fast_params
+from synthetic import FakeClob, FakeData, FakeGamma, SyntheticWorld, load_world
 
 W = "0x" + "ab" * 20
 DAY = 86400
@@ -21,8 +23,10 @@ class ReadyData:
         self.fail, self.calls = set(fail), []
         now = int(time.time())
         # прибыль: 20 недель роста по $100, потом 3 недели падения по $50
-        self.points = [{"timestamp": now - (23 - k) * 7 * DAY, "economic_pnl": 100.0 * min(k, 20) - 50.0 * max(0, k - 20)}
-                       for k in range(24)]
+        self.points = [
+            {"timestamp": now - (23 - k) * 7 * DAY, "economic_pnl": 100.0 * min(k, 20) - 50.0 * max(0, k - 20)}
+            for k in range(24)
+        ]
 
     def _hit(self, name):
         self.calls.append(name)
@@ -31,8 +35,13 @@ class ReadyData:
 
     def user_stats(self, user):
         self._hit("stats")
-        return {"proxy_wallet": user, "trades": 321, "biggest_win": 5400.0, "join_date": int(time.time()) - 400 * DAY,
-                "all_time_pnl": {"economic_pnl": 1850.0, "volume_usdc": 250000.0, "trade_count": 1200}}
+        return {
+            "proxy_wallet": user,
+            "trades": 321,
+            "biggest_win": 5400.0,
+            "join_date": int(time.time()) - 400 * DAY,
+            "all_time_pnl": {"economic_pnl": 1850.0, "volume_usdc": 250000.0, "trade_count": 1200},
+        }
 
     def user_pnl(self, user, interval="1m", fidelity="1d"):
         self._hit("pnl")
@@ -48,34 +57,77 @@ class ReadyData:
 
     def standing(self, user, period="all"):
         self._hit("rank")
-        return {"rank_pnl": 140 if period == "all" else 0, "rank_volume": 900, "user_name": "whale_one", "verified": True}
+        return {
+            "rank_pnl": 140 if period == "all" else 0,
+            "rank_volume": 900,
+            "user_name": "whale_one",
+            "verified": True,
+        }
 
     def positions_page(self, user=None, condition=None, status="OPEN", sort_by=None, limit=20):
         self._hit("positions")
-        return [{"token_id": "t1", "condition_id": "m1", "title": "Will X happen?", "outcome": "Yes", "current_size": 500,
-                 "avg_price": 0.41, "current_price": 0.55, "current_value": 275.0, "total_pnl": 70.0,
-                 "end_date": "2026-12-31T00:00:00Z", "event_slug": "will-x"}]
+        return [
+            {
+                "token_id": "t1",
+                "condition_id": "m1",
+                "title": "Will X happen?",
+                "outcome": "Yes",
+                "current_size": 500,
+                "avg_price": 0.41,
+                "current_price": 0.55,
+                "current_value": 275.0,
+                "total_pnl": 70.0,
+                "end_date": "2026-12-31T00:00:00Z",
+                "event_slug": "will-x",
+            }
+        ]
 
     def holders(self, condition, limit=12, include_pnl=True):
         self._hit("holders")
-        return {"t1": [{"proxy_wallet": W, "name": "whale_one", "amount": 500, "avg_price": 0.41, "total_pnl": 70,
-                        "current_value": 275}],
-                "t2": [{"proxy_wallet": "0x" + "cd" * 20, "pseudonym": "Other", "amount": 900}]}
+        return {
+            "t1": [
+                {
+                    "proxy_wallet": W,
+                    "name": "whale_one",
+                    "amount": 500,
+                    "avg_price": 0.41,
+                    "total_pnl": 70,
+                    "current_value": 275,
+                }
+            ],
+            "t2": [{"proxy_wallet": "0x" + "cd" * 20, "pseudonym": "Other", "amount": 900}],
+        }
 
 
 class ReadyGamma:
     def public_profile(self, address):
-        return {"name": "whale_one", "profileImage": "https://img.example/a.png", "xUsername": "whale1",
-                "verifiedBadge": True, "createdAt": "2025-01-01T00:00:00Z"}
+        return {
+            "name": "whale_one",
+            "profileImage": "https://img.example/a.png",
+            "xUsername": "whale1",
+            "verifiedBadge": True,
+            "createdAt": "2025-01-01T00:00:00Z",
+        }
 
     def search_profiles(self, q, limit=6):
-        return [{"wallet": W, "name": "whale_one", "image": None}, {"wallet": "0x" + "ef" * 20, "name": "whale_one_fan"}]
+        return [
+            {"wallet": W, "name": "whale_one", "image": None},
+            {"wallet": "0x" + "ef" * 20, "name": "whale_one_fan"},
+        ]
 
     def market(self, cid):
-        return {"conditionId": cid, "question": "Will X happen?", "description": "Resolves Yes if X.",
-                "outcomes": '["Yes","No"]', "outcomePrices": '["0.55","0.45"]', "clobTokenIds": '["t1","t2"]',
-                "volumeNum": 120000, "liquidityNum": 15000, "endDate": "2026-12-31T00:00:00Z",
-                "events": [{"slug": "will-x", "title": "X"}]}
+        return {
+            "conditionId": cid,
+            "question": "Will X happen?",
+            "description": "Resolves Yes if X.",
+            "outcomes": '["Yes","No"]',
+            "outcomePrices": '["0.55","0.45"]',
+            "clobTokenIds": '["t1","t2"]',
+            "volumeNum": 120000,
+            "liquidityNum": 15000,
+            "endDate": "2026-12-31T00:00:00Z",
+            "events": [{"slug": "will-x", "title": "X"}],
+        }
 
 
 def test_form_from_ready_curve():
@@ -93,11 +145,11 @@ def test_player_card_uses_ready_data_and_survives_partial_failures():
     c = p.card(W)
     assert c["ok"] and c["name"] == "whale_one" and c["verified"] and c["x"] == "whale1"
     assert c["pnl_all_usd"] == 1850.0 and c["markets"] == 321 and c["value_usd"] == 9100.0
-    assert c["volume_30d_usd"] == 42000.0 and c["rank_pnl"] == 140 and c["rank_pnl_month"] is None   # 0 — вне рейтинга
+    assert c["volume_30d_usd"] == 42000.0 and c["rank_pnl"] == 140 and c["rank_pnl_month"] is None  # 0 — вне рейтинга
     assert c["pnl_30d_usd"] == 50.0 and c["pnl_7d_usd"] == -50.0 and c["form"]["state"] == "cold"
     assert c["positions"][0]["avg_cents"] == 41.0 and c["positions"][0]["url"] == "https://polymarket.com/event/will-x"
     calls = len(p.data.calls)
-    assert p.card(W) is c and len(p.data.calls) == calls                      # второй раз — из кэша
+    assert p.card(W) is c and len(p.data.calls) == calls  # второй раз — из кэша
     part = Players(ReadyData(fail={"value", "rank"}), ReadyGamma()).card(W)
     assert part["ok"] and part["value_usd"] is None and set(part["partial"]) == {"value", "rank_all", "rank_month"}
     dead = Players(ReadyData(fail={"stats", "pnl", "value", "rank", "vol", "positions"}), None).card(W)
@@ -107,7 +159,11 @@ def test_player_card_uses_ready_data_and_survives_partial_failures():
 def test_resolve_link_address_and_name():
     p = Players(ReadyData(), ReadyGamma())
     assert p.resolve(f"https://polymarket.com/profile/{W.upper()}")[0] == {
-        "wallet": W, "name": "whale_one", "image": "https://img.example/a.png", "exact": True}
+        "wallet": W,
+        "name": "whale_one",
+        "image": "https://img.example/a.png",
+        "exact": True,
+    }
     by_name = p.resolve("https://polymarket.com/@whale_one")
     assert by_name[0]["wallet"] == W and by_name[0]["exact"] and not by_name[1]["exact"]
     assert p.resolve("@whale_one")[0]["wallet"] == W
@@ -117,7 +173,11 @@ def test_resolve_link_address_and_name():
 def test_market_panel_holders_and_whale_position():
     p = Players(ReadyData(), ReadyGamma())
     m = p.market("m1", "t1", [W])
-    assert m["rules"] == "Resolves Yes if X." and m["volume_usd"] == 120000 and m["url"] == "https://polymarket.com/event/will-x"
+    assert (
+        m["rules"] == "Resolves Yes if X."
+        and m["volume_usd"] == 120000
+        and m["url"] == "https://polymarket.com/event/will-x"
+    )
     assert [o["ours"] for o in m["outcomes"]] == [True, False] and m["outcomes"][0]["price"] == 0.55
     h = {x["wallet"]: x for x in m["holders"]}
     assert h[W]["ours"] and h[W]["same_side"] and h[W]["outcome"] == "Yes" and h[W]["avg_cents"] == 41.0
@@ -138,6 +198,7 @@ def test_client_methods_hit_v2_paths():
             if path == "/public-search":
                 return {"profiles": [{"proxyWallet": W.upper(), "name": "n"}, {"name": "no wallet"}]}
             return {"data": {"value": 5}}
+
     h = Http()
     d = DataClient(http=h)
     assert d.user_pnl(W, "all", "1d") == [{"timestamp": 1, "realized_pnl": 2}]
@@ -163,7 +224,7 @@ def test_services_add_players_copy_after_check(db):
     r = svc.add_players([skilled, rnd, "мусор"], mode="copy")
     assert r["ok"] and len(r["added"]) == 2 and all(a["mode"] == "watch" for a in r["added"])
     assert set(db.get_state("copy_after_check")) == {skilled, rnd}
-    for a in r["added"]:                                        # ждём фоновые проверки
+    for a in r["added"]:  # ждём фоновые проверки
         for _ in range(400):
             st = svc.check_status(a["job_id"])
             if st["state"] != "running":
@@ -194,10 +255,12 @@ def test_simulation_for_chosen_dates():
     assert part["ok"] and 0 < part["summary"]["n"] < full["summary"]["n"]
     assert all(start <= b["ts"] <= end for b in part["bets"])
     curve = part["summary"]["curve"]
-    assert curve[0]["pnl_usd"] == 0.0 and curve[-1]["pnl_usd"] == part["summary"]["closed_pnl_usd"]   # итог совпадает
+    assert curve[0]["pnl_usd"] == 0.0 and curve[-1]["pnl_usd"] == part["summary"]["closed_pnl_usd"]  # итог совпадает
     svc = Services(db, fast_params(), clock=lambda: w.now)
     viaapi = svc.simulate(skilled, start=start, end=end)
-    assert viaapi["ok"] and viaapi["summary"]["start_ts"] == start and all(start <= b["ts"] <= end for b in viaapi["bets"])
+    assert (
+        viaapi["ok"] and viaapi["summary"]["start_ts"] == start and all(start <= b["ts"] <= end for b in viaapi["bets"])
+    )
     assert svc.simulate(skilled, start=w.now - 100, end=w.now)["ok"] is False
 
 

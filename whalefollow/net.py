@@ -7,6 +7,7 @@ HTTP/2 позволяет нескольким потокам слать зап�
 
 Для асинхронного кода есть `async_client()` и `aget_json()` с теми же правилами повторов.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -41,11 +42,17 @@ def _http2() -> bool:
     return os.environ.get("WF_HTTP2", "on").strip().lower() not in ("0", "off", "false", "no")
 
 
-def make_client(timeout: httpx.Timeout | float = TIMEOUT, headers: dict | None = None,
-                http2: bool | None = None) -> httpx.Client:
+def make_client(
+    timeout: httpx.Timeout | float = TIMEOUT, headers: dict | None = None, http2: bool | None = None
+) -> httpx.Client:
     """Новый клиент с настройками WhaleFollow (обычно хватает общего `client()`)."""
-    return httpx.Client(http2=_http2() if http2 is None else http2, timeout=timeout, limits=LIMITS,
-                        headers={"User-Agent": USER_AGENT, **(headers or {})}, follow_redirects=True)
+    return httpx.Client(
+        http2=_http2() if http2 is None else http2,
+        timeout=timeout,
+        limits=LIMITS,
+        headers={"User-Agent": USER_AGENT, **(headers or {})},
+        follow_redirects=True,
+    )
 
 
 def client() -> httpx.Client:
@@ -59,8 +66,13 @@ def client() -> httpx.Client:
 
 def async_client(timeout: httpx.Timeout | float = TIMEOUT, headers: dict | None = None) -> httpx.AsyncClient:
     """Асинхронный клиент с теми же настройками (создаётся в своём цикле событий)."""
-    return httpx.AsyncClient(http2=_http2(), timeout=timeout, limits=LIMITS, follow_redirects=True,
-                             headers={"User-Agent": USER_AGENT, **(headers or {})})
+    return httpx.AsyncClient(
+        http2=_http2(),
+        timeout=timeout,
+        limits=LIMITS,
+        follow_redirects=True,
+        headers={"User-Agent": USER_AGENT, **(headers or {})},
+    )
 
 
 def retry_after_s(resp: Any, now: float | None = None) -> float | None:
@@ -94,12 +106,19 @@ class ApiError(RuntimeError):
 def backoff_delay(attempt: int, resp: Any = None, base: float = 1.0) -> float:
     """Пауза перед повтором: Retry-After, если сервис его прислал, иначе 1, 2, 4… с."""
     ra = retry_after_s(resp) if resp is not None else None
-    return ra if ra is not None else base * (2 ** attempt)
+    return ra if ra is not None else base * (2**attempt)
 
 
-def get_json(session: Any, url: str, params: dict | None = None, timeout: Any = None, retries: int = 4,
-             before: Callable[[], None] | None = None, sleep: Callable[[float], None] = time.sleep,
-             on_retry: Callable[[str, float], None] | None = None) -> Any:
+def get_json(
+    session: Any,
+    url: str,
+    params: dict | None = None,
+    timeout: Any = None,
+    retries: int = 4,
+    before: Callable[[], None] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    on_retry: Callable[[str, float], None] | None = None,
+) -> Any:
     """GET → JSON с повторами на 429/5xx и обрывы сети. Ошибки 4xx (кроме 429) — сразу ApiError."""
     last: Exception | None = None
     for attempt in range(retries):
@@ -128,8 +147,14 @@ def get_json(session: Any, url: str, params: dict | None = None, timeout: Any = 
     raise ApiError(f"GET {url} failed: {last}", status) from last
 
 
-async def aget_json(session: httpx.AsyncClient, url: str, params: dict | None = None, timeout: Any = None,
-                    retries: int = 4, before: Callable[[], Any] | None = None) -> Any:
+async def aget_json(
+    session: httpx.AsyncClient,
+    url: str,
+    params: dict | None = None,
+    timeout: Any = None,
+    retries: int = 4,
+    before: Callable[[], Any] | None = None,
+) -> Any:
     """Асинхронный вариант `get_json` (те же правила повторов)."""
     last: Exception | None = None
     for attempt in range(retries):

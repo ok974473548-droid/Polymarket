@@ -6,6 +6,7 @@
   • «рабочий запрос» — повтор по уже открытому соединению: именно так ходит приложение.
 Результат хранится в state (последняя проверка) и показывается на экране «Диагностика».
 """
+
 from __future__ import annotations
 
 import json
@@ -21,7 +22,7 @@ from .db import DB, now_ts
 from .util import pmap
 
 TIMEOUT = 8.0
-WARM_RUNS = 2                      # повторов по открытому соединению; в отчёт идёт лучший
+WARM_RUNS = 2  # повторов по открытому соединению; в отчёт идёт лучший
 UA = {"User-Agent": "whalefollow-diagnostics"}
 # Публичный адрес контракта биржи Polymarket — для проверок, когда в списке ещё нет китов
 FALLBACK_WALLET = "0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e"
@@ -30,9 +31,9 @@ WS_LIVE = "wss://ws-live-data.polymarket.com"
 
 HINTS = {
     "polymarket": "Polymarket не отвечает из вашей сети. Проверьте интернет; если сайт polymarket.com у вас не "
-                  "открывается, данные не загрузятся (может понадобиться другая сеть).",
+    "открывается, данные не загрузятся (может понадобиться другая сеть).",
     "stream": "Потоковое соединение не открылось — приложение продолжит работать опросом раз в несколько секунд. "
-              "Частая причина — прокси или фильтр, который не пропускает WebSocket.",
+    "Частая причина — прокси или фильтр, который не пропускает WebSocket.",
     "kalshi": "Kalshi не отвечает — похожие вопросы с Kalshi не появятся, остальное работает.",
     "telegram": "Проверьте WF_TELEGRAM_BOT_TOKEN в .env (токен от @BotFather).",
     "chain": "Проверьте ключ обозревателя блокчейна или переключитесь: WF_CHAIN_PROVIDER=blockscout.",
@@ -41,14 +42,24 @@ HINTS = {
 }
 # Ответ сервиса по коду: что случилось и что делать. Код важнее группы: 410 — это не «сеть недоступна».
 STATUS = {
-    410: ("метод API отключён сервисом", "Сервис убрал этот метод API. Обновите WhaleFollow до последней версии — "
-                                        "в ней используются действующие методы."),
-    404: ("метод API не найден", "Похоже, сервис изменил API. Обновите WhaleFollow; если не поможет — скопируйте "
-                                 "отчёт ниже и пришлите разработчику."),
-    429: ("превышен лимит запросов", "Слишком много запросов за короткое время. Подождите минуту и повторите проверку."),
+    410: (
+        "метод API отключён сервисом",
+        "Сервис убрал этот метод API. Обновите WhaleFollow до последней версии — "
+        "в ней используются действующие методы.",
+    ),
+    404: (
+        "метод API не найден",
+        "Похоже, сервис изменил API. Обновите WhaleFollow; если не поможет — скопируйте "
+        "отчёт ниже и пришлите разработчику.",
+    ),
+    429: (
+        "превышен лимит запросов",
+        "Слишком много запросов за короткое время. Подождите минуту и повторите проверку.",
+    ),
     400: ("сервис отклонил запрос", "Сервис изменил правила запроса. Обновите WhaleFollow."),
 }
 ACCESS = (401, 403, 451)
+
 
 def session() -> httpx.Client:
     """Общий пул соединений приложения: проверка идёт тем же путём, что и рабочие запросы,
@@ -58,7 +69,7 @@ def session() -> httpx.Client:
 
 def _get(url: str, params: dict | None = None, headers: dict | None = None) -> httpx.Response:
     r = session().get(url, params=params, headers={**UA, **(headers or {})}, timeout=TIMEOUT)
-    r.content                                                    # дочитываем: соединение вернётся в пул
+    _ = r.content  # дочитываем: соединение вернётся в пул
     return r
 
 
@@ -70,8 +81,10 @@ def explain_status(code, group: str) -> tuple[str, str | None]:
     if code in ACCESS:
         return f"ошибка HTTP {code} — доступ ограничен", HINTS.get(group)
     if isinstance(code, int) and code >= 500:
-        return (f"ошибка HTTP {code} — сбой на стороне сервиса",
-                "У сервиса временный сбой — обычно проходит за несколько минут. Ваши настройки в порядке.")
+        return (
+            f"ошибка HTTP {code} — сбой на стороне сервиса",
+            "У сервиса временный сбой — обычно проходит за несколько минут. Ваши настройки в порядке.",
+        )
     return f"ошибка HTTP {code}", HINTS.get(group)
 
 
@@ -84,6 +97,7 @@ def speed_label(ms: int | None) -> str | None:
 def _ws_probe(url: str, subscribe: dict | None, want_message: bool, wait_s: float = 6.0) -> tuple[bool, str]:
     """Открывает поток, подписывается и ждёт первое сообщение с данными."""
     from .ws import KEEPALIVE_TEXT, WSConnection
+
     t0 = time.perf_counter()
     c = WSConnection(url, timeout=TIMEOUT)
     c.connect()
@@ -99,7 +113,7 @@ def _ws_probe(url: str, subscribe: dict | None, want_message: bool, wait_s: floa
                 text = c.recv(timeout=left).strip()
             except TimeoutError:
                 break
-            except Exception:  # noqa: BLE001 — сервер закрыл соединение
+            except Exception:
                 return False, "сервер закрыл поток сразу после подписки"
             if text and text not in KEEPALIVE_TEXT:
                 return True, f"соединение {hs} мс, первые данные через {int((time.perf_counter() - t1) * 1000)} мс"
@@ -116,8 +130,9 @@ def probes(db: DB) -> list[dict]:
     out: list[tuple] = []
     try:
         from .tracked import tracked_wallets
+
         tracked = tracked_wallets(db)
-    except Exception:  # noqa: BLE001
+    except Exception:
         tracked = []
     picked: dict = {}
     pick_lock = threading.Lock()
@@ -130,21 +145,27 @@ def probes(db: DB) -> list[dict]:
         with pick_lock:
             if "w" not in picked:
                 try:
-                    r = _get(f"{ep.data}/v2/leaderboard", {"time_period": "week", "category": "overall",
-                                                           "sort_by": "PNL", "limit": 1})
+                    r = _get(
+                        f"{ep.data}/v2/leaderboard",
+                        {"time_period": "week", "category": "overall", "sort_by": "PNL", "limit": 1},
+                    )
                     rows = (r.json() or {}).get("data") or [] if r.is_success else []
-                    picked["w"] = str(rows[0].get("user_id") or rows[0].get("proxy_wallet")).lower() if rows \
-                        else FALLBACK_WALLET
-                except Exception:  # noqa: BLE001
+                    picked["w"] = (
+                        str(rows[0].get("user_id") or rows[0].get("proxy_wallet")).lower() if rows else FALLBACK_WALLET
+                    )
+                except Exception:
                     picked["w"] = FALLBACK_WALLET
             return picked["w"]
+
     token = None
     try:
         # исход, где недавно были сделки китов: у такого рынка точно есть стакан
-        row = db.one("SELECT tr.token_id FROM trades tr JOIN markets m ON m.market_id=tr.market_id "
-                     "WHERE m.status='open' ORDER BY tr.ts DESC LIMIT 1")
+        row = db.one(
+            "SELECT tr.token_id FROM trades tr JOIN markets m ON m.market_id=tr.market_id "
+            "WHERE m.status='open' ORDER BY tr.ts DESC LIMIT 1"
+        )
         token = row["token_id"] if row else None
-    except Exception:  # noqa: BLE001
+    except Exception:
         token = None
 
     def gamma():
@@ -189,8 +210,9 @@ def probes(db: DB) -> list[dict]:
         return True, "закрытые позиции отвечают"
 
     def leaderboard():
-        r = _get(f"{ep.data}/v2/leaderboard", {"time_period": "week", "category": "overall", "sort_by": "PNL",
-                                               "limit": 1})
+        r = _get(
+            f"{ep.data}/v2/leaderboard", {"time_period": "week", "category": "overall", "sort_by": "PNL", "limit": 1}
+        )
         r.raise_for_status()
         body = r.json() or {}
         rows = body.get("data") if isinstance(body, dict) else body
@@ -214,27 +236,36 @@ def probes(db: DB) -> list[dict]:
         return _ws_probe(WS_MARKET, sub, want_message=bool(token))
 
     def ws_live():
-        return _ws_probe(WS_LIVE, {"action": "subscribe", "subscriptions": [{"topic": "activity", "type": "trades"}]},
-                         want_message=True, wait_s=8.0)
+        return _ws_probe(
+            WS_LIVE,
+            {"action": "subscribe", "subscriptions": [{"topic": "activity", "type": "trades"}]},
+            want_message=True,
+            wait_s=8.0,
+        )
 
-    out += [("gamma", "Polymarket: каталог рынков", "polymarket", gamma, True),
-            ("gamma_closed", "Polymarket: поиск закрытых рынков", "polymarket", gamma_closed, True),
-            ("trades", "Polymarket: лента сделок", "polymarket", trades, True),
-            ("wallet_trades", "Polymarket: сделки кошелька", "polymarket", wallet_trades, True),
-            ("activity", "Polymarket: журнал операций кошелька", "polymarket", activity, True),
-            ("positions", "Polymarket: открытые позиции", "polymarket", positions, True),
-            ("closed_positions", "Polymarket: закрытые позиции", "polymarket", closed_positions, True),
-            ("leaderboard", "Polymarket: рейтинг трейдеров", "polymarket", leaderboard, True),
-            ("clob", "Polymarket: биржа (CLOB)", "polymarket", clob, True)]
+    out += [
+        ("gamma", "Polymarket: каталог рынков", "polymarket", gamma, True),
+        ("gamma_closed", "Polymarket: поиск закрытых рынков", "polymarket", gamma_closed, True),
+        ("trades", "Polymarket: лента сделок", "polymarket", trades, True),
+        ("wallet_trades", "Polymarket: сделки кошелька", "polymarket", wallet_trades, True),
+        ("activity", "Polymarket: журнал операций кошелька", "polymarket", activity, True),
+        ("positions", "Polymarket: открытые позиции", "polymarket", positions, True),
+        ("closed_positions", "Polymarket: закрытые позиции", "polymarket", closed_positions, True),
+        ("leaderboard", "Polymarket: рейтинг трейдеров", "polymarket", leaderboard, True),
+        ("clob", "Polymarket: биржа (CLOB)", "polymarket", clob, True),
+    ]
     if token:
         out.append(("clob_book", "Polymarket: стакан заявок", "polymarket", clob_book, True))
-    out += [("ws_market", "Поток стаканов (WebSocket)", "stream", ws_market, False),
-            ("ws_live", "Поток сделок китов (WebSocket)", "stream", ws_live, False)]
+    out += [
+        ("ws_market", "Поток стаканов (WebSocket)", "stream", ws_market, False),
+        ("ws_live", "Поток сделок китов (WebSocket)", "stream", ws_live, False),
+    ]
 
     def kalshi():
         r = _get("https://api.elections.kalshi.com/trade-api/v2/events", {"status": "open", "limit": 1})
         r.raise_for_status()
         return True, "события Kalshi отвечают"
+
     out.append(("kalshi", "Kalshi", "kalshi", kalshi, True))
 
     def news():
@@ -246,30 +277,39 @@ def probes(db: DB) -> list[dict]:
         r = _get("https://api.manifold.markets/v0/search-markets", {"term": "election", "limit": 1})
         r.raise_for_status()
         return True, "Manifold отвечает"
-    out += [("news", "Новости: Google News", "news", news, False),
-            ("manifold", "Прогнозы: Manifold", "news", manifold, True)]
+
+    out += [
+        ("news", "Новости: Google News", "news", news, False),
+        ("manifold", "Прогнозы: Manifold", "news", manifold, True),
+    ]
 
     tg_token = os.environ.get("WF_TELEGRAM_BOT_TOKEN")
     if tg_token:
+
         def tg():
             r = _get(f"https://api.telegram.org/bot{tg_token}/getMe")
             if r.status_code == 401:
                 return False, "токен бота неверный"
             r.raise_for_status()
             return True, "бот @" + str((r.json().get("result") or {}).get("username", "?"))
+
         out.append(("telegram", "Telegram-бот", "telegram", tg, True))
 
     from .ingest.chain import USDC_E, ExplorerClient
+
     chain = ExplorerClient.from_env()
     if chain is not None:
+
         def ch():
             chain.timeout = TIMEOUT
             rows = chain.token_transfers(FALLBACK_WALLET, USDC_E, page_size=1, max_pages=1)
             return True, f"{chain.provider}: отвечает ({len(rows)} перевод в пробном ответе)"
+
         out.append(("chain", "Блокчейн (переводы USDC)", "chain", ch, False))
 
     key = os.environ.get("WF_ODDS_API_KEY")
     if key:
+
         def odds():
             r = _get("https://api.the-odds-api.com/v4/sports", {"apiKey": key})
             if r.status_code == 401:
@@ -277,6 +317,7 @@ def probes(db: DB) -> list[dict]:
             r.raise_for_status()
             left = r.headers.get("x-requests-remaining")
             return True, "отвечает" + (f", осталось кредитов: {left}" if left else "")
+
         out.append(("odds", "Букмекеры (The Odds API)", "odds", odds, False))
     return [{"key": k, "label": lbl, "group": g, "fn": fn, "warm": w} for k, lbl, g, fn, w in out]
 
@@ -291,7 +332,7 @@ def _call(p: dict) -> tuple[bool, str, str | None]:
     except httpx.HTTPStatusError as exc:
         code = exc.response.status_code if exc.response is not None else "?"
         detail, hint = explain_status(code, p["group"])
-        if code == 400 and exc.response is not None:                 # причину отказа пишет сам сервер
+        if code == 400 and exc.response is not None:  # причину отказа пишет сам сервер
             why = (exc.response.text or "").strip().replace("\n", " ")[:160]
             if why:
                 detail += f": {why}"
@@ -300,7 +341,7 @@ def _call(p: dict) -> tuple[bool, str, str | None]:
         return False, f"нет соединения: {type(exc).__name__}", HINTS.get(p["group"])
     except TimeoutError:
         return False, f"нет ответа за {int(TIMEOUT)} с", HINTS.get(p["group"])
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         msg = str(exc) or type(exc).__name__
         return False, f"ошибка: {msg}"[:200], HINTS.get(p["group"])
 
@@ -323,11 +364,26 @@ def run(db: DB, items: list[dict] | None = None, warm_runs: int = WARM_RUNS) -> 
                 times.append(int((time.perf_counter() - t1) * 1000))
             warm = min(times) if times else None
         ms = warm if warm is not None else cold
-        return {"key": p["key"], "label": p["label"], "group": p["group"], "ok": ok, "detail": detail,
-                "ms": ms, "cold_ms": cold, "warm_ms": warm, "speed": speed_label(ms) if ok else None, "hint": hint}
+        return {
+            "key": p["key"],
+            "label": p["label"],
+            "group": p["group"],
+            "ok": ok,
+            "detail": detail,
+            "ms": ms,
+            "cold_ms": cold,
+            "warm_ms": warm,
+            "speed": speed_label(ms) if ok else None,
+            "hint": hint,
+        }
+
     res = [r for _, r, _ in pmap(one, items, workers=12)]
     ok_ms = sorted(r["ms"] for r in res if r["ok"] and r["group"] == "polymarket")
-    out = {"ts": now_ts(), "checks": res, "ok": all(r["ok"] for r in res),
-           "polymarket_median_ms": ok_ms[len(ok_ms) // 2] if ok_ms else None}
+    out = {
+        "ts": now_ts(),
+        "checks": res,
+        "ok": all(r["ok"] for r in res),
+        "polymarket_median_ms": ok_ms[len(ok_ms) // 2] if ok_ms else None,
+    }
     db.set_state("diagnostics", out)
     return out

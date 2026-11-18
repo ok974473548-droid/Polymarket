@@ -7,6 +7,7 @@
 Sentry включается, только если задан SENTRY_DSN и установлен пакет sentry-sdk
 (`pip install -e ".[sentry]"`). Личные данные в Sentry не отправляются.
 """
+
 from __future__ import annotations
 
 import logging
@@ -38,20 +39,28 @@ def setup_logging(level: int | str = logging.INFO, fmt: str | None = None, strea
         structlog.processors.TimeStamper(fmt="iso", utc=fmt == "json"),
     ]
     structlog.configure(
-        processors=[*shared, structlog.stdlib.PositionalArgumentsFormatter(),
-                    structlog.processors.StackInfoRenderer(),
-                    structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
+        processors=[
+            *shared,
+            structlog.stdlib.PositionalArgumentsFormatter(),
+            structlog.processors.StackInfoRenderer(),
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
         logger_factory=structlog.stdlib.LoggerFactory(),
         wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=True,
     )
-    renderer: Any = (structlog.processors.JSONRenderer(ensure_ascii=False) if fmt == "json"
-                     else structlog.dev.ConsoleRenderer(colors=getattr(stream or sys.stderr, "isatty", lambda: False)()))
+    renderer: Any = (
+        structlog.processors.JSONRenderer(ensure_ascii=False)
+        if fmt == "json"
+        else structlog.dev.ConsoleRenderer(colors=getattr(stream or sys.stderr, "isatty", lambda: False)())
+    )
     formatter = structlog.stdlib.ProcessorFormatter(
         foreign_pre_chain=[*shared, structlog.stdlib.PositionalArgumentsFormatter()],
-        processors=[structlog.stdlib.ProcessorFormatter.remove_processors_meta,
-                    structlog.processors.format_exc_info if fmt == "json" else _keep,
-                    renderer],
+        processors=[
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            structlog.processors.format_exc_info if fmt == "json" else _keep,
+            renderer,
+        ],
     )
     handler = logging.StreamHandler(stream or sys.stderr)
     handler.setFormatter(formatter)
@@ -59,7 +68,7 @@ def setup_logging(level: int | str = logging.INFO, fmt: str | None = None, strea
     for h in list(root.handlers):
         if getattr(h, "_whalefollow", False):
             root.removeHandler(h)
-    handler._whalefollow = True                         # type: ignore[attr-defined]
+    handler._whalefollow = True  # type: ignore[attr-defined]
     root.addHandler(handler)
     root.setLevel(level)
     for noisy in ("httpx", "httpcore", "hpack", "websockets", "uvicorn.access", "alembic.runtime.migration"):
@@ -82,9 +91,14 @@ def _setup_sentry() -> None:
         logging.getLogger(__name__).warning("SENTRY_DSN задан, но пакет sentry-sdk не установлен — Sentry выключен")
         return
     from . import __version__
-    sentry_sdk.init(dsn=dsn, release=f"whalefollow@{__version__}", send_default_pii=False,
-                    traces_sample_rate=float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0") or 0),
-                    environment=os.environ.get("SENTRY_ENVIRONMENT", "production"))
+
+    sentry_sdk.init(
+        dsn=dsn,
+        release=f"whalefollow@{__version__}",
+        send_default_pii=False,
+        traces_sample_rate=float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0") or 0),
+        environment=os.environ.get("SENTRY_ENVIRONMENT", "production"),
+    )
 
 
 def get_logger(name: str | None = None) -> Any:

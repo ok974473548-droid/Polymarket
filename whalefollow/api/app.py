@@ -8,6 +8,7 @@
   • файлы интерфейса — из памяти, со сжатой копией и ETag (повторная загрузка — ответ 304 без тела);
   • JSON-ответы больше 1 КБ сжимаются gzip.
 """
+
 from __future__ import annotations
 
 import json
@@ -33,8 +34,11 @@ from .static import static_entry
 log = get_logger(__name__)
 
 PUBLIC_API = {("GET", "/api/auth"), ("POST", "/api/login"), ("POST", "/api/logout")}
-SECURITY_HEADERS = ((b"x-content-type-options", b"nosniff"), (b"x-frame-options", b"DENY"),
-                    (b"referrer-policy", b"no-referrer"))
+SECURITY_HEADERS = (
+    (b"x-content-type-options", b"nosniff"),
+    (b"x-frame-options", b"DENY"),
+    (b"referrer-policy", b"no-referrer"),
+)
 SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
 
 
@@ -59,10 +63,12 @@ class GuardMiddleware:
             await self.app(scope, receive, send)
             return
         extra = list(SECURITY_HEADERS)
-        if self.cors_origin:                    # по умолчанию чужим сайтам доступ к API не даётся
-            extra += [(b"access-control-allow-origin", self.cors_origin.encode()),
-                      (b"access-control-allow-methods", b"GET, POST, PUT, PATCH, OPTIONS"),
-                      (b"access-control-allow-headers", b"Content-Type")]
+        if self.cors_origin:  # по умолчанию чужим сайтам доступ к API не даётся
+            extra += [
+                (b"access-control-allow-origin", self.cors_origin.encode()),
+                (b"access-control-allow-methods", b"GET, POST, PUT, PATCH, OPTIONS"),
+                (b"access-control-allow-headers", b"Content-Type"),
+            ]
 
         async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
@@ -87,9 +93,13 @@ class GuardMiddleware:
         await self.app(scope, receive, send_with_headers)
 
 
-def create_app(services: Any, auth: Auth | None = None, cors_origin: str | None = None,
-               events: Callable[..., Iterator[tuple[str, dict]]] | None = None,
-               stop: threading.Event | None = None) -> FastAPI:
+def create_app(
+    services: Any,
+    auth: Auth | None = None,
+    cors_origin: str | None = None,
+    events: Callable[..., Iterator[tuple[str, dict]]] | None = None,
+    stop: threading.Event | None = None,
+) -> FastAPI:
     """Приложение для uvicorn. events — генератор событий для /api/events (по умолчанию services.event_stream)."""
     auth = auth if auth is not None else Auth(services.db)
     events = events if events is not None else getattr(services, "event_stream", None)
@@ -98,13 +108,18 @@ def create_app(services: Any, auth: Auth | None = None, cors_origin: str | None 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         import anyio.to_thread
+
         # пул потоков для синхронных обработчиков: экраны, проверки игроков и поток событий одновременно
         anyio.to_thread.current_default_thread_limiter().total_tokens = 64
         yield
         stop.set()
 
-    app = FastAPI(title="WhaleFollow API", version=__version__, lifespan=lifespan,
-                  description="API интерфейса WhaleFollow. Ставки только виртуальные.")
+    app = FastAPI(
+        title="WhaleFollow API",
+        version=__version__,
+        lifespan=lifespan,
+        description="API интерфейса WhaleFollow. Ставки только виртуальные.",
+    )
     app.state.stop = stop
 
     # ---------------------------------------------------------------- ошибки → {"error": ...}
@@ -140,11 +155,15 @@ def create_app(services: Any, auth: Auth | None = None, cors_origin: str | None 
     @app.get("/api/auth", responses={200: {"model": S.AuthOut}}, tags=["Вход"])
     def auth_state(request: Request) -> Response:
         cookie = request.cookies.get(COOKIE)
-        return json_response(request, {"required": bool(auth and auth.required),
-                                       "ok": auth is None or auth.valid(cookie)})
+        return json_response(
+            request, {"required": bool(auth and auth.required), "ok": auth is None or auth.valid(cookie)}
+        )
 
-    @app.post("/api/login", responses={200: {"model": S.OkOut}, 401: {"model": S.ErrorOut},
-                                       429: {"model": S.ErrorOut}}, tags=["Вход"])
+    @app.post(
+        "/api/login",
+        responses={200: {"model": S.OkOut}, 401: {"model": S.ErrorOut}, 429: {"model": S.ErrorOut}},
+        tags=["Вход"],
+    )
     def login(request: Request, body: S.LoginIn | None = None) -> Response:
         if auth is None or not auth.required:
             return json_response(request, {"ok": True})
@@ -161,9 +180,12 @@ def create_app(services: Any, auth: Auth | None = None, cors_origin: str | None 
         return json_response(request, {"ok": True}, cookie=Auth.cookie_header("", max_age=0))
 
     # ---------------------------------------------------------------- живые события (SSE)
-    @app.get("/api/events", tags=["Состояние"], response_class=StreamingResponse,
-             responses={200: {"content": {"text/event-stream": {}},
-                              "description": "События hello / change / price / ping"}})
+    @app.get(
+        "/api/events",
+        tags=["Состояние"],
+        response_class=StreamingResponse,
+        responses={200: {"content": {"text/event-stream": {}}, "description": "События hello / change / price / ping"}},
+    )
     def sse(request: Request) -> Response:
         if events is None:
             raise HttpError(404, "Поток событий недоступен")
@@ -172,8 +194,12 @@ def create_app(services: Any, auth: Auth | None = None, cors_origin: str | None 
             yield b"retry: 2000\n\n"
             for ev, data in events(stop.is_set):
                 yield f"event: {ev}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n".encode()
-        return StreamingResponse(gen(), media_type="text/event-stream; charset=utf-8",
-                                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream; charset=utf-8",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
 
     app.include_router(build_router(services))
 

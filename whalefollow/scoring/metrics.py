@@ -1,4 +1,5 @@
 """Метрики позиций и кластеров (ТЗ 6.2–6.3)."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -27,14 +28,21 @@ def add_clv(pos: pd.DataFrame, prices: pd.DataFrame, params: Params, tolerance_s
         limit = resolved_ts - cutoff
         target = np.where(np.isfinite(limit), np.minimum(target, limit), target)
         valid = ~(np.isfinite(limit) & (pos["opened_ts"].astype(float) > limit))
-        q = pd.DataFrame({"idx": pos.index, "token_id": pos["token_id"].values,
-                          "ts": np.asarray(target, float)}).loc[valid.values]
+        q = pd.DataFrame({"idx": pos.index, "token_id": pos["token_id"].values, "ts": np.asarray(target, float)}).loc[
+            valid.values
+        ]
         if q.empty:
             continue
         q["ts"] = q["ts"].astype("int64")
         q = q.sort_values("ts")
-        merged = pd.merge_asof(q, prices[["token_id", "ts", "price"]].astype({"ts": "int64"}), on="ts",
-                               by="token_id", direction="backward", tolerance=tolerance_s)
+        merged = pd.merge_asof(
+            q,
+            prices[["token_id", "ts", "price"]].astype({"ts": "int64"}),
+            on="ts",
+            by="token_id",
+            direction="backward",
+            tolerance=tolerance_s,
+        )
         merged = merged.set_index("idx")
         pos.loc[merged.index, col] = merged["price"].values - pos.loc[merged.index, "avg_entry"].values
     return pos
@@ -57,8 +65,22 @@ def cluster_table(closed: pd.DataFrame) -> pd.DataFrame:
     Для теста на везение берётся представитель кластера — позиция с наибольшими затратами.
     """
     if closed.empty:
-        return pd.DataFrame(columns=["entity_id", "cluster", "edge_c", "cost_c", "w_c", "p_rep", "r_rep",
-                                     "clv_1h", "clv_24h", "ts", "category", "pnl"])
+        return pd.DataFrame(
+            columns=[
+                "entity_id",
+                "cluster",
+                "edge_c",
+                "cost_c",
+                "w_c",
+                "p_rep",
+                "r_rep",
+                "clv_1h",
+                "clv_24h",
+                "ts",
+                "category",
+                "pnl",
+            ]
+        )
     df = closed.copy()
     df["cluster"] = df["event_id"].fillna(df["market_id"]).fillna(df["token_id"])
     df["e_x_c"] = df["edge"] * df["cost_usd"]
@@ -69,18 +91,45 @@ def cluster_table(closed: pd.DataFrame) -> pd.DataFrame:
         df[col + "_c"] = np.where(df[col].notna(), df["cost_usd"], 0.0)
     df["_rank"] = df.groupby(["entity_id", "cluster"])["cost_usd"].rank(method="first", ascending=False)
     rep = df[df["_rank"] == 1][["entity_id", "cluster", "avg_entry", "exit_value_per_share", "category"]]
-    agg = df.groupby(["entity_id", "cluster"]).agg(
-        cost_c=("cost_usd", "sum"), e_x_c=("e_x_c", "sum"), ts=("opened_ts", "min"), pnl=("pnl_usd", "sum"),
-        clv_1h_x=("clv_1h_x", "sum"), clv_1h_c=("clv_1h_c", "sum"),
-        clv_24h_x=("clv_24h_x", "sum"), clv_24h_c=("clv_24h_c", "sum")).reset_index()
+    agg = (
+        df.groupby(["entity_id", "cluster"])
+        .agg(
+            cost_c=("cost_usd", "sum"),
+            e_x_c=("e_x_c", "sum"),
+            ts=("opened_ts", "min"),
+            pnl=("pnl_usd", "sum"),
+            clv_1h_x=("clv_1h_x", "sum"),
+            clv_1h_c=("clv_1h_c", "sum"),
+            clv_24h_x=("clv_24h_x", "sum"),
+            clv_24h_c=("clv_24h_c", "sum"),
+        )
+        .reset_index()
+    )
     agg["edge_c"] = agg["e_x_c"] / agg["cost_c"].clip(lower=1e-9)
     agg["w_c"] = np.sqrt(agg["cost_c"].clip(lower=0))
     agg["clv_1h"] = np.where(agg["clv_1h_c"] > 0, agg["clv_1h_x"] / agg["clv_1h_c"].clip(lower=1e-9), np.nan)
     agg["clv_24h"] = np.where(agg["clv_24h_c"] > 0, agg["clv_24h_x"] / agg["clv_24h_c"].clip(lower=1e-9), np.nan)
-    agg = agg.merge(rep.rename(columns={"avg_entry": "p_rep", "exit_value_per_share": "r_rep"}),
-                    on=["entity_id", "cluster"], how="left")
-    return agg[["entity_id", "cluster", "edge_c", "cost_c", "w_c", "p_rep", "r_rep",
-                "clv_1h", "clv_24h", "ts", "category", "pnl"]]
+    agg = agg.merge(
+        rep.rename(columns={"avg_entry": "p_rep", "exit_value_per_share": "r_rep"}),
+        on=["entity_id", "cluster"],
+        how="left",
+    )
+    return agg[
+        [
+            "entity_id",
+            "cluster",
+            "edge_c",
+            "cost_c",
+            "w_c",
+            "p_rep",
+            "r_rep",
+            "clv_1h",
+            "clv_24h",
+            "ts",
+            "category",
+            "pnl",
+        ]
+    ]
 
 
 def bucket_edges(closed: pd.DataFrame, buckets: tuple) -> dict:

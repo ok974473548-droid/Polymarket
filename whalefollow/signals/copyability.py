@@ -1,4 +1,5 @@
 """Фильтр копируемости (ТЗ раздел 8). Любое «нет» — пропуск с записанной причиной."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -18,10 +19,21 @@ class CopyCheck:
     details: dict = field(default_factory=dict)
 
 
-def check(*, signal: dict, asks: list, market: dict, score: dict, cat_score: dict | None,
-          entity_positions: list[dict], median_cost_cat: float | None, our_size_usd: float,
-          params: Params, now: int, categories_on: list[str] | None = None,
-          categories_off_for_entity: list[str] | None = None) -> CopyCheck:
+def check(
+    *,
+    signal: dict,
+    asks: list,
+    market: dict,
+    score: dict,
+    cat_score: dict | None,
+    entity_positions: list[dict],
+    median_cost_cat: float | None,
+    our_size_usd: float,
+    params: Params,
+    now: int,
+    categories_on: list[str] | None = None,
+    categories_off_for_entity: list[str] | None = None,
+) -> CopyCheck:
     r: list[str] = []
     d: dict = {}
     cat = market.get("category") or "other"
@@ -71,8 +83,12 @@ def check(*, signal: dict, asks: list, market: dict, score: dict, cat_score: dic
     hold = score.get("hold_share")
     med_h = score.get("median_hold_h")
     d.update(hold_share=hold, median_hold_h=med_h)
-    if hold is None or not np.isfinite(hold) or hold < params.min_hold_share \
-            or (med_h is not None and np.isfinite(med_h) and med_h < params.min_median_hold_h):
+    if (
+        hold is None
+        or not np.isfinite(hold)
+        or hold < params.min_hold_share
+        or (med_h is not None and np.isfinite(med_h) and med_h < params.min_median_hold_h)
+    ):
         r.append("scalper")
 
     # 8.5 срок до разрешения (годовая доходность проверяется в решении, когда известен edge)
@@ -85,8 +101,13 @@ def check(*, signal: dict, asks: list, market: dict, score: dict, cat_score: dic
         r.append("too_long")
 
     # 8.6 конфликты: у кита противоположная позиция в том же рынке
-    other = [p for p in entity_positions if p["market_id"] == signal["market_id"]
-             and p["token_id"] != signal["token_id"] and (p.get("remaining_shares") or 0) > 0]
+    other = [
+        p
+        for p in entity_positions
+        if p["market_id"] == signal["market_id"]
+        and p["token_id"] != signal["token_id"]
+        and (p.get("remaining_shares") or 0) > 0
+    ]
     if other:
         r.append("whale_hedged")
 

@@ -11,9 +11,8 @@ Kalshi (публичный API, без ключа): у API нет поиска �
 
 Совпадение вопросов не гарантировано: пользователь и ИИ видят формулировку, это подсказка, а не довод.
 """
-from __future__ import annotations
 
-from typing import Any
+from __future__ import annotations
 
 import json
 import logging
@@ -21,9 +20,9 @@ import os
 import re
 import statistics
 from datetime import datetime
+from typing import Any
 
 from .. import net
-
 from ..db import DB, now_ts
 from .sources import STOP, Forecast
 
@@ -31,12 +30,65 @@ log = logging.getLogger(__name__)
 
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 ODDS_BASE = "https://api.the-odds-api.com/v4"
-DEFAULT_SPORTS = ("basketball_nba", "americanfootball_nfl", "icehockey_nhl", "baseball_mlb", "soccer_epl",
-                  "soccer_uefa_champs_league", "mma_mixed_martial_arts")
-GENERIC = {"united", "city", "club", "real", "state", "team", "sporting", "athletic", "athletico", "atletico",
-           "fc", "sc", "ac", "afc", "cf", "de", "la", "los", "las", "san", "new", "york", "the"}
-EXTRA_STOP = {"win", "wins", "beat", "beats", "game", "match", "vs", "versus", "yes", "no", "price", "above", "below",
-              "reach", "hit", "market", "who", "which", "what", "how", "many", "much", "between"}
+DEFAULT_SPORTS = (
+    "basketball_nba",
+    "americanfootball_nfl",
+    "icehockey_nhl",
+    "baseball_mlb",
+    "soccer_epl",
+    "soccer_uefa_champs_league",
+    "mma_mixed_martial_arts",
+)
+GENERIC = {
+    "united",
+    "city",
+    "club",
+    "real",
+    "state",
+    "team",
+    "sporting",
+    "athletic",
+    "athletico",
+    "atletico",
+    "fc",
+    "sc",
+    "ac",
+    "afc",
+    "cf",
+    "de",
+    "la",
+    "los",
+    "las",
+    "san",
+    "new",
+    "york",
+    "the",
+}
+EXTRA_STOP = {
+    "win",
+    "wins",
+    "beat",
+    "beats",
+    "game",
+    "match",
+    "vs",
+    "versus",
+    "yes",
+    "no",
+    "price",
+    "above",
+    "below",
+    "reach",
+    "hit",
+    "market",
+    "who",
+    "which",
+    "what",
+    "how",
+    "many",
+    "much",
+    "between",
+}
 
 
 def _ts(s) -> int | None:
@@ -114,10 +166,19 @@ def kalshi_rows(events, now: int | None = None) -> list[dict]:
             if p is None:
                 continue
             sub = m.get("yes_sub_title") or m.get("subtitle") or ""
-            rows.append({"source": "kalshi", "ext_id": m.get("ticker"), "title": title, "subtitle": sub,
-                         "probability": p, "close_ts": _ts(m.get("close_time")),
-                         "url": f"https://kalshi.com/markets/{series}" if series else "https://kalshi.com",
-                         "extra": json.dumps({"event": ev.get("event_ticker")}), "updated_ts": now})
+            rows.append(
+                {
+                    "source": "kalshi",
+                    "ext_id": m.get("ticker"),
+                    "title": title,
+                    "subtitle": sub,
+                    "probability": p,
+                    "close_ts": _ts(m.get("close_time")),
+                    "url": f"https://kalshi.com/markets/{series}" if series else "https://kalshi.com",
+                    "extra": json.dumps({"event": ev.get("event_ticker")}),
+                    "updated_ts": now,
+                }
+            )
     return [r for r in rows if r["ext_id"]]
 
 
@@ -127,7 +188,7 @@ def sync_kalshi(db: DB, client: KalshiClient | None = None) -> int:
     rows = kalshi_rows(client.open_events(), now)
     with db.tx():
         db.upsert_many("ext_markets", rows, ["source", "ext_id"])
-        db.execute("DELETE FROM ext_markets WHERE source='kalshi' AND updated_ts<?", (now,))   # закрытые
+        db.execute("DELETE FROM ext_markets WHERE source='kalshi' AND updated_ts<?", (now,))  # закрытые
     return len(rows)
 
 
@@ -167,7 +228,7 @@ class KalshiSource:
                 scored.append((s, r))
         scored.sort(key=lambda x: -x[0])
         out = []
-        for s, r in scored[:2]:
+        for _s, r in scored[:2]:
             t = r["title"] + (f" — {r['subtitle']}" if r["subtitle"] else "")
             out.append(Forecast(source="Kalshi", title=t, url=r["url"], probability=float(r["probability"])))
         return out
@@ -181,16 +242,19 @@ class OddsClient:
         self.remaining: str | None = None
 
     @classmethod
-    def from_env(cls) -> "OddsClient | None":
+    def from_env(cls) -> OddsClient | None:
         key = os.environ.get("WF_ODDS_API_KEY")
         return cls(key) if key else None
 
     def odds(self, sport: str) -> list[dict]:
-        r = self.s.get(f"{self.base}/sports/{sport}/odds/", timeout=self.timeout,
-                       params={"apiKey": self.key, "regions": "eu", "markets": "h2h", "oddsFormat": "decimal"})
+        r = self.s.get(
+            f"{self.base}/sports/{sport}/odds/",
+            timeout=self.timeout,
+            params={"apiKey": self.key, "regions": "eu", "markets": "h2h", "oddsFormat": "decimal"},
+        )
         self.remaining = getattr(r, "headers", {}).get("x-requests-remaining", self.remaining)
         if r.status_code == 404:
-            return []                                  # вид спорта не в сезоне
+            return []  # вид спорта не в сезоне
         r.raise_for_status()
         return r.json() or []
 
@@ -219,11 +283,19 @@ def odds_rows(events: list[dict], sport: str, now: int | None = None) -> list[di
         home, away = ev.get("home_team"), ev.get("away_team")
         if not probs or not home or not away or home not in probs:
             continue
-        rows.append({"source": "odds", "ext_id": ev.get("id"), "title": f"{home} vs {away}", "subtitle": sport,
-                     "probability": round(probs[home], 4), "close_ts": _ts(ev.get("commence_time")),
-                     "url": "https://the-odds-api.com", "updated_ts": now,
-                     "extra": json.dumps({"home": home, "away": away, "probs": probs, "sport": sport},
-                                         ensure_ascii=False)})
+        rows.append(
+            {
+                "source": "odds",
+                "ext_id": ev.get("id"),
+                "title": f"{home} vs {away}",
+                "subtitle": sport,
+                "probability": round(probs[home], 4),
+                "close_ts": _ts(ev.get("commence_time")),
+                "url": "https://the-odds-api.com",
+                "updated_ts": now,
+                "extra": json.dumps({"home": home, "away": away, "probs": probs, "sport": sport}, ensure_ascii=False),
+            }
+        )
     return [r for r in rows if r["ext_id"]]
 
 
@@ -238,8 +310,9 @@ def sync_odds(db: DB, client: OddsClient, sports: list[str] | None = None) -> in
             log.warning("букмекеры %s: %s", sp, exc)
     with db.tx():
         db.upsert_many("ext_markets", rows, ["source", "ext_id"])
-        db.execute("DELETE FROM ext_markets WHERE source='odds' AND close_ts IS NOT NULL AND close_ts<?",
-                   (now - 6 * 3600,))                # прошедшие матчи
+        db.execute(
+            "DELETE FROM ext_markets WHERE source='odds' AND close_ts IS NOT NULL AND close_ts<?", (now - 6 * 3600,)
+        )  # прошедшие матчи
     if client.remaining is not None:
         db.set_state("odds_remaining", client.remaining)
     return len(rows)
@@ -247,12 +320,12 @@ def sync_odds(db: DB, client: OddsClient, sports: list[str] | None = None) -> in
 
 def team_keys(name: str) -> set[str]:
     """Отличительные слова названия команды: «Los Angeles Lakers» → {angeles, lakers}."""
-    return {w for w in re.findall(r"[a-z0-9]+", name.lower()) if len(w) >= 4 and w not in GENERIC} or \
-        {name.lower()}
+    return {w for w in re.findall(r"[a-z0-9]+", name.lower()) if len(w) >= 4 and w not in GENERIC} or {name.lower()}
 
 
 class BookmakerSource:
     """Только спортивные рынки. Вероятность — для первого исхода рынка (или «Да»)."""
+
     name, source_type = "Букмекеры", "forecast"
     needs_market = True
 
@@ -271,9 +344,13 @@ class BookmakerSource:
     def forecasts(self, question: str, market: dict | None = None) -> list[Forecast]:
         if not market or (market.get("category") or "") != "sports":
             return []
-        order = " ORDER BY rowid" if self.db.kind == "sqlite" else ""        # порядок исходов = порядок вставки
-        labels = [r["outcome_label"] for r in self.db.query(
-            f"SELECT outcome_label FROM tokens WHERE market_id=?{order}", (market.get("market_id"),))]
+        order = " ORDER BY rowid" if self.db.kind == "sqlite" else ""  # порядок исходов = порядок вставки
+        labels = [
+            r["outcome_label"]
+            for r in self.db.query(
+                f"SELECT outcome_label FROM tokens WHERE market_id=?{order}", (market.get("market_id"),)
+            )
+        ]
         text = " ".join([question or ""] + labels)
         for row in self.cache.rows():
             ex = self._match(text, row)
@@ -283,13 +360,16 @@ class BookmakerSource:
             yes_no = {str(x).lower() for x in labels} <= {"yes", "no"}
             if yes_no:
                 # «Will X win/beat …»: субъект — команда, названная в вопросе первой
-                pos = {t: min((question.lower().find(k) for k in team_keys(t) if k in question.lower()), default=10**6)
-                       for t in (ex["home"], ex["away"])}
+                pos = {
+                    t: min((question.lower().find(k) for k in team_keys(t) if k in question.lower()), default=10**6)
+                    for t in (ex["home"], ex["away"])
+                }
                 subject = min(pos, key=pos.get)
             else:
                 first = (labels[0] if labels else "").lower()
-                subject = next((t for t in (ex["home"], ex["away"]) if any(k in first for k in team_keys(t))),
-                               ex["home"])
+                subject = next(
+                    (t for t in (ex["home"], ex["away"]) if any(k in first for k in team_keys(t))), ex["home"]
+                )
             p = probs.get(subject)
             if p is None:
                 continue

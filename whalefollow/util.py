@@ -1,19 +1,22 @@
 """Общие помощники: параллельные запросы к API и ограничение частоты."""
+
 from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Callable, Iterable, TypeVar
+from typing import TypeVar
 
 T = TypeVar("T")
 R = TypeVar("R")
 
-Progress = Callable[[str, int, int], None]      # (этап, сделано, всего)
+Progress = Callable[[str, int, int], None]  # (этап, сделано, всего)
 
 
-def pmap(fn: Callable[[T], R], items: Iterable[T], workers: int = 8,
-         on_done: Callable[[int, int], None] | None = None) -> list[tuple[T, R | None, Exception | None]]:
+def pmap(
+    fn: Callable[[T], R], items: Iterable[T], workers: int = 8, on_done: Callable[[int, int], None] | None = None
+) -> list[tuple[T, R | None, Exception | None]]:
     """Выполняет fn для каждого элемента в нескольких потоках (сетевые запросы).
     Возвращает [(элемент, результат | None, ошибка | None)] в исходном порядке.
     Ошибка одного элемента не прерывает остальные. Запись в БД — в вызывающем потоке."""
@@ -25,7 +28,7 @@ def pmap(fn: Callable[[T], R], items: Iterable[T], workers: int = 8,
         for i, it in enumerate(items):
             try:
                 out[i] = (it, fn(it), None)
-            except Exception as exc:  # noqa: BLE001 — ошибка возвращается вызывающему
+            except Exception as exc:
                 out[i] = (it, None, exc)
             if on_done:
                 on_done(i + 1, len(items))
@@ -37,7 +40,7 @@ def pmap(fn: Callable[[T], R], items: Iterable[T], workers: int = 8,
             i = futs[f]
             try:
                 out[i] = (items[i], f.result(), None)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 out[i] = (items[i], None, exc)
             done += 1
             if on_done:
@@ -46,7 +49,7 @@ def pmap(fn: Callable[[T], R], items: Iterable[T], workers: int = 8,
 
 
 def chunks(seq: list[T], n: int) -> list[list[T]]:
-    return [seq[i:i + n] for i in range(0, len(seq), n)]
+    return [seq[i : i + n] for i in range(0, len(seq), n)]
 
 
 class RateLimiter:
@@ -75,7 +78,7 @@ class RateLimiter:
             now = time.monotonic()
             self._tokens = min(self.capacity, self._tokens + (now - self._t) * self.rate)
             self._t = now
-            self._tokens -= 1.0                       # жетон берётся сразу; долг отрабатывается паузой
+            self._tokens -= 1.0  # жетон берётся сразу; долг отрабатывается паузой
             return -self._tokens / self.rate if self._tokens < 0 else 0.0
 
     def wait(self) -> None:
@@ -86,6 +89,7 @@ class RateLimiter:
     async def await_(self) -> None:
         """То же для асинхронного кода: пауза не блокирует цикл событий."""
         import asyncio
+
         delay = self.reserve()
         if delay > 0:
             await asyncio.sleep(delay)

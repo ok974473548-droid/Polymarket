@@ -1,9 +1,9 @@
 """Режимы «с ИИ» и «без ИИ», сбор новостей и прогнозов, разбор источников."""
+
 import json
 
 import pytest
 
-from conftest import fast_params
 from whalefollow.agent import Agent
 from whalefollow.db import DB
 from whalefollow.estimator.base import FunctionEstimator, NoEstimator
@@ -13,6 +13,8 @@ from whalefollow.positions import assign_entities, build_positions
 from whalefollow.scoring.scorer import run_scoring
 from whalefollow.scoring.sybil import run_antisybil
 from whalefollow.services import Services
+
+from conftest import fast_params
 from synthetic import FakeClob, FakeData, FakeGamma, SyntheticWorld, load_world
 
 GOOGLE_RSS = b"""<?xml version="1.0"?><rss><channel>
@@ -27,9 +29,18 @@ def test_keywords_and_parsers():
     items = parse_rss(GOOGLE_RSS, "Google News", "media")
     assert items[0].source == "Reuters" and items[0].title == "Fed signals December cut"
     assert items[1].source == "Google News"
-    fc = parse_manifold([{"question": "Fed cut in Dec?", "probability": 0.64, "url": "https://manifold.markets/x",
-                          "outcomeType": "BINARY", "isResolved": False},
-                         {"question": "Multi", "outcomeType": "MULTIPLE_CHOICE"}])
+    fc = parse_manifold(
+        [
+            {
+                "question": "Fed cut in Dec?",
+                "probability": 0.64,
+                "url": "https://manifold.markets/x",
+                "outcomeType": "BINARY",
+                "isResolved": False,
+            },
+            {"question": "Multi", "outcomeType": "MULTIPLE_CHOICE"},
+        ]
+    )
     assert len(fc) == 1 and fc[0].probability == 0.64
 
 
@@ -37,8 +48,10 @@ class FakeNews:
     name, source_type = "Reuters", "media"
 
     def search(self, query, since_ts):
-        return [NewsItem("Reuters", "media", since_ts + 3600, "Officials hint at the decision", "https://news.example/a"),
-                NewsItem("tg_channel", "telegram", since_ts + 7200, "Insider says YES 100%", "javascript:alert(1)")]
+        return [
+            NewsItem("Reuters", "media", since_ts + 3600, "Officials hint at the decision", "https://news.example/a"),
+            NewsItem("tg_channel", "telegram", since_ts + 7200, "Insider says YES 100%", "javascript:alert(1)"),
+        ]
 
 
 class FakeForecasts:
@@ -64,13 +77,27 @@ def env():
     run_antisybil(db, params)
     assign_entities(db)
     scores = run_scoring(db, params, now=world.now)
-    agent = Agent(db, params, FakeData(world), FakeClob(world), FakeGamma(world), estimator=NoEstimator(),
-                  sources=[FakeNews()], forecast_sources=[FakeForecasts()], clock=lambda: world.now)
+    agent = Agent(
+        db,
+        params,
+        FakeData(world),
+        FakeClob(world),
+        FakeGamma(world),
+        estimator=NoEstimator(),
+        sources=[FakeNews()],
+        forecast_sources=[FakeForecasts()],
+        clock=lambda: world.now,
+    )
     agent.run_once()
     whale = cat = None
     for e in scores[scores.status == "approved"].sort_values("score", ascending=False)["entity_id"]:
-        cats = [r["category"] for r in db.query("SELECT category FROM wallet_category_scores WHERE entity_id=? AND "
-                                                "status='approved'", (e,)) if r["category"] in ("economics", "politics", "sports", "tech")]
+        cats = [
+            r["category"]
+            for r in db.query(
+                "SELECT category FROM wallet_category_scores WHERE entity_id=? AND status='approved'", (e,)
+            )
+            if r["category"] in ("economics", "politics", "sports", "tech")
+        ]
         if cats:
             whale, cat = e, cats[0]
             break
@@ -80,7 +107,9 @@ def env():
 
 def _signal(env, side="yes", price=0.55):
     world, db, agent = env["world"], env["db"], env["agent"]
-    m = world.add_live_market(category=env["cat"], pi=0.75 if side == "yes" else 0.25, price=price if side == "yes" else 1 - price)
+    m = world.add_live_market(
+        category=env["cat"], pi=0.75 if side == "yes" else 0.25, price=price if side == "yes" else 1 - price
+    )
     mrow, toks, _ = parse_market(world.gamma_market(m))
     db.upsert("markets", mrow, ["market_id"])
     db.upsert_many("tokens", toks, ["token_id"])
@@ -91,7 +120,7 @@ def _signal(env, side="yes", price=0.55):
 
 
 def test_manual_mode_collects_data_and_waits_for_user(env):
-    env["db"].set_setting("require_confirmation", False)      # даже при автопокупке без ИИ решает пользователь
+    env["db"].set_setting("require_confirmation", False)  # даже при автопокупке без ИИ решает пользователь
     assert env["svc"].status()["ai"] == {"selected": "ai", "available": False, "effective": "manual"}
     sig, _ = _signal(env)
     assert sig["status"] == "pending"
@@ -101,7 +130,9 @@ def test_manual_mode_collects_data_and_waits_for_user(env):
     assert len(d["news"]) == 2 and d["forecasts"][0]["probability_pct"] == 68
     assert d["prices"]["whale_cents"] and d["whale_stats"]["events"]
     by_src = {n["source"]: n for n in d["news"]}
-    assert by_src["Reuters"]["reliable"] and not by_src["tg_channel"]["reliable"]   # Telegram без истории — непроверенный
+    assert (
+        by_src["Reuters"]["reliable"] and not by_src["tg_channel"]["reliable"]
+    )  # Telegram без истории — непроверенный
 
 
 def test_ai_mode_with_estimator(env):
@@ -116,17 +147,31 @@ def test_ai_mode_with_estimator(env):
 def test_ai_estimate_flipped_for_no_token(env):
     sig, m = _signal(env, side="no")
     dec = env["db"].one("SELECT q_llm FROM decisions WHERE signal_id=?", (sig["signal_id"],))
-    assert dec["q_llm"] == pytest.approx(0.28)                # оценщик даёт «Да» 0.72 → для «Нет» 0.28
-    sig2 = env["agent"].create_signal({"ts": env["world"].now, "wallet": "w", "trade_id": "x", "token_id": m.no_token,
-                                       "market_id": m.market_id, "price": 0.45, "size_usd": 100}, env["whale"])
-    est = env["agent"]._estimate(sig2, {"question": "q"}, 0.45, env["world"].now, {"items": [], "forecasts": [], "flags": {}})
-    assert est.q == pytest.approx(0.28)                        # из кэша — тоже пересчёт для «Нет»
+    assert dec["q_llm"] == pytest.approx(0.28)  # оценщик даёт «Да» 0.72 → для «Нет» 0.28
+    sig2 = env["agent"].create_signal(
+        {
+            "ts": env["world"].now,
+            "wallet": "w",
+            "trade_id": "x",
+            "token_id": m.no_token,
+            "market_id": m.market_id,
+            "price": 0.45,
+            "size_usd": 100,
+        },
+        env["whale"],
+    )
+    est = env["agent"]._estimate(
+        sig2, {"question": "q"}, 0.45, env["world"].now, {"items": [], "forecasts": [], "flags": {}}
+    )
+    assert est.q == pytest.approx(0.28)  # из кэша — тоже пересчёт для «Нет»
 
 
 def test_ai_failure_falls_back_to_manual(env):
     env["agent"].estimator = Boom()
     sig, _ = _signal(env)
-    det = json.loads(env["db"].one("SELECT reasons FROM decisions WHERE signal_id=?", (sig["signal_id"],))["reasons"])["details"]
+    det = json.loads(env["db"].one("SELECT reasons FROM decisions WHERE signal_id=?", (sig["signal_id"],))["reasons"])[
+        "details"
+    ]
     assert sig["status"] in ("pending", "skipped") and det["ai_failed"] and det["ai_mode"] == "manual"
     assert any(n["kind"] == "ai" for n in env["db"].query("SELECT kind FROM notifications"))
 
@@ -147,4 +192,4 @@ def test_demo_world_reload_on_same_db():
     w1.add_live_market()
     m = list(w1.markets.values())[-1]
     db.upsert_many("tokens", parse_market(w1.gamma_market(m))[1], ["token_id"])
-    load_world(db, SyntheticWorld(seed=2, n_events=60, n_random=5))   # раньше падало с KeyError
+    load_world(db, SyntheticWorld(seed=2, n_events=60, n_random=5))  # раньше падало с KeyError

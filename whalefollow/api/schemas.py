@@ -4,6 +4,7 @@
 проверяют смысл (например, «нужен entity_id») и отвечают понятной ошибкой 400.
 Модели ответов описывают главные поля экранов; остальные поля проходят как есть (extra="allow").
 """
+
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -66,6 +67,7 @@ class TuneIn(_In):
 
 class SettingsIn(BaseModel):
     """Любые поля экрана «Настройки»; проверяет их сервис и возвращает ошибки по полям."""
+
     model_config = ConfigDict(extra="allow")
 
 

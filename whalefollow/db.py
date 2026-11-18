@@ -3,6 +3,7 @@
 URL: "sqlite:///path/to.db", "sqlite://:memory:" или "postgresql://user:pass@host/db".
 SQL в коде пишется с плейсхолдером "?" — для PostgreSQL он переводится в "%s".
 """
+
 from __future__ import annotations
 
 import json
@@ -11,9 +12,9 @@ import sqlite3
 import threading
 import time
 import uuid
+from collections.abc import Iterable, Sequence
 from contextlib import contextmanager
-from importlib import resources
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 
 def new_id(prefix: str = "") -> str:
@@ -25,10 +26,10 @@ def now_ts() -> int:
 
 
 SQLITE_PRAGMAS = (
-    "PRAGMA synchronous=NORMAL",      # в режиме WAL безопасно и в разы быстрее записи по одной строке
+    "PRAGMA synchronous=NORMAL",  # в режиме WAL безопасно и в разы быстрее записи по одной строке
     "PRAGMA busy_timeout=60000",
     "PRAGMA temp_store=MEMORY",
-    "PRAGMA cache_size=-65536",       # 64 МБ кэша страниц на соединение
+    "PRAGMA cache_size=-65536",  # 64 МБ кэша страниц на соединение
     "PRAGMA mmap_size=268435456",
 )
 
@@ -40,14 +41,15 @@ class DB:
 
     def __init__(self, url: str | None = None):
         self.url = url or os.environ.get("WF_DB_URL", "sqlite:///whalefollow.db")
-        self._lock = threading.RLock()     # замок записи (и всех операций для общего соединения)
+        self._lock = threading.RLock()  # замок записи (и всех операций для общего соединения)
         self._local = threading.local()
         self._shared = None
         self._shared_depth = 0
-        self.listeners: list = []           # подписчики на уведомления (Telegram и т.п.)
+        self.listeners: list = []  # подписчики на уведомления (Telegram и т.п.)
         if self.url.startswith("postgres"):
-            import psycopg  # type: ignore  # noqa: устанавливается extras [postgres]
+            import psycopg  # type: ignore  # устанавливается extras [postgres]
             from psycopg.rows import dict_row  # type: ignore
+
             self.kind = "pg"
             self._shared = psycopg.connect(self.url, row_factory=dict_row, autocommit=True)
         else:
@@ -140,6 +142,7 @@ class DB:
     def frame(self, sql: str, params: Sequence[Any] = ()):
         """Результат запроса сразу в pandas (в разы быстрее, чем через список словарей)."""
         import pandas as pd
+
         if self.kind == "sqlite":
             with self._read() as conn:
                 return pd.read_sql_query(sql, conn, params=tuple(params))
@@ -179,48 +182,33 @@ class DB:
         finally:
             self._tx_depth -= 1
 
-    # колонки, добавленные после первых версий: в существующую базу они дописываются при запуске
-    MIGRATIONS = {
-        "trades": {"source": "TEXT"},                 # NULL — сделка; split | merge — операция из журнала кошелька
-        "markets": {"fee_rate": "REAL",               # ставка комиссии тейкера: fee = shares × rate × p × (1−p)
-                    "url": "TEXT"},                   # страница события на polymarket.com
-        "signals": {"detected_ts": "INTEGER", "info": "TEXT"},
-    }
-
     def _columns(self, table: str) -> set[str]:
         if self.kind == "sqlite":
             return {r["name"] for r in self.query(f"PRAGMA table_info({table})")}
-        return {r["column_name"] for r in self.query(
-            "SELECT column_name FROM information_schema.columns WHERE table_name=?", (table,))}
+        return {
+            r["column_name"]
+            for r in self.query("SELECT column_name FROM information_schema.columns WHERE table_name=?", (table,))
+        }
 
-    def init_schema(self) -> None:
-        sql = resources.files("whalefollow").joinpath("schema.sql").read_text(encoding="utf-8")
-        statements = []
-        for st in (s.strip() for s in sql.split(";")):
-            body = "\n".join(ln for ln in st.splitlines() if not ln.strip().startswith("--")).strip()
-            if body:
-                statements.append(body)
-        tables = [b for b in statements if not b.upper().startswith("CREATE INDEX")]
-        indexes = [b for b in statements if b.upper().startswith("CREATE INDEX")]
-        with self._lock:
-            for b in tables:
-                self.conn.execute(b)
-            for table, cols in self.MIGRATIONS.items():
-                have = self._columns(table)
-                for col, typ in cols.items():
-                    if col not in have:
-                        self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
-            for b in indexes:                          # индексы — после миграций (могут ссылаться на новые колонки)
-                self.conn.execute(b)
-            if self.kind == "sqlite":
-                self.conn.commit()
+    def init_schema(self) -> str:
+        """Создаёт или обновляет схему миграциями Alembic; возвращает версию схемы."""
+        from .migrations import upgrade
+
+        return upgrade(self)
+
+    def schema_version(self) -> str | None:
+        from .migrations import current
+
+        return current(self)
 
     def upsert(self, table: str, row: dict, keys: Sequence[str]) -> None:
         cols = list(row)
         placeholders = ",".join("?" for _ in cols)
         updates = ",".join(f"{c}=excluded.{c}" for c in cols if c not in keys) or f"{keys[0]}=excluded.{keys[0]}"
-        sql = (f"INSERT INTO {table} ({','.join(cols)}) VALUES ({placeholders}) "
-               f"ON CONFLICT ({','.join(keys)}) DO UPDATE SET {updates}")
+        sql = (
+            f"INSERT INTO {table} ({','.join(cols)}) VALUES ({placeholders}) "
+            f"ON CONFLICT ({','.join(keys)}) DO UPDATE SET {updates}"
+        )
         self.execute(sql, [row[c] for c in cols])
 
     def upsert_many(self, table: str, rows: list[dict], keys: Sequence[str]) -> int:
@@ -229,8 +217,10 @@ class DB:
         cols = list(rows[0])
         placeholders = ",".join("?" for _ in cols)
         updates = ",".join(f"{c}=excluded.{c}" for c in cols if c not in keys) or f"{keys[0]}=excluded.{keys[0]}"
-        sql = (f"INSERT INTO {table} ({','.join(cols)}) VALUES ({placeholders}) "
-               f"ON CONFLICT ({','.join(keys)}) DO UPDATE SET {updates}")
+        sql = (
+            f"INSERT INTO {table} ({','.join(cols)}) VALUES ({placeholders}) "
+            f"ON CONFLICT ({','.join(keys)}) DO UPDATE SET {updates}"
+        )
         return self.executemany(sql, ([r[c] for c in cols] for r in rows))
 
     def upsert_df(self, table: str, df, keys: Sequence[str]) -> int:
@@ -240,8 +230,10 @@ class DB:
         cols = list(df.columns)
         placeholders = ",".join("?" for _ in cols)
         updates = ",".join(f"{c}=excluded.{c}" for c in cols if c not in keys) or f"{keys[0]}=excluded.{keys[0]}"
-        sql = (f"INSERT INTO {table} ({','.join(cols)}) VALUES ({placeholders}) "
-               f"ON CONFLICT ({','.join(keys)}) DO UPDATE SET {updates}")
+        sql = (
+            f"INSERT INTO {table} ({','.join(cols)}) VALUES ({placeholders}) "
+            f"ON CONFLICT ({','.join(keys)}) DO UPDATE SET {updates}"
+        )
         obj = df.astype(object).where(df.notna(), None)
         return self.executemany(sql, obj.itertuples(index=False, name=None))
 
@@ -285,8 +277,15 @@ class DB:
     @contextmanager
     def job(self, name: str):
         """Журнал запусков задач (job_runs)."""
-        run = {"run_id": new_id("job_"), "job": name, "started_at": now_ts(),
-               "finished_at": None, "status": "running", "n_rows": 0, "error": None}
+        run = {
+            "run_id": new_id("job_"),
+            "job": name,
+            "started_at": now_ts(),
+            "finished_at": None,
+            "status": "running",
+            "n_rows": 0,
+            "error": None,
+        }
         self.upsert("job_runs", run, ["run_id"])
         counter = {"rows": 0}
         try:
@@ -299,10 +298,18 @@ class DB:
             self.upsert("job_runs", run, ["run_id"])
 
     def notify(self, kind: str, title: str, body: str = "", ref: str = "", ts: int | None = None) -> None:
-        row = {"notif_id": new_id("n_"), "ts": ts or now_ts(), "kind": kind,
-               "title": title, "body": body, "ref": ref, "is_read": 0}
+        row = {
+            "notif_id": new_id("n_"),
+            "ts": ts or now_ts(),
+            "kind": kind,
+            "title": title,
+            "body": body,
+            "ref": ref,
+            "is_read": 0,
+        }
         self.upsert("notifications", row, ["notif_id"])
         from .events import bus
+
         bus.publish("notification", about=kind)
         for fn in self.listeners:
             try:

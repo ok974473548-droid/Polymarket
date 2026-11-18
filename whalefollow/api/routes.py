@@ -36,6 +36,7 @@ GET  /api/trial                       прогресс пробного режи
 Обработчики синхронные: FastAPI выполняет их в пуле потоков, долгий запрос не держит остальные.
 Ответ собирается сразу в JSON (без промежуточного обхода jsonable_encoder) — см. `json_response`.
 """
+
 from __future__ import annotations
 
 import gzip
@@ -48,7 +49,7 @@ from fastapi.responses import Response
 from ..services import Services
 from . import schemas as S
 
-GZIP_MIN = 1024                                       # меньшие ответы не сжимаем: выигрыша нет
+GZIP_MIN = 1024  # меньшие ответы не сжимаем: выигрыша нет
 JSON_CTYPE = "application/json; charset=utf-8"
 
 
@@ -157,7 +158,7 @@ def build_router(svc: Services) -> APIRouter:
     def check(request: Request, body: S.CheckIn | None = None) -> Response:
         if not body or not body.address:
             raise HttpError(400, "Нужен адрес кошелька или ссылка")
-        if body.wait:                                  # синхронно (скрипты, тесты)
+        if body.wait:  # синхронно (скрипты, тесты)
             return J(request, svc.check_wallet(body.address))
         return J(request, svc.start_check(body.address))
 
@@ -172,8 +173,9 @@ def build_router(svc: Services) -> APIRouter:
         return J(request, svc.set_whale(body.entity_id, mode=body.mode))
 
     @r.get("/whales/{entity_id}/simulate", tags=["Киты"])
-    def simulate(request: Request, entity_id: str, days: str | None = None, start: str | None = None,
-                 end: str | None = None) -> Response:
+    def simulate(
+        request: Request, entity_id: str, days: str | None = None, start: str | None = None, end: str | None = None
+    ) -> Response:
         return J(request, svc.simulate(entity_id, _int(days) or 90, _int(start), _int(end)))
 
     @r.get("/whales/{entity_id}", tags=["Киты"])
@@ -206,8 +208,13 @@ def build_router(svc: Services) -> APIRouter:
         return J(request, _need(svc.market_panel(token_id)))
 
     @r.get("/leaderboard", responses=_doc(S.ItemsOut), tags=["Игроки"])
-    def leaderboard(request: Request, category: str = "overall", period: str = "month", order: str = "pnl",
-                    offset: str | None = None) -> Response:
+    def leaderboard(
+        request: Request,
+        category: str = "overall",
+        period: str = "month",
+        order: str = "pnl",
+        offset: str | None = None,
+    ) -> Response:
         return J(request, svc.leaderboard(category, period, order, _int(offset) or 0))
 
     # ---------------------------------------------------------------- итоги, настройки, служебное

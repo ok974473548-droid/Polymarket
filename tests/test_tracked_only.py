@@ -1,11 +1,13 @@
 """Сбор данных только по китам из списка пользователя."""
-from conftest import fast_params
-from synthetic import FakeClob, FakeData, FakeGamma, SyntheticWorld, load_world
+
 from whalefollow import tracked
 from whalefollow.agent import Agent
 from whalefollow.db import DB
 from whalefollow.scheduler import Scheduler
 from whalefollow.services import Services
+
+from conftest import fast_params
+from synthetic import FakeClob, FakeData, FakeGamma, SyntheticWorld, load_world
 
 
 class CountingData(FakeData):
@@ -55,7 +57,7 @@ def test_nothing_collected_without_whales():
     w, db, data, gamma, clob, agent, sch = _setup()
     for g in ("fast", "books", "slow", "heavy"):
         sch.run_due(g)
-    assert data.users == [] and data.feed_calls == 0                  # ни ленты, ни чужих кошельков
+    assert data.users == [] and data.feed_calls == 0  # ни ленты, ни чужих кошельков
     assert gamma.catalog_calls == 0 and clob.price_tokens == []
     assert db.scalar("SELECT COUNT(*) AS n FROM trades") == 0
     st = Services(db, fast_params(), clock=lambda: w.now).status()["bootstrap"]
@@ -66,17 +68,22 @@ def test_only_added_whale_is_collected():
     w, db, data, gamma, clob, agent, sch = _setup()
     whale = next(x for x, r in w.roles.items() if r == "skilled")
     other = next(x for x, r in w.roles.items() if r == "random")
-    db.upsert("watchlist", {"entity_id": whale, "mode": "watch", "added_by": "user", "added_ts": 1,
-                            "categories_off": "[]"}, ["entity_id"])
+    db.upsert(
+        "watchlist",
+        {"entity_id": whale, "mode": "watch", "added_by": "user", "added_ts": 1, "categories_off": "[]"},
+        ["entity_id"],
+    )
     for g in ("fast", "slow", "heavy"):
         sch.run_due(g)
-    assert set(data.users) == {whale} and data.feed_calls == 0        # опрашивается только этот кошелёк
+    assert set(data.users) == {whale} and data.feed_calls == 0  # опрашивается только этот кошелёк
     assert {r["wallet"] for r in db.query("SELECT DISTINCT wallet FROM trades")} == {whale}
     toks = {r["token_id"] for r in db.query("SELECT DISTINCT token_id FROM trades")}
-    assert clob.price_tokens and set(clob.price_tokens) <= toks       # цены — только по рынкам кита
+    assert clob.price_tokens and set(clob.price_tokens) <= toks  # цены — только по рынкам кита
     assert db.one("SELECT 1 AS x FROM wallet_scores WHERE entity_id=?", (whale,))
     assert not db.one("SELECT 1 AS x FROM wallet_scores WHERE entity_id=?", (other,))
-    assert {r["entity_id"] for r in db.query("SELECT entity_id FROM watchlist")} == {whale}   # система никого не добавила
+    assert {r["entity_id"] for r in db.query("SELECT entity_id FROM watchlist")} == {
+        whale
+    }  # система никого не добавила
 
 
 def test_purge_removes_other_wallets_only():
@@ -85,32 +92,72 @@ def test_purge_removes_other_wallets_only():
     db.init_schema()
     load_world(db, w)
     whale = next(x for x, r in w.roles.items() if r == "skilled")
-    db.upsert("watchlist", {"entity_id": whale, "mode": "copy", "added_by": "user", "added_ts": 1,
-                            "categories_off": "[]"}, ["entity_id"])
+    db.upsert(
+        "watchlist",
+        {"entity_id": whale, "mode": "copy", "added_by": "user", "added_ts": 1, "categories_off": "[]"},
+        ["entity_id"],
+    )
     # наша виртуальная ставка в рынке, где кита нет: её цены должны сохраниться
     tok = db.scalar("SELECT token_id FROM trades WHERE wallet<>? LIMIT 1", (whale,))
-    db.upsert("orders", {"order_id": "o1", "signal_id": "s1", "ts": 1, "token_id": tok, "side": "BUY",
-                         "limit_price": 0.5, "size_usd": 10, "status": "filled", "is_paper": 1}, ["order_id"])
-    db.upsert("fills", {"fill_id": "f1", "order_id": "o1", "ts": 1, "token_id": tok, "side": "BUY", "price": 0.5,
-                        "size_shares": 20, "fee_usd": 0}, ["fill_id"])
-    db.insert_ignore("price_history", [{"token_id": tok, "ts": 5, "price": 0.5},
-                                       {"token_id": "orphan", "ts": 5, "price": 0.5}])
+    db.upsert(
+        "orders",
+        {
+            "order_id": "o1",
+            "signal_id": "s1",
+            "ts": 1,
+            "token_id": tok,
+            "side": "BUY",
+            "limit_price": 0.5,
+            "size_usd": 10,
+            "status": "filled",
+            "is_paper": 1,
+        },
+        ["order_id"],
+    )
+    db.upsert(
+        "fills",
+        {
+            "fill_id": "f1",
+            "order_id": "o1",
+            "ts": 1,
+            "token_id": tok,
+            "side": "BUY",
+            "price": 0.5,
+            "size_shares": 20,
+            "fee_usd": 0,
+        },
+        ["fill_id"],
+    )
+    db.insert_ignore(
+        "price_history", [{"token_id": tok, "ts": 5, "price": 0.5}, {"token_id": "orphan", "ts": 5, "price": 0.5}]
+    )
     svc = Services(db, fast_params())
     before = svc.data_usage()
     assert before["trades_other"] > 0 and before["tracked_wallets"] == 1
     res = svc.purge_untracked()
     assert res["removed"]["trades"] == before["trades_other"]
     assert {r["wallet"] for r in db.query("SELECT DISTINCT wallet FROM trades")} == {whale}
-    assert db.one("SELECT 1 AS x FROM price_history WHERE token_id=?", (tok,))       # наша ставка — цены на месте
+    assert db.one("SELECT 1 AS x FROM price_history WHERE token_id=?", (tok,))  # наша ставка — цены на месте
     assert not db.one("SELECT 1 AS x FROM price_history WHERE token_id='orphan'")
     assert svc.data_usage()["trades_other"] == 0
 
 
 def test_merged_wallets_move_to_one_watchlist_row(db):
     for wal, mode in (("0xa", "watch"), ("0xb", "copy")):
-        db.upsert("watchlist", {"entity_id": wal, "mode": mode, "added_by": "user", "added_ts": 5,
-                                "categories_off": '["sports"]' if wal == "0xa" else "[]"}, ["entity_id"])
-        db.upsert("entity_wallets", {"wallet": wal, "entity_id": "E-1", "link_reason": "x", "confidence": 1}, ["wallet"])
+        db.upsert(
+            "watchlist",
+            {
+                "entity_id": wal,
+                "mode": mode,
+                "added_by": "user",
+                "added_ts": 5,
+                "categories_off": '["sports"]' if wal == "0xa" else "[]",
+            },
+            ["entity_id"],
+        )
+        db.upsert(
+            "entity_wallets", {"wallet": wal, "entity_id": "E-1", "link_reason": "x", "confidence": 1}, ["wallet"]
+        )
     assert tracked.migrate_watchlist(db) == 2
     rows = db.query("SELECT * FROM watchlist")
     assert len(rows) == 1 and rows[0]["entity_id"] == "E-1" and rows[0]["mode"] == "copy"

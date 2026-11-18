@@ -11,6 +11,7 @@ Streams      — запускает оба потока, держит списк
 Если поток недоступен (сеть, прокси без WebSocket), всё работает как раньше — опросом; на экране
 «Диагностика» видно состояние каждого потока.
 """
+
 from __future__ import annotations
 
 import json
@@ -18,7 +19,7 @@ import logging
 import queue
 import threading
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from .ws import WSClient
 
@@ -40,21 +41,27 @@ class LiveBooks:
     соединении и связь жива — иначе None, и агент берёт стакан обычным запросом."""
 
     MAX_ASSETS = 500
-    STALE_S = 25.0                 # без входящих кадров дольше (PING каждые 10 с) — поток считаем неживым
+    STALE_S = 25.0  # без входящих кадров дольше (PING каждые 10 с) — поток считаем неживым
 
     def __init__(self, url: str = MARKET_URL, client_cls=WSClient, ping_interval: float = 10.0):
         self.url, self._cls, self.ping_interval = url, client_cls, ping_interval
         self._client: WSClient | None = None
         self.lock = threading.Lock()
         self.books: dict[str, dict] = {}
-        self.wanted: dict[str, float] = {}                      # токен → когда понадобился (вытеснение старых)
+        self.wanted: dict[str, float] = {}  # токен → когда понадобился (вытеснение старых)
         self.stats = {"updates": 0, "hits": 0, "misses": 0}
 
     # ---------- подписки
     def _ensure_client(self) -> None:
         if self._client is None:
-            self._client = self._cls(self.url, self._on_message, on_open=self._on_open, name="books",
-                                     ping_text="PING", ping_interval=self.ping_interval).start()
+            self._client = self._cls(
+                self.url,
+                self._on_message,
+                on_open=self._on_open,
+                name="books",
+                ping_text="PING",
+                ping_interval=self.ping_interval,
+            ).start()
 
     def want(self, tokens) -> None:
         """Добавить токены к подписке (старые вытесняются, если их больше MAX_ASSETS)."""
@@ -95,7 +102,7 @@ class LiveBooks:
     def _on_open(self, client: WSClient) -> None:
         with self.lock:
             ids = list(self.wanted)
-            self.books.clear()                                   # после переподключения ждём свежие снимки
+            self.books.clear()  # после переподключения ждём свежие снимки
         if ids:
             client.send({"assets_ids": ids, "type": "market", "custom_feature_enabled": True})
 
@@ -118,10 +125,20 @@ class LiveBooks:
                 aid = str(ev.get("asset_id") or "")
                 if not aid:
                     return
-                bids = {p: s for p, s in ((_f(x.get("price")), _f(x.get("size")))
-                                          for x in (ev.get("bids") or ev.get("buys") or [])) if p is not None and s}
-                asks = {p: s for p, s in ((_f(x.get("price")), _f(x.get("size")))
-                                          for x in (ev.get("asks") or ev.get("sells") or [])) if p is not None and s}
+                bids = {
+                    p: s
+                    for p, s in (
+                        (_f(x.get("price")), _f(x.get("size"))) for x in (ev.get("bids") or ev.get("buys") or [])
+                    )
+                    if p is not None and s
+                }
+                asks = {
+                    p: s
+                    for p, s in (
+                        (_f(x.get("price")), _f(x.get("size"))) for x in (ev.get("asks") or ev.get("sells") or [])
+                    )
+                    if p is not None and s
+                }
                 old = self.books.get(aid) or {}
                 self.books[aid] = {"bids": bids, "asks": asks, "gen": gen, "ts": now, "last": old.get("last")}
             elif et == "price_change":
@@ -168,11 +185,20 @@ class LiveBooks:
         st = dict(c.stats) if c else {}
         with self.lock:
             n_books = len(self.books)
-        return {"started": c is not None, "connected": bool(c and c.connected), "live": self.live(),
-                "subscribed": len(self.wanted), "books": n_books, "updates": self.stats["updates"],
-                "hits": self.stats["hits"], "misses": self.stats["misses"], "connects": st.get("connects", 0),
-                "connect_ms": st.get("connect_ms"), "last_msg_age_s": _age(st.get("last_msg_ts")),
-                "error": st.get("last_error")}
+        return {
+            "started": c is not None,
+            "connected": bool(c and c.connected),
+            "live": self.live(),
+            "subscribed": len(self.wanted),
+            "books": n_books,
+            "updates": self.stats["updates"],
+            "hits": self.stats["hits"],
+            "misses": self.stats["misses"],
+            "connects": st.get("connects", 0),
+            "connect_ms": st.get("connect_ms"),
+            "last_msg_age_s": _age(st.get("last_msg_ts")),
+            "error": st.get("last_error"),
+        }
 
     def stop(self) -> None:
         if self._client:
@@ -190,13 +216,22 @@ def to_trade_row(p: dict) -> dict | None:
     if not wallet or not asset or side not in ("BUY", "SELL") or price is None or not size:
         return None
     ts = int(_f(p.get("timestamp")) or time.time())
-    if ts > 10 ** 11:                                   # миллисекунды → секунды
+    if ts > 10**11:  # миллисекунды → секунды
         ts //= 1000
     # числа передаются как пришли: parse_trade сам приведёт их к float, а повтор той же сделки из опроса
     # (с другой записью чисел) отсекается по существу сделки — pipeline.natural_key
-    return {"transaction_hash": p.get("transactionHash"), "proxy_wallet": str(wallet).lower(), "token_id": str(asset),
-            "side": side, "size": p.get("size"), "price": p.get("price"), "timestamp": ts,
-            "condition_id": p.get("conditionId"), "title": p.get("title"), "outcome": p.get("outcome")}
+    return {
+        "transaction_hash": p.get("transactionHash"),
+        "proxy_wallet": str(wallet).lower(),
+        "token_id": str(asset),
+        "side": side,
+        "size": p.get("size"),
+        "price": p.get("price"),
+        "timestamp": ts,
+        "condition_id": p.get("conditionId"),
+        "title": p.get("title"),
+        "outcome": p.get("outcome"),
+    }
 
 
 class TradeStream:
@@ -204,8 +239,13 @@ class TradeStream:
 
     STALE_S = 30.0
 
-    def __init__(self, on_trades: Callable[[list[dict]], None], url: str = LIVE_URL, client_cls=WSClient,
-                 ping_interval: float = 5.0):
+    def __init__(
+        self,
+        on_trades: Callable[[list[dict]], None],
+        url: str = LIVE_URL,
+        client_cls=WSClient,
+        ping_interval: float = 5.0,
+    ):
         self.on_trades, self.url, self._cls, self.ping_interval = on_trades, url, client_cls, ping_interval
         self._client: WSClient | None = None
         self.wallets: frozenset = frozenset()
@@ -213,16 +253,22 @@ class TradeStream:
 
     def set_wallets(self, wallets) -> None:
         self.wallets = frozenset(str(w).lower() for w in wallets if w)
-        if self.wallets and self._client is None:            # пока китов нет — поток не нужен
-            self._client = self._cls(self.url, self._on_message, on_open=self._on_open, name="trades",
-                                     ping_text="PING", ping_interval=self.ping_interval).start()
+        if self.wallets and self._client is None:  # пока китов нет — поток не нужен
+            self._client = self._cls(
+                self.url,
+                self._on_message,
+                on_open=self._on_open,
+                name="trades",
+                ping_text="PING",
+                ping_interval=self.ping_interval,
+            ).start()
 
     @staticmethod
     def _on_open(client: WSClient) -> None:
         client.send({"action": "subscribe", "subscriptions": [{"topic": "activity", "type": "trades"}]})
 
     def _on_message(self, text: str) -> None:
-        if not self.wallets or "proxyWallet" not in text:      # быстрый отсев без разбора JSON
+        if not self.wallets or "proxyWallet" not in text:  # быстрый отсев без разбора JSON
             return
         try:
             msg = json.loads(text)
@@ -252,11 +298,20 @@ class TradeStream:
     def status(self) -> dict:
         c = self._client
         st = dict(c.stats) if c else {}
-        return {"started": c is not None, "connected": bool(c and c.connected), "live": self.live(),
-                "wallets": len(self.wallets), "messages": st.get("messages", 0), "matched": self.stats["matched"],
-                "last_match_age_s": _age(self.stats["last_match_ts"]), "lag_s": self.stats["lag_s"],
-                "connects": st.get("connects", 0), "connect_ms": st.get("connect_ms"),
-                "last_msg_age_s": _age(st.get("last_msg_ts")), "error": st.get("last_error")}
+        return {
+            "started": c is not None,
+            "connected": bool(c and c.connected),
+            "live": self.live(),
+            "wallets": len(self.wallets),
+            "messages": st.get("messages", 0),
+            "matched": self.stats["matched"],
+            "last_match_age_s": _age(self.stats["last_match_ts"]),
+            "lag_s": self.stats["lag_s"],
+            "connects": st.get("connects", 0),
+            "connect_ms": st.get("connect_ms"),
+            "last_msg_age_s": _age(st.get("last_msg_ts")),
+            "error": st.get("last_error"),
+        }
 
     def stop(self) -> None:
         if self._client:
@@ -268,9 +323,15 @@ class Streams:
 
     REFRESH_S = 30.0
 
-    def __init__(self, db, agent=None, wallets_fn: Callable[[], list] | None = None,
-                 tokens_fn: Callable[[], list] | None = None, books: LiveBooks | None = None,
-                 trades: TradeStream | None = None):
+    def __init__(
+        self,
+        db,
+        agent=None,
+        wallets_fn: Callable[[], list] | None = None,
+        tokens_fn: Callable[[], list] | None = None,
+        books: LiveBooks | None = None,
+        trades: TradeStream | None = None,
+    ):
         self.db, self.agent = db, agent
         self.wallets_fn, self.tokens_fn = wallets_fn, tokens_fn
         self.books = books or LiveBooks()
@@ -292,7 +353,7 @@ class Streams:
         if self.tokens_fn:
             self.books.set_wanted(self.tokens_fn())
 
-    def start(self) -> "Streams":
+    def start(self) -> Streams:
         threading.Thread(target=self._worker, name="streams-worker", daemon=True).start()
         threading.Thread(target=self._refresher, name="streams-refresh", daemon=True).start()
         return self
@@ -306,7 +367,7 @@ class Streams:
         while not self._stop.is_set():
             try:
                 self.refresh()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.exception("обновление подписок потоков")
             self._stop.wait(self.REFRESH_S)
 
@@ -316,7 +377,7 @@ class Streams:
                 rows = self.q.get(timeout=1.0)
             except queue.Empty:
                 continue
-            while True:                                        # пачкой всё, что успело прийти
+            while True:  # пачкой всё, что успело прийти
                 try:
                     rows = rows + self.q.get_nowait()
                 except queue.Empty:
@@ -325,10 +386,15 @@ class Streams:
                 if self.agent is not None:
                     self.agent.process_stream_trades(rows)
                 self.processed += len(rows)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 self.errors += 1
                 log.exception("обработка сделок из потока")
 
     def status(self) -> dict:
-        return {"books": self.books.status(), "trades": self.trades.status(), "queue": self.q.qsize(),
-                "processed": self.processed, "errors": self.errors}
+        return {
+            "books": self.books.status(),
+            "trades": self.trades.status(),
+            "queue": self.q.qsize(),
+            "processed": self.processed,
+            "errors": self.errors,
+        }

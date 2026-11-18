@@ -6,6 +6,7 @@
 Маскирование кадров, сборка фрагментов и ответы на служебные ping делает библиотека.
 Колбэки вызываются в потоке чтения; исключения в них логируются и не рвут соединение.
 """
+
 from __future__ import annotations
 
 import json
@@ -23,7 +24,7 @@ from websockets.sync.client import ClientConnection, connect
 from . import __version__
 
 log = logging.getLogger(__name__)
-MAX_MESSAGE = 32 * 1024 * 1024            # снимок стакана бывает большим; без предела было раньше
+MAX_MESSAGE = 32 * 1024 * 1024  # снимок стакана бывает большим; без предела было раньше
 KEEPALIVE_TEXT = {"PING", "PONG", "ping", "pong"}
 
 
@@ -54,12 +55,17 @@ class WSConnection:
 
     def connect(self) -> None:
         try:
-            self.conn = connect(self.url, open_timeout=self.timeout, close_timeout=2,
-                                proxy=_proxy_for(self.host, self.scheme),
-                                additional_headers=self.headers or None,
-                                user_agent_header=f"whalefollow/{__version__}",
-                                ping_interval=None,          # keepalive — текстовый PING (требование Polymarket)
-                                max_size=MAX_MESSAGE, legacy=True)   # закрываем сами (close)
+            self.conn = connect(
+                self.url,
+                open_timeout=self.timeout,
+                close_timeout=2,
+                proxy=_proxy_for(self.host, self.scheme),
+                additional_headers=self.headers or None,
+                user_agent_header=f"whalefollow/{__version__}",
+                ping_interval=None,  # keepalive — текстовый PING (требование Polymarket)
+                max_size=MAX_MESSAGE,
+                legacy=True,
+            )  # закрываем сами (close)
         except (WebSocketException, OSError, TimeoutError) as exc:
             raise WSError(f"{type(exc).__name__}: {exc}") from exc
 
@@ -87,10 +93,17 @@ class WSConnection:
 class WSClient:
     """Соединение с переподключением и keepalive. on_message(text) — каждое сообщение (кроме PING/PONG)."""
 
-    def __init__(self, url: str, on_message: Callable[[str], None],
-                 on_open: Callable[[WSClient], None] | None = None,
-                 name: str = "ws", ping_text: str | None = "PING", ping_interval: float = 10.0,
-                 read_timeout: float | None = None, max_backoff: float = 30.0):
+    def __init__(
+        self,
+        url: str,
+        on_message: Callable[[str], None],
+        on_open: Callable[[WSClient], None] | None = None,
+        name: str = "ws",
+        ping_text: str | None = "PING",
+        ping_interval: float = 10.0,
+        read_timeout: float | None = None,
+        max_backoff: float = 30.0,
+    ):
         self.url, self.name = url, name
         self.on_message, self.on_open = on_message, on_open
         self.ping_text, self.ping_interval = ping_text, ping_interval
@@ -99,10 +112,17 @@ class WSClient:
         self.conn: WSConnection | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self.stats: dict[str, Any] = {"connected": False, "connects": 0, "messages": 0, "last_msg_ts": None,
-                                      "last_rx_ts": None, "last_error": None, "connected_since": None,
-                                      "connect_ms": None}
-        self.generation = 0                                        # растёт с каждым новым соединением
+        self.stats: dict[str, Any] = {
+            "connected": False,
+            "connects": 0,
+            "messages": 0,
+            "last_msg_ts": None,
+            "last_rx_ts": None,
+            "last_error": None,
+            "connected_since": None,
+            "connect_ms": None,
+        }
+        self.generation = 0  # растёт с каждым новым соединением
 
     @property
     def connected(self) -> bool:
@@ -148,13 +168,18 @@ class WSClient:
                 self.conn = WSConnection(self.url)
                 self.conn.connect()
                 self.generation += 1
-                self.stats.update(connected=True, connects=self.stats["connects"] + 1, connected_since=time.time(),
-                                  connect_ms=int((time.time() - t0) * 1000), last_error=None)
+                self.stats.update(
+                    connected=True,
+                    connects=self.stats["connects"] + 1,
+                    connected_since=time.time(),
+                    connect_ms=int((time.time() - t0) * 1000),
+                    last_error=None,
+                )
                 backoff = 1.0
                 if self.on_open:
                     self.on_open(self)
                 self._read_loop()
-            except Exception as exc:  # noqa: BLE001 — сеть: переподключаемся
+            except Exception as exc:
                 if not self._stop.is_set():
                     self.stats["last_error"] = f"{type(exc).__name__}: {exc}"[:200]
                     log.info("WebSocket %s: %s", self.name, self.stats["last_error"])
@@ -169,8 +194,8 @@ class WSClient:
 
     def _read_loop(self) -> None:
         while not self._stop.is_set() and self.conn is not None:
-            text = self.conn.recv(timeout=self.read_timeout)      # тишина дольше read_timeout — обрыв
-            self.stats["last_rx_ts"] = time.time()                # любое сообщение, включая PONG: связь жива
+            text = self.conn.recv(timeout=self.read_timeout)  # тишина дольше read_timeout — обрыв
+            self.stats["last_rx_ts"] = time.time()  # любое сообщение, включая PONG: связь жива
             if text in KEEPALIVE_TEXT:
                 if text in ("PING", "ping"):
                     self.send("PONG" if text == "PING" else "pong")
@@ -179,5 +204,5 @@ class WSClient:
             self.stats["last_msg_ts"] = time.time()
             try:
                 self.on_message(text)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.exception("обработка сообщения %s", self.name)

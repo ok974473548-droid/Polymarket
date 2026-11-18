@@ -1,4 +1,5 @@
 """Работа со стаканом: исполнение объёма проходом по уровням (VWAP), глубина."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

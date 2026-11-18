@@ -1,4 +1,5 @@
 """Калибровка оценок (ТЗ 9.5): Brier, изотоническая регрессия, допуск LLM к решению."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -35,7 +36,7 @@ class Calibrator:
         self.brier_llm_common = float("nan")
         self.n_common = 0
 
-    def fit(self, q, y, p_market=None) -> "Calibrator":
+    def fit(self, q, y, p_market=None) -> Calibrator:
         q, y = np.asarray(q, float), np.asarray(y, float)
         self.n = len(q)
         if self.n >= 20:
@@ -58,8 +59,7 @@ class Calibrator:
 
     def trusted(self, min_n: int) -> bool:
         """LLM может влиять на вероятность, только если она лучше рынка (Brier) на ≥ min_n рынках."""
-        return (self.n_common >= min_n and np.isfinite(self.brier_market)
-                and self.brier_llm_common < self.brier_market)
+        return self.n_common >= min_n and np.isfinite(self.brier_market) and self.brier_llm_common < self.brier_market
 
 
 def load_calibrator(db: DB) -> Calibrator:
@@ -74,16 +74,20 @@ def load_calibrator(db: DB) -> Calibrator:
 
 def record_outcomes(db: DB) -> int:
     """Дописывает исходы в calibration_log для разрешённых рынков."""
-    rows = db.query(
-        "SELECT c.est_id, c.market_id, c.q, c.p_market FROM calibration_log c WHERE c.y IS NULL")
+    rows = db.query("SELECT c.est_id, c.market_id, c.q, c.p_market FROM calibration_log c WHERE c.y IS NULL")
     n = 0
     for r in rows:
-        tok = db.one("SELECT payout FROM tokens WHERE market_id=? AND outcome_label IN ('Yes','YES','yes') "
-                     "AND payout IS NOT NULL", (r["market_id"],))
+        tok = db.one(
+            "SELECT payout FROM tokens WHERE market_id=? AND outcome_label IN ('Yes','YES','yes') "
+            "AND payout IS NOT NULL",
+            (r["market_id"],),
+        )
         if tok is None or tok["payout"] not in (0, 1, 0.0, 1.0):
-            continue                     # «50 на 50» — не исход «да/нет», в калибровку не идёт
+            continue  # «50 на 50» — не исход «да/нет», в калибровку не идёт
         y = int(tok["payout"] >= 0.5)
-        db.execute("UPDATE calibration_log SET y=?, brier=?, brier_market=? WHERE est_id=?",
-                   (y, (r["q"] - y) ** 2, None if r["p_market"] is None else (r["p_market"] - y) ** 2, r["est_id"]))
+        db.execute(
+            "UPDATE calibration_log SET y=?, brier=?, brier_market=? WHERE est_id=?",
+            (y, (r["q"] - y) ** 2, None if r["p_market"] is None else (r["p_market"] - y) ** 2, r["est_id"]),
+        )
         n += 1
     return n

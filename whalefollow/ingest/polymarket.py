@@ -8,18 +8,20 @@
 фиксированных примерах. Поля сверены с docs.polymarket.com (ноябрь 2026);
 при изменении API правится только этот модуль.
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
 import logging
 import time
-from datetime import datetime, timezone
-from typing import Any, Iterator
+from collections.abc import Iterator
+from datetime import UTC, datetime
+from typing import Any
 
 from .. import fees, net
 from ..config import Endpoints
-from ..net import ApiError  # noqa: F401 — прежнее место импорта
+from ..net import ApiError
 from ..util import RateLimiter, pmap
 
 log = logging.getLogger(__name__)
@@ -29,8 +31,7 @@ class _Http:
     """GET с повторами (429/5xx и обрывы, с учётом Retry-After), общим пулом соединений httpx (HTTP/2)
     и ограничением частоты «ведром жетонов». session — любой объект с методом get (в тестах — подделка)."""
 
-    def __init__(self, base: str, timeout: float = 15.0, retries: int = 4, session: Any = None,
-                 rps: float = 15.0):
+    def __init__(self, base: str, timeout: float = 15.0, retries: int = 4, session: Any = None, rps: float = 15.0):
         self.base = base.rstrip("/")
         self.timeout = timeout
         self.retries = retries
@@ -39,30 +40,39 @@ class _Http:
 
     def get(self, path: str, params: dict | None = None) -> Any:
         url = f"{self.base}{path}"
-        return net.get_json(self.s, url, params=params, timeout=self.timeout, retries=self.retries,
-                            before=self.limiter.wait,
-                            on_retry=lambda err, d: log.warning("GET %s: %s, повтор через %.1f с", url, err, d))
+        return net.get_json(
+            self.s,
+            url,
+            params=params,
+            timeout=self.timeout,
+            retries=self.retries,
+            before=self.limiter.wait,
+            on_retry=lambda err, d: log.warning("GET %s: %s, повтор через %.1f с", url, err, d),
+        )
 
     async def aget(self, path: str, params: dict | None = None, session: Any = None) -> Any:
         """Асинхронный GET с теми же повторами и общим ограничителем частоты."""
         url = f"{self.base}{path}"
         if session is not None:
-            return await net.aget_json(session, url, params=params, timeout=self.timeout, retries=self.retries,
-                                       before=self.limiter.await_)
+            return await net.aget_json(
+                session, url, params=params, timeout=self.timeout, retries=self.retries, before=self.limiter.await_
+            )
         async with net.async_client() as s:
-            return await net.aget_json(s, url, params=params, timeout=self.timeout, retries=self.retries,
-                                       before=self.limiter.await_)
+            return await net.aget_json(
+                s, url, params=params, timeout=self.timeout, retries=self.retries, before=self.limiter.await_
+            )
 
     def warm(self, path: str, params: dict | None = None, timeout: float = 5.0) -> int:
         """Один лёгкий запрос без повторов: держит соединение (TLS) открытым, чтобы рабочие запросы
         не тратили время на установку связи. Возвращает время ответа в мс."""
         t0 = time.perf_counter()
         r = self.s.get(f"{self.base}{path}", params=params, timeout=timeout)
-        r.content                                                  # дочитываем — соединение вернётся в пул
+        _ = r.content  # дочитываем — соединение вернётся в пул
         return int((time.perf_counter() - t0) * 1000)
 
 
 # ---------------------------------------------------------------- разбор ответов
+
 
 def _json_list(v) -> list:
     if v is None:
@@ -82,18 +92,19 @@ def _ts(v) -> int | None:
     if isinstance(v, (int, float)):
         return int(v)
     try:
-        return int(datetime.fromisoformat(str(v).replace("Z", "+00:00")).astimezone(timezone.utc).timestamp())
+        return int(datetime.fromisoformat(str(v).replace("Z", "+00:00")).astimezone(UTC).timestamp())
     except ValueError:
         return None
 
 
-from ..categories import TAG_MAP as CATEGORY_MAP, pick as _pick_category  # noqa: E402
+from ..categories import pick as _pick_category  # noqa: E402
 
 
 def market_tags(raw: dict) -> list[str]:
     out = []
-    for tag in list(raw.get("tags") or []) + [t for ev in (raw.get("events") or []) if isinstance(ev, dict)
-                                              for t in (ev.get("tags") or [])]:
+    for tag in list(raw.get("tags") or []) + [
+        t for ev in (raw.get("events") or []) if isinstance(ev, dict) for t in (ev.get("tags") or [])
+    ]:
         if isinstance(tag, dict):
             out.append(str(tag.get("slug") or tag.get("label") or "").strip().lower().replace(" ", "-"))
     out += [str(raw.get(k) or "").strip().lower().replace(" ", "-") for k in ("category", "categorySlug")]
@@ -133,7 +144,7 @@ def parse_market(raw: dict) -> tuple[dict, list[dict], dict | None]:
     split_half = bool(closed and uma == "resolved" and len(prices) == 2 and all(abs(p - 0.5) <= 0.01 for p in prices))
     disputed = uma in ("disputed", "challenged")
     if disputed:
-        resolved = split_half = False     # исход оспорен — выплату не фиксируем, пока спор не закончится
+        resolved = split_half = False  # исход оспорен — выплату не фиксируем, пока спор не закончится
     status = "disputed" if disputed else ("resolved" if resolved or split_half else ("closed" if closed else "open"))
     category = normalize_category(raw)
     market = {
@@ -149,8 +160,11 @@ def parse_market(raw: dict) -> tuple[dict, list[dict], dict | None]:
         "neg_risk": 1 if raw.get("negRisk") else 0,
         "fee_bps": float(raw["feeBps"]) if raw.get("feeBps") not in (None, "") else None,
         "fee_rate": fees.rate_for(category, market_tags(raw)),
-        "url": (f"https://polymarket.com/event/{ev['slug']}" if ev and ev.get("slug") else
-                (f"https://polymarket.com/market/{raw['slug']}" if raw.get("slug") else None)),
+        "url": (
+            f"https://polymarket.com/event/{ev['slug']}"
+            if ev and ev.get("slug")
+            else (f"https://polymarket.com/market/{raw['slug']}" if raw.get("slug") else None)
+        ),
         "rules": raw.get("description"),
         "updated_ts": int(time.time()),
     }
@@ -161,19 +175,32 @@ def parse_market(raw: dict) -> tuple[dict, list[dict], dict | None]:
             payout = 1.0 if prices[i] >= 0.99 else 0.0
         elif split_half:
             payout = 0.5
-        tokens.append({"token_id": tid, "market_id": market_id,
-                       "outcome_label": outcomes[i] if i < len(outcomes) else str(i), "payout": payout})
+        tokens.append(
+            {
+                "token_id": tid,
+                "market_id": market_id,
+                "outcome_label": outcomes[i] if i < len(outcomes) else str(i),
+                "payout": payout,
+            }
+        )
     event = None
     if ev:
-        event = {"event_id": event_id, "title": ev.get("title"), "category": category,
-                 "start_ts": _ts(ev.get("startDate")), "end_ts": _ts(ev.get("endDate"))}
+        event = {
+            "event_id": event_id,
+            "title": ev.get("title"),
+            "category": category,
+            "start_ts": _ts(ev.get("startDate")),
+            "end_ts": _ts(ev.get("endDate")),
+        }
     return market, tokens, event
 
 
 def trade_id_for(row: dict) -> str:
     """В /v2/trades нет log_index — id строится из полей сделки (идемпотентность загрузки)."""
-    key = "|".join(str(row.get(k, "")) for k in
-                   ("transaction_hash", "proxy_wallet", "token_id", "side", "size", "price", "timestamp"))
+    key = "|".join(
+        str(row.get(k, ""))
+        for k in ("transaction_hash", "proxy_wallet", "token_id", "side", "size", "price", "timestamp")
+    )
     return hashlib.sha1(key.encode()).hexdigest()
 
 
@@ -210,16 +237,17 @@ def parse_price_history(raw: dict) -> list[tuple[int, float]]:
 
 # ---------------------------------------------------------------- клиенты
 
+
 class GammaClient:
     """Каталог рынков. Важно: без параметра closed Gamma отдаёт только ОТКРЫТЫЕ рынки,
     поэтому запросы по идентификаторам идут с closed=any (иначе закрытые рынки китов не найти).
     Лимит /markets — 300 запросов за 10 с (сверх лимита Cloudflare придерживает запросы)."""
 
-    MAX_IDS = 100            # не больше 100 идентификаторов в одном фильтре (документация Gamma)
+    MAX_IDS = 100  # не больше 100 идентификаторов в одном фильтре (документация Gamma)
 
     def __init__(self, endpoints: Endpoints | None = None, http: _Http | None = None):
         self.http = http or _Http((endpoints or Endpoints()).gamma, rps=25)
-        self._array_mode: str | None = None      # как сервер понимает список: repeat (a&a) или comma (a,b)
+        self._array_mode: str | None = None  # как сервер понимает список: repeat (a&a) или comma (a,b)
 
     def public_profile(self, address: str) -> dict | None:
         """Публичный профиль Polymarket по кошельку: имя, аватар, X, дата создания. None — профиля нет."""
@@ -232,19 +260,32 @@ class GammaClient:
 
     def search_profiles(self, q: str, limit: int = 6) -> list[dict]:
         """Поиск игроков по имени (как строка поиска на сайте)."""
-        res = self.http.get("/public-search", {"q": q, "search_profiles": "true", "limit_per_type": limit,
-                                               "events_status": "active"}) or {}
+        res = (
+            self.http.get(
+                "/public-search",
+                {"q": q, "search_profiles": "true", "limit_per_type": limit, "events_status": "active"},
+            )
+            or {}
+        )
         out = []
         for p in (res.get("profiles") or [])[:limit]:
             w = p.get("proxyWallet")
             if w:
-                out.append({"wallet": str(w).lower(), "name": p.get("name") or p.get("pseudonym"),
-                            "pseudonym": p.get("pseudonym"), "image": p.get("profileImage")})
+                out.append(
+                    {
+                        "wallet": str(w).lower(),
+                        "name": p.get("name") or p.get("pseudonym"),
+                        "pseudonym": p.get("pseudonym"),
+                        "image": p.get("profileImage"),
+                    }
+                )
         return out
 
-    def markets(self, closed: bool | None = None, page_size: int = 500, max_pages: int = 1000,
-                workers: int = 1, **filters) -> Iterator[dict]:
+    def markets(
+        self, closed: bool | None = None, page_size: int = 500, max_pages: int = 1000, workers: int = 1, **filters
+    ) -> Iterator[dict]:
         """Постраничный обход каталога. workers > 1 — страницы запрашиваются волнами параллельно."""
+
         def page(offset: int):
             params = {"limit": page_size, "offset": offset, **filters}
             if closed is not None:
@@ -254,8 +295,9 @@ class GammaClient:
         offset, pages = 0, 0
         while pages < max_pages:
             wave = [offset + i * page_size for i in range(max(1, min(workers, max_pages - pages)))]
-            results = [page(wave[0])] if len(wave) == 1 else [r for _, r, e in pmap(page, wave, len(wave))
-                                                              if not _raise(e)]
+            results = (
+                [page(wave[0])] if len(wave) == 1 else [r for _, r, e in pmap(page, wave, len(wave)) if not _raise(e)]
+            )
             for batch in results:
                 yield from batch
                 if len(batch) < page_size:
@@ -305,12 +347,20 @@ def _raise(exc):
 
 class DataClient:
     def __init__(self, endpoints: Endpoints | None = None, http: _Http | None = None):
-        self.http = http or _Http((endpoints or Endpoints()).data, rps=18)      # /trades: 200 за 10 с
+        self.http = http or _Http((endpoints or Endpoints()).data, rps=18)  # /trades: 200 за 10 с
         self.lb_version: str | None = None
 
-    def trades(self, user: str | None = None, start: int | None = None, end: int | None = None,
-               condition: str | None = None, side: str | None = None, limit: int = 1000,
-               max_pages: int = 10_000, taker_only: bool | None = None) -> Iterator[dict]:
+    def trades(
+        self,
+        user: str | None = None,
+        start: int | None = None,
+        end: int | None = None,
+        condition: str | None = None,
+        side: str | None = None,
+        limit: int = 1000,
+        max_pages: int = 10_000,
+        taker_only: bool | None = None,
+    ) -> Iterator[dict]:
         params: dict = {"limit": limit}
         if taker_only is not None:
             params["taker_only"] = str(taker_only).lower()
@@ -332,9 +382,8 @@ class DataClient:
                 return
             params = {"cursor": cursor, **({"user": user} if user else {})}
 
-
     ACTIVITY_TYPES = "SPLIT,MERGE,CONVERSION"
-    PAGE_MAX = 1000                     # строк за запрос в методах /v2 (дальше — курсор)
+    PAGE_MAX = 1000  # строк за запрос в методах /v2 (дальше — курсор)
 
     def _v2_pages(self, path: str, params: dict, max_pages: int, deadline: float | None = None) -> Iterator[dict]:
         """Постраничный обход метода Data API v2: {data, pagination: {next_cursor, has_more}}.
@@ -360,12 +409,23 @@ class DataClient:
             cursors.add(cur)
             params = {**anchor, "cursor": cur}
 
-    def activity(self, user: str, start: int | None = None, end: int | None = None,
-                 types: str = ACTIVITY_TYPES, max_pages: int = 200) -> Iterator[dict]:
+    def activity(
+        self,
+        user: str,
+        start: int | None = None,
+        end: int | None = None,
+        types: str = ACTIVITY_TYPES,
+        max_pages: int = 200,
+    ) -> Iterator[dict]:
         """Журнал операций кошелька (/v2/activity, курсор). Строки приводятся к прежнему виду (camelCase),
         повторы отсекаются по ключу. Старый /activity Polymarket отключил (HTTP 410)."""
-        params = {"user": user, "type": types, "limit": self.PAGE_MAX,
-                  "start": 1 if start is None else max(int(start), 1), "sort_direction": "DESC"}
+        params = {
+            "user": user,
+            "type": types,
+            "limit": self.PAGE_MAX,
+            "start": 1 if start is None else max(int(start), 1),
+            "sort_direction": "DESC",
+        }
         if end:
             params["end"] = int(end)
         seen: set = set()
@@ -382,14 +442,22 @@ class DataClient:
         """Позиции кошелька, которые ещё держатся (открытые и ждущие погашения) — /v2/positions."""
         out = []
         for st in self.POSITION_STATUSES:
-            out += [v1_position(r) for r in self._v2_pages(
-                "/v2/positions", {"user": user, "status": st, "limit": self.PAGE_MAX}, max_pages, deadline)]
+            out += [
+                v1_position(r)
+                for r in self._v2_pages(
+                    "/v2/positions", {"user": user, "status": st, "limit": self.PAGE_MAX}, max_pages, deadline
+                )
+            ]
         return out
 
     def closed_positions(self, user: str, max_pages: int = 60, deadline: float | None = None) -> list[dict]:
         """Закрытые позиции кошелька — /v2/positions?status=CLOSED (старый /closed-positions отключён)."""
-        return [v1_position(r) for r in self._v2_pages(
-            "/v2/positions", {"user": user, "status": "CLOSED", "limit": self.PAGE_MAX}, max_pages, deadline)]
+        return [
+            v1_position(r)
+            for r in self._v2_pages(
+                "/v2/positions", {"user": user, "status": "CLOSED", "limit": self.PAGE_MAX}, max_pages, deadline
+            )
+        ]
 
     # ---------------- готовая статистика игрока (Polymarket уже всё посчитал — не пересчитываем сами)
     @staticmethod
@@ -421,8 +489,14 @@ class DataClient:
         """Место игрока в рейтинге по прибыли и объёму (None — вне рейтинга)."""
         return self._data(self.http.get("/v2/leaderboard", {"user": user, "time_period": period}))
 
-    def positions_page(self, user: str | None = None, condition: str | None = None, status: str = "OPEN",
-                       sort_by: str | None = None, limit: int = 20) -> list[dict]:
+    def positions_page(
+        self,
+        user: str | None = None,
+        condition: str | None = None,
+        status: str = "OPEN",
+        sort_by: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
         """Одна страница позиций как есть (поля v2): для карточек в интерфейсе, без обхода всех страниц."""
         params = {"status": status, "limit": limit}
         if user:
@@ -435,17 +509,36 @@ class DataClient:
 
     def holders(self, condition: str, limit: int = 12, include_pnl: bool = True) -> dict[str, list[dict]]:
         """Крупнейшие держатели рынка по исходам: {token_id: [держатели]}."""
-        rows = self._data(self.http.get("/v2/holders", {"condition": condition, "limit": limit,
-                                                         "include_pnl": "true" if include_pnl else "false"})) or []
+        rows = (
+            self._data(
+                self.http.get(
+                    "/v2/holders",
+                    {"condition": condition, "limit": limit, "include_pnl": "true" if include_pnl else "false"},
+                )
+            )
+            or []
+        )
         return {str(r.get("token_id")): r.get("holders") or [] for r in rows}
 
-    LB_CATEGORIES = ("OVERALL", "POLITICS", "SPORTS", "ESPORTS", "CRYPTO", "CULTURE", "MENTIONS", "WEATHER",
-                     "ECONOMICS", "TECH", "FINANCE")
+    LB_CATEGORIES = (
+        "OVERALL",
+        "POLITICS",
+        "SPORTS",
+        "ESPORTS",
+        "CRYPTO",
+        "CULTURE",
+        "MENTIONS",
+        "WEATHER",
+        "ECONOMICS",
+        "TECH",
+        "FINANCE",
+    )
     LB_PERIODS = {"DAY": "day", "WEEK": "week", "MONTH": "month", "ALL": "all"}
-    LB_V2_MAX = 1000                                   # строк за один запрос /v2/leaderboard
+    LB_V2_MAX = 1000  # строк за один запрос /v2/leaderboard
 
-    def leaderboard(self, category: str = "OVERALL", period: str = "MONTH", order_by: str = "PNL",
-                    limit: int = 50, offset: int = 0) -> list[dict]:
+    def leaderboard(
+        self, category: str = "OVERALL", period: str = "MONTH", order_by: str = "PNL", limit: int = 50, offset: int = 0
+    ) -> list[dict]:
         """Рейтинг трейдеров Polymarket по прибыли или объёму за день/неделю/месяц/всё время.
 
         Основной метод — /v2/leaderboard (до 1000 строк за запрос, курсор). Старый /v1/leaderboard Polymarket
@@ -459,14 +552,17 @@ class DataClient:
                 rows = self._leaderboard_v1(category, period, order_by, offset + limit)
                 self.lb_version = "v1"
             except ApiError:
-                raise v2_exc from None                  # показываем ошибку основного метода
+                raise v2_exc from None  # показываем ошибку основного метода
         out = [parse_leader(r) for r in rows]
-        return [r for r in out if r["wallet"]][offset:offset + limit]
+        return [r for r in out if r["wallet"]][offset : offset + limit]
 
     def _leaderboard_v2(self, category: str, period: str, order_by: str, need: int) -> list[dict]:
-        params = {"time_period": self.LB_PERIODS.get(period.upper(), "month"), "category": category.lower(),
-                  "sort_by": "VOLUME" if order_by.upper() in ("VOL", "VOLUME") else "PNL",
-                  "limit": max(1, min(need, self.LB_V2_MAX))}
+        params = {
+            "time_period": self.LB_PERIODS.get(period.upper(), "month"),
+            "category": category.lower(),
+            "sort_by": "VOLUME" if order_by.upper() in ("VOL", "VOLUME") else "PNL",
+            "limit": max(1, min(need, self.LB_V2_MAX)),
+        }
         rows: list = []
         for _ in range(10):
             res = self.http.get("/v2/leaderboard", params) or {}
@@ -481,9 +577,19 @@ class DataClient:
     def _leaderboard_v1(self, category: str, period: str, order_by: str, need: int) -> list[dict]:
         rows: list = []
         for off in range(0, min(need, 1050), 50):
-            page = self.http.get("/v1/leaderboard", {"category": category.upper(), "timePeriod": period.upper(),
-                                                     "orderBy": "VOL" if order_by.upper() in ("VOL", "VOLUME") else "PNL",
-                                                     "limit": 50, "offset": min(off, 1000)}) or []
+            page = (
+                self.http.get(
+                    "/v1/leaderboard",
+                    {
+                        "category": category.upper(),
+                        "timePeriod": period.upper(),
+                        "orderBy": "VOL" if order_by.upper() in ("VOL", "VOLUME") else "PNL",
+                        "limit": 50,
+                        "offset": min(off, 1000),
+                    },
+                )
+                or []
+            )
             if isinstance(page, dict):
                 page = page.get("data") or []
             rows += page
@@ -494,16 +600,22 @@ class DataClient:
 
 def parse_leader(r: dict) -> dict:
     """Строка рейтинга (v1: proxyWallet/userName/vol/pnl; v2: user_id/user_name/volume/pnl)."""
+
     def f(x):
         try:
             return float(x)
         except (TypeError, ValueError):
             return None
-    return {"rank": int(f(r.get("rank")) or 0), "wallet": str(r.get("proxyWallet") or r.get("user_id") or "").lower(),
-            "name": r.get("userName") or r.get("user_name") or None, "pnl": f(r.get("pnl")),
-            "volume": f(r.get("vol") if r.get("vol") is not None else r.get("volume")),
-            "x": r.get("xUsername") or r.get("x_username") or None,
-            "verified": bool(r.get("verifiedBadge") or r.get("verified"))}
+
+    return {
+        "rank": int(f(r.get("rank")) or 0),
+        "wallet": str(r.get("proxyWallet") or r.get("user_id") or "").lower(),
+        "name": r.get("userName") or r.get("user_name") or None,
+        "pnl": f(r.get("pnl")),
+        "volume": f(r.get("vol") if r.get("vol") is not None else r.get("volume")),
+        "x": r.get("xUsername") or r.get("x_username") or None,
+        "verified": bool(r.get("verifiedBadge") or r.get("verified")),
+    }
 
 
 def _first(r: dict, *keys):
@@ -517,21 +629,43 @@ def v1_activity(r: dict) -> dict:
     """Строка /v2/activity (snake_case) → прежний вид (camelCase), который понимает остальной код."""
     if "proxyWallet" in r:
         return r
-    return {"proxyWallet": r.get("proxy_wallet"), "timestamp": r.get("timestamp"), "type": r.get("type"),
-            "conditionId": r.get("condition_id"), "asset": r.get("token_id"), "outcomeIndex": r.get("outcome_index"),
-            "size": r.get("size"), "usdcSize": r.get("usdc_size"), "price": r.get("price"), "side": r.get("side"),
-            "transactionHash": r.get("transaction_hash"), "title": r.get("title"), "outcome": r.get("outcome")}
+    return {
+        "proxyWallet": r.get("proxy_wallet"),
+        "timestamp": r.get("timestamp"),
+        "type": r.get("type"),
+        "conditionId": r.get("condition_id"),
+        "asset": r.get("token_id"),
+        "outcomeIndex": r.get("outcome_index"),
+        "size": r.get("size"),
+        "usdcSize": r.get("usdc_size"),
+        "price": r.get("price"),
+        "side": r.get("side"),
+        "transactionHash": r.get("transaction_hash"),
+        "title": r.get("title"),
+        "outcome": r.get("outcome"),
+    }
 
 
 def v1_position(r: dict) -> dict:
     """Строка /v2/positions → прежний вид: asset, realizedPnl, cashPnl (нереализованный результат), curPrice."""
     if "asset" in r:
         return r
-    return {"proxyWallet": r.get("proxy_wallet"), "asset": r.get("token_id"), "conditionId": r.get("condition_id"),
-            "size": r.get("current_size"), "avgPrice": r.get("avg_price"), "curPrice": r.get("current_price"),
-            "currentValue": r.get("current_value"), "realizedPnl": r.get("realized_pnl") or 0,
-            "cashPnl": r.get("unrealized_pnl") or 0, "title": r.get("title"), "outcome": r.get("outcome"),
-            "outcomeIndex": r.get("outcome_index"), "status": r.get("status"), "endDate": r.get("end_date")}
+    return {
+        "proxyWallet": r.get("proxy_wallet"),
+        "asset": r.get("token_id"),
+        "conditionId": r.get("condition_id"),
+        "size": r.get("current_size"),
+        "avgPrice": r.get("avg_price"),
+        "curPrice": r.get("current_price"),
+        "currentValue": r.get("current_value"),
+        "realizedPnl": r.get("realized_pnl") or 0,
+        "cashPnl": r.get("unrealized_pnl") or 0,
+        "title": r.get("title"),
+        "outcome": r.get("outcome"),
+        "outcomeIndex": r.get("outcome_index"),
+        "status": r.get("status"),
+        "endDate": r.get("end_date"),
+    }
 
 
 def _num(x) -> str:
@@ -543,34 +677,47 @@ def _num(x) -> str:
 
 def activity_id_for(r: dict) -> str:
     """Ключ операции. Числа приводятся к одному виду: v1 и v2 пишут их по-разному ("100" и 100.0)."""
-    key = "|".join([str(_first(r, "transactionHash", "transaction_hash") or "").lower(),
-                    str(r.get("type") or "").upper(), str(_first(r, "conditionId", "condition_id") or ""),
-                    str(_first(r, "asset", "token_id") or ""), str(_first(r, "outcomeIndex", "outcome_index") or ""),
-                    _num(r.get("size")), _num(_first(r, "usdcSize", "usdc_size")), str(int(_num(r.get("timestamp")) and
-                                                                                         float(r.get("timestamp")) or 0)),
-                    str(_first(r, "proxyWallet", "proxy_wallet") or "").lower()])
+    key = "|".join(
+        [
+            str(_first(r, "transactionHash", "transaction_hash") or "").lower(),
+            str(r.get("type") or "").upper(),
+            str(_first(r, "conditionId", "condition_id") or ""),
+            str(_first(r, "asset", "token_id") or ""),
+            str(_first(r, "outcomeIndex", "outcome_index") or ""),
+            _num(r.get("size")),
+            _num(_first(r, "usdcSize", "usdc_size")),
+            str(int(_num(r.get("timestamp")) and float(r.get("timestamp")) or 0)),
+            str(_first(r, "proxyWallet", "proxy_wallet") or "").lower(),
+        ]
+    )
     return hashlib.sha1(key.encode()).hexdigest()
 
 
 def parse_activity(r: dict) -> dict:
     r = v1_activity(r)
-    return {"activity_id": activity_id_for(r), "wallet": str(r.get("proxyWallet") or "").lower(),
-            "ts": int(r.get("timestamp") or 0), "type": str(r.get("type") or "").upper(),
-            "market_id": r.get("conditionId") or None, "token_id": str(r["asset"]) if r.get("asset") else None,
-            "outcome_index": r.get("outcomeIndex"), "size": float(r.get("size") or 0),
-            "usdc_size": float(r.get("usdcSize") or 0), "price": float(r.get("price") or 0),
-            "tx_hash": r.get("transactionHash")}
+    return {
+        "activity_id": activity_id_for(r),
+        "wallet": str(r.get("proxyWallet") or "").lower(),
+        "ts": int(r.get("timestamp") or 0),
+        "type": str(r.get("type") or "").upper(),
+        "market_id": r.get("conditionId") or None,
+        "token_id": str(r["asset"]) if r.get("asset") else None,
+        "outcome_index": r.get("outcomeIndex"),
+        "size": float(r.get("size") or 0),
+        "usdc_size": float(r.get("usdcSize") or 0),
+        "price": float(r.get("price") or 0),
+        "tx_hash": r.get("transactionHash"),
+    }
 
 
 class ClobClient:
     def __init__(self, endpoints: Endpoints | None = None, http: _Http | None = None):
-        self.http = http or _Http((endpoints or Endpoints()).clob, rps=80)      # /prices-history: 1000 за 10 с
+        self.http = http or _Http((endpoints or Endpoints()).clob, rps=80)  # /prices-history: 1000 за 10 с
 
     def book(self, token_id: str):
         return parse_book(self.http.get("/book", {"token_id": token_id}))
 
-    def prices_history(self, token_id: str, start: int | None = None, end: int | None = None,
-                       fidelity_min: int = 1):
+    def prices_history(self, token_id: str, start: int | None = None, end: int | None = None, fidelity_min: int = 1):
         params = {"market": token_id, "fidelity": fidelity_min}
         if start:
             params["startTs"] = int(start)

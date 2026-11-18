@@ -8,11 +8,21 @@
 политика, финансы, технологии, упоминания 0,04; геополитика 0.
 Если Polymarket изменит ставки — достаточно поправить таблицу TAKER_FEE_RATE.
 """
+
 from __future__ import annotations
 
 TAKER_FEE_RATE = {
-    "crypto": 0.07, "sports": 0.05, "economics": 0.05, "culture": 0.05, "weather": 0.05, "other": 0.05,
-    "politics": 0.04, "finance": 0.04, "tech": 0.04, "mentions": 0.04, "geopolitics": 0.0,
+    "crypto": 0.07,
+    "sports": 0.05,
+    "economics": 0.05,
+    "culture": 0.05,
+    "weather": 0.05,
+    "other": 0.05,
+    "politics": 0.04,
+    "finance": 0.04,
+    "tech": 0.04,
+    "mentions": 0.04,
+    "geopolitics": 0.0,
 }
 DEFAULT_RATE = 0.05
 FEE_FREE_TAGS = {"geopolitics", "world", "world-events", "geopolitical"}

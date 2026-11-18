@@ -1,10 +1,10 @@
 """Живой интерфейс: поток событий (SSE), темы как в меню Polymarket."""
+
 import http.client
 import json
 import threading
 import time
 
-from conftest import fast_params
 from whalefollow import categories
 from whalefollow.api.server import serve
 from whalefollow.events import bus
@@ -13,13 +13,25 @@ from whalefollow.ingest.polymarket import normalize_category, parse_market
 from whalefollow.scheduler import Scheduler
 from whalefollow.services import Services
 
+from conftest import fast_params
+
 
 def test_topics_follow_polymarket_menu():
-    assert categories.KEYS == ["politics", "sports", "esports", "crypto", "finance", "culture", "mentions", "weather",
-                               "economics", "tech"]
-    tag = lambda *xs: {"tags": [{"slug": x} for x in xs]}                         # noqa: E731
-    assert normalize_category(tag("sports", "esports", "counter-strike")) == "esports"   # узкая тема важнее
-    assert normalize_category(tag("finance", "stocks")) == "finance"              # раньше было «экономика»
+    assert categories.KEYS == [
+        "politics",
+        "sports",
+        "esports",
+        "crypto",
+        "finance",
+        "culture",
+        "mentions",
+        "weather",
+        "economics",
+        "tech",
+    ]
+    tag = lambda *xs: {"tags": [{"slug": x} for x in xs]}
+    assert normalize_category(tag("sports", "esports", "counter-strike")) == "esports"  # узкая тема важнее
+    assert normalize_category(tag("finance", "stocks")) == "finance"  # раньше было «экономика»
     assert normalize_category(tag("fed-rates")) == "economics"
     assert normalize_category({"events": [{"tags": [{"slug": "mention-markets"}]}]}) == "mentions"
     assert normalize_category(tag("hurricanes")) == "weather"
@@ -33,19 +45,32 @@ def test_topic_migration_keeps_markets_switched_on(db):
     db.set_setting("categories", ["economics", "politics", "sports", "other"])
     db.set_setting("migrated_other_category", True)
     Scheduler(db, fast_params(), None, None, None, None, clock=lambda: 1)
-    assert db.get_setting("categories") == ["economics", "politics", "sports", "other", "finance", "esports",
-                                            "mentions", "weather"]
-    db.set_setting("categories", ["politics"])                                    # второй запуск ничего не меняет
+    assert db.get_setting("categories") == [
+        "economics",
+        "politics",
+        "sports",
+        "other",
+        "finance",
+        "esports",
+        "mentions",
+        "weather",
+    ]
+    db.set_setting("categories", ["politics"])  # второй запуск ничего не меняет
     Scheduler(db, fast_params(), None, None, None, None, clock=lambda: 1)
     assert db.get_setting("categories") == ["politics"]
 
 
 def test_recategorize_job_rereads_markets_once(db):
-    raw = {"conditionId": "0xm1", "question": "Will NVDA close above $200?", "clobTokenIds": json.dumps(["a", "b"]),
-           "outcomes": json.dumps(["Yes", "No"]), "outcomePrices": json.dumps(["0.5", "0.5"]),
-           "tags": [{"slug": "finance"}, {"slug": "stocks"}]}
+    raw = {
+        "conditionId": "0xm1",
+        "question": "Will NVDA close above $200?",
+        "clobTokenIds": json.dumps(["a", "b"]),
+        "outcomes": json.dumps(["Yes", "No"]),
+        "outcomePrices": json.dumps(["0.5", "0.5"]),
+        "tags": [{"slug": "finance"}, {"slug": "stocks"}],
+    }
     m, toks, _ = parse_market(raw)
-    db.upsert("markets", {**m, "category": "economics"}, ["market_id"])          # записано старой версией
+    db.upsert("markets", {**m, "category": "economics"}, ["market_id"])  # записано старой версией
     db.upsert_many("tokens", toks, ["token_id"])
 
     class G:
@@ -54,6 +79,7 @@ def test_recategorize_job_rereads_markets_once(db):
         def markets_by_ids(self, ids):
             G.calls += 1
             return [raw]
+
     sch = Scheduler(db, fast_params(), G(), None, None, None, clock=lambda: 1)
     assert sch.job_recategorize() == 1
     assert db.scalar("SELECT category FROM markets WHERE market_id='0xm1'") == "finance"
@@ -61,9 +87,24 @@ def test_recategorize_job_rereads_markets_once(db):
 
 
 def _pending_signal(db, sid, token="tok1"):
-    db.upsert("signals", {"signal_id": sid, "ts": int(time.time()), "entity_id": "0xw", "wallet": "0xw", "trade_id": sid,
-                          "token_id": token, "market_id": "m", "whale_price": 0.5, "whale_size_usd": 1000.0,
-                          "kind": "entry", "status": "pending", "expires_ts": int(time.time()) + 60}, ["signal_id"])
+    db.upsert(
+        "signals",
+        {
+            "signal_id": sid,
+            "ts": int(time.time()),
+            "entity_id": "0xw",
+            "wallet": "0xw",
+            "trade_id": sid,
+            "token_id": token,
+            "market_id": "m",
+            "whale_price": 0.5,
+            "whale_size_usd": 1000.0,
+            "kind": "entry",
+            "status": "pending",
+            "expires_ts": int(time.time()) + 60,
+        },
+        ["signal_id"],
+    )
 
 
 def test_event_stream_pushes_changes_and_prices(db):
@@ -78,6 +119,7 @@ def test_event_stream_pushes_changes_and_prices(db):
             got.append(ev)
             if len([e for e in got if e[0] in ("change", "price")]) >= 2:
                 stop.set()
+
     th = threading.Thread(target=reader, daemon=True)
     th.start()
     t0 = time.time()

@@ -10,6 +10,7 @@
   * выход: кит полностью вышел до закрытия рынка — продаём следом (через задержку, со штрафом);
     иначе — выплата при закрытии; не закрытые — по последней цене (помечаются как открытые).
 """
+
 from __future__ import annotations
 
 import bisect
@@ -26,9 +27,11 @@ class _Prices:
     def __init__(self, db: DB, tokens: list[str]):
         self.idx: dict[str, tuple[list[int], list[float]]] = {}
         for i in range(0, len(tokens), 500):
-            chunk = tokens[i:i + 500]
+            chunk = tokens[i : i + 500]
             ph = ",".join("?" for _ in chunk)
-            rows = db.query(f"SELECT token_id, ts, price FROM price_history WHERE token_id IN ({ph}) ORDER BY ts", chunk)
+            rows = db.query(
+                f"SELECT token_id, ts, price FROM price_history WHERE token_id IN ({ph}) ORDER BY ts", chunk
+            )
             tmp: dict[str, tuple[list, list]] = defaultdict(lambda: ([], []))
             for r in rows:
                 tmp[r["token_id"]][0].append(r["ts"])
@@ -49,9 +52,18 @@ class _Prices:
         return float(s[1][-1]) if s and s[1] else None
 
 
-def simulate_whale(db: DB, params: Params, wallets: list[str], settings: dict, now: int, days: int = 90,
-                   delay_s: int | None = None, slippage: float = 0.01, start_ts: int | None = None,
-                   end_ts: int | None = None) -> dict:
+def simulate_whale(
+    db: DB,
+    params: Params,
+    wallets: list[str],
+    settings: dict,
+    now: int,
+    days: int = 90,
+    delay_s: int | None = None,
+    slippage: float = 0.01,
+    start_ts: int | None = None,
+    end_ts: int | None = None,
+) -> dict:
     """Повтор ставок кита с задержкой и комиссиями. По умолчанию — ставки за последние days дней;
     со start_ts/end_ts — ставки, открытые в этот отрезок (итог — как они закрылись на самом деле)."""
     if not wallets:
@@ -66,13 +78,14 @@ def simulate_whale(db: DB, params: Params, wallets: list[str], settings: dict, n
         "m.fee_rate, tk.payout, tk.outcome_label, m.resolved_ts FROM trades t "
         "LEFT JOIN markets m ON m.market_id=t.market_id LEFT JOIN tokens tk ON tk.token_id=t.token_id "
         f"WHERE t.wallet IN ({ph}) AND (t.source IS NULL OR t.source='') AND t.ts>=? ORDER BY t.ts",
-        list(wallets) + [start - 365 * DAY])
+        list(wallets) + [start - 365 * DAY],
+    )
     if not trades:
         return {"ok": True, "bets": [], "summary": _empty(days, delay)}
     # чистая позиция кита по токену во времени — чтобы понять, когда он вышел полностью
     net: dict[str, float] = defaultdict(float)
     exit_ts: dict[str, int] = {}
-    exit_px_whale: dict[str, float] = {}               # цена, по которой кит закрыл позицию (последняя продажа)
+    exit_px_whale: dict[str, float] = {}  # цена, по которой кит закрыл позицию (последняя продажа)
     first_buy: dict[str, dict] = {}
     for t in trades:
         tok = t["token_id"]
@@ -140,25 +153,53 @@ def simulate_whale(db: DB, params: Params, wallets: list[str], settings: dict, n
         # кит на ту же сумму: его вход и ЕГО выход (продажа без нашей задержки или выплата рынка)
         w_exit = exit_px_whale.get(tok, exit_px) if status == "sold" else exit_px
         whale_pnl = (stake / whale_px) * (w_exit if w_exit is not None else whale_px) - stake
-        bets.append({"ts": t["ts"], "question": t["question"] or "Рынок загружается", "side": t["outcome_label"],
-                     "category": cat, "whale_cents": round(whale_px * 100, 1), "entry_cents": round(entry * 100, 1),
-                     "exit_cents": round(exit_px * 100, 1) if exit_px is not None else None, "status": status,
-                     "stake_usd": round(stake, 2), "fee_usd": round(fee, 2), "pnl_usd": round(pnl, 2),
-                     "whale_pnl_usd": round(whale_pnl, 2), "estimated_price": px is None, "closed_ts": closed_ts})
+        bets.append(
+            {
+                "ts": t["ts"],
+                "question": t["question"] or "Рынок загружается",
+                "side": t["outcome_label"],
+                "category": cat,
+                "whale_cents": round(whale_px * 100, 1),
+                "entry_cents": round(entry * 100, 1),
+                "exit_cents": round(exit_px * 100, 1) if exit_px is not None else None,
+                "status": status,
+                "stake_usd": round(stake, 2),
+                "fee_usd": round(fee, 2),
+                "pnl_usd": round(pnl, 2),
+                "whale_pnl_usd": round(whale_pnl, 2),
+                "estimated_price": px is None,
+                "closed_ts": closed_ts,
+            }
+        )
     out = _summary(bets, skipped, days, delay, stake, now, start)
     out["start_ts"], out["end_ts"] = start, end
     return {"ok": True, "bets": bets[::-1][:30], "summary": out}
 
 
 def _empty(days: int, delay: int) -> dict:
-    return {"days": days, "delay_s": delay, "n": 0, "closed": 0, "pnl_usd": 0.0, "roi_pct": None, "win_pct": None,
-            "invested_usd": 0.0, "fees_usd": 0.0, "max_drawdown_usd": 0.0, "whale_roi_pct": None, "skipped": {},
-            "curve": [], "open": 0, "verdict": "no_data",
-            "text": "За этот период кит не делал ставок, которые можно было бы повторить."}
+    return {
+        "days": days,
+        "delay_s": delay,
+        "n": 0,
+        "closed": 0,
+        "pnl_usd": 0.0,
+        "roi_pct": None,
+        "win_pct": None,
+        "invested_usd": 0.0,
+        "fees_usd": 0.0,
+        "max_drawdown_usd": 0.0,
+        "whale_roi_pct": None,
+        "skipped": {},
+        "curve": [],
+        "open": 0,
+        "verdict": "no_data",
+        "text": "За этот период кит не делал ставок, которые можно было бы повторить.",
+    }
 
 
-def _summary(bets: list[dict], skipped: dict, days: int, delay: int, stake: float, now: int,
-             start: int | None = None) -> dict:
+def _summary(
+    bets: list[dict], skipped: dict, days: int, delay: int, stake: float, now: int, start: int | None = None
+) -> dict:
     if not bets:
         out = _empty(days, delay)
         out["skipped"] = dict(skipped)
@@ -185,18 +226,34 @@ def _summary(bets: list[dict], skipped: dict, days: int, delay: int, stake: floa
     roi = 100 * closed_pnl / closed_inv if closed_inv else None
     whale_roi = 100 * whale_closed / closed_inv if closed_inv else None
     if len(closed) < 10:
-        verdict, text = "few", f"Закрытых ставок пока {len(closed)} — для вывода мало, смотрите на результат как на ориентир."
+        verdict, text = (
+            "few",
+            f"Закрытых ставок пока {len(closed)} — для вывода мало, смотрите на результат как на ориентир.",
+        )
     elif roi is not None and roi > 0:
         verdict, text = "good", "Копирование этого кита за период было бы прибыльным даже с задержкой и комиссиями."
     else:
         verdict, text = "bad", "С задержкой и комиссиями копирование этого кита за период было бы убыточным."
     if whale_roi is not None and roi is not None and whale_roi - roi > 10:
         text += " Большая часть его прибыли приходится на цену входа, которую повторить не успеть."
-    return {"days": days, "delay_s": delay, "stake_usd": round(stake, 2), "n": len(bets), "closed": len(closed),
-            "open": len(bets) - len(closed), "invested_usd": round(invested, 2), "pnl_usd": round(pnl, 2),
-            "closed_pnl_usd": round(closed_pnl, 2), "roi_pct": round(roi, 1) if roi is not None else None,
-            "whale_roi_pct": round(whale_roi, 1) if whale_roi is not None else None,
-            "win_pct": round(100 * sum(1 for b in closed if b["pnl_usd"] > 0) / len(closed), 1) if closed else None,
-            "fees_usd": round(sum(b["fee_usd"] for b in bets), 2), "max_drawdown_usd": round(dd, 2),
-            "estimated_share": round(sum(1 for b in bets if b["estimated_price"]) / len(bets), 2),
-            "skipped": dict(skipped), "curve": curve, "verdict": verdict, "text": text}
+    return {
+        "days": days,
+        "delay_s": delay,
+        "stake_usd": round(stake, 2),
+        "n": len(bets),
+        "closed": len(closed),
+        "open": len(bets) - len(closed),
+        "invested_usd": round(invested, 2),
+        "pnl_usd": round(pnl, 2),
+        "closed_pnl_usd": round(closed_pnl, 2),
+        "roi_pct": round(roi, 1) if roi is not None else None,
+        "whale_roi_pct": round(whale_roi, 1) if whale_roi is not None else None,
+        "win_pct": round(100 * sum(1 for b in closed if b["pnl_usd"] > 0) / len(closed), 1) if closed else None,
+        "fees_usd": round(sum(b["fee_usd"] for b in bets), 2),
+        "max_drawdown_usd": round(dd, 2),
+        "estimated_share": round(sum(1 for b in bets if b["estimated_price"]) / len(bets), 2),
+        "skipped": dict(skipped),
+        "curve": curve,
+        "verdict": verdict,
+        "text": text,
+    }

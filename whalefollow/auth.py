@@ -7,6 +7,7 @@
 подписанный срок действия. Смена пароля делает все старые входы недействительными.
 Перебор пароля: после 5 неудачных попыток с одного адреса за 10 минут вход закрывается на 10 минут.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -73,7 +74,7 @@ class Auth:
             return self.token(now)
         with self._lock:
             self._fails.setdefault(ip, []).append(now or time.time())
-        time.sleep(0.3)                                   # замедляет перебор
+        time.sleep(0.3)  # замедляет перебор
         return None
 
     @staticmethod

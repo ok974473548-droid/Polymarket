@@ -3,6 +3,7 @@
 Классы: normal, maker_arb, insider_suspect, favorite_grinder.
 Флаги пишутся в wallet_flags со значениями, чтобы решение можно было разобрать.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -10,14 +11,18 @@ import pandas as pd
 
 from ..config import Params
 
-
-MERGE_SPLIT_SHARE = 0.2      # split/merge больше чем в 20% рынков — признак маркет-мейкера
+MERGE_SPLIT_SHARE = 0.2  # split/merge больше чем в 20% рынков — признак маркет-мейкера
 
 
 def maker_flags(trades: pd.DataFrame, pos: pd.DataFrame, params: Params) -> dict:
     """F1–F5 для маркет-мейкеров и арбитражёров."""
-    flags = {"F1_two_sided": 0.0, "F2_short_hold_h": float("nan"), "F3_trades_per_market": 0.0,
-             "F4_net_turnover": float("nan"), "F5_merge_split": 0.0}
+    flags = {
+        "F1_two_sided": 0.0,
+        "F2_short_hold_h": float("nan"),
+        "F3_trades_per_market": 0.0,
+        "F4_net_turnover": float("nan"),
+        "F5_merge_split": 0.0,
+    }
     if trades.empty:
         return flags
     # split/merge из журнала кошелька — отдельный признак F5; в F1–F4 не входят (split = «покупка» всех исходов
@@ -63,20 +68,28 @@ def favorite_flags(closed: pd.DataFrame, params: Params) -> dict:
     total_cost = closed["cost_usd"].sum()
     pos_pnl = closed.loc[closed["pnl_usd"] > 0, "pnl_usd"]
     fav_pnl = closed.loc[fav & (closed["pnl_usd"] > 0), "pnl_usd"].sum()
-    return {"fav_cost_share": float(closed.loc[fav, "cost_usd"].sum() / total_cost) if total_cost else 0.0,
-            "fav_pnl_share": float(fav_pnl / pos_pnl.sum()) if pos_pnl.sum() > 0 else 0.0}
+    return {
+        "fav_cost_share": float(closed.loc[fav, "cost_usd"].sum() / total_cost) if total_cost else 0.0,
+        "fav_pnl_share": float(fav_pnl / pos_pnl.sum()) if pos_pnl.sum() > 0 else 0.0,
+    }
 
 
 def is_favorite_grinder(f: dict, params: Params) -> bool:
     return f["fav_cost_share"] >= params.favorite_cost_share or f["fav_pnl_share"] > params.favorite_pnl_share
 
 
-def insider_flags(pos: pd.DataFrame, n_clusters: int, first_seen_ts: float | None,
-                  market_volume: dict, params: Params) -> dict:
+def insider_flags(
+    pos: pd.DataFrame, n_clusters: int, first_seen_ts: float | None, market_volume: dict, params: Params
+) -> dict:
     """I1–I5 (7.3). Глубину стакана на момент ставки в истории обычно не восстановить,
     поэтому I3 считается по доле в объёме рынка."""
-    f = {"I1_wallet_age_days": float("nan"), "I2_top_event_share": 0.0, "I3_size_vs_volume": 0.0,
-         "I4_jump_share": 0.0, "I5_clusters": float(n_clusters)}
+    f = {
+        "I1_wallet_age_days": float("nan"),
+        "I2_top_event_share": 0.0,
+        "I3_size_vs_volume": 0.0,
+        "I4_jump_share": 0.0,
+        "I5_clusters": float(n_clusters),
+    }
     if pos.empty:
         return f
     big = pos.loc[pos["cost_usd"].idxmax()]
@@ -108,12 +121,21 @@ def hold_profile(closed: pd.DataFrame) -> dict:
     if closed.empty:
         return {"hold_share": float("nan"), "median_hold_h": float("nan")}
     hold = (closed["closed_ts"] - closed["opened_ts"]) / 3600
-    return {"hold_share": float(closed["held_to_resolution"].mean()),
-            "median_hold_h": float(np.nanmedian(hold)) if hold.notna().any() else float("nan")}
+    return {
+        "hold_share": float(closed["held_to_resolution"].mean()),
+        "median_hold_h": float(np.nanmedian(hold)) if hold.notna().any() else float("nan"),
+    }
 
 
-def classify(trades: pd.DataFrame, pos: pd.DataFrame, closed: pd.DataFrame, n_clusters: int,
-             first_seen_ts, market_volume: dict, params: Params) -> tuple[str, dict]:
+def classify(
+    trades: pd.DataFrame,
+    pos: pd.DataFrame,
+    closed: pd.DataFrame,
+    n_clusters: int,
+    first_seen_ts,
+    market_volume: dict,
+    params: Params,
+) -> tuple[str, dict]:
     mf = maker_flags(trades, pos, params)
     ff = favorite_flags(closed, params)
     inf = insider_flags(pos, n_clusters, first_seen_ts, market_volume, params)

@@ -10,27 +10,34 @@
 Контракты USDC на Polygon задаются параметром chain_tokens (USDC.e и нативный USDC);
 если Polymarket сменит залоговый токен, достаточно поменять параметр.
 """
-from __future__ import annotations
 
-from typing import Any
+from __future__ import annotations
 
 import logging
 import os
 import time
+from typing import Any
 
 from .. import net
-
 from ..db import DB, now_ts
 
 log = logging.getLogger(__name__)
 
-USDC_E = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174"     # USDC.e (bridged) — залог Polymarket
+USDC_E = "0x2791bca1f2de4661ed88a30c99a7a9449aa84174"  # USDC.e (bridged) — залог Polymarket
 USDC_NATIVE = "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"
 DEFAULT_TOKENS = (USDC_E, USDC_NATIVE)
 
 PROVIDERS = {
-    "etherscan": {"base": "https://api.etherscan.io/v2/api", "chain_param": "chainid", "key_env": "WF_ETHERSCAN_API_KEY"},
-    "blockscout": {"base": "https://api.blockscout.com/v2/api", "chain_param": "chain_id", "key_env": "WF_BLOCKSCOUT_API_KEY"},
+    "etherscan": {
+        "base": "https://api.etherscan.io/v2/api",
+        "chain_param": "chainid",
+        "key_env": "WF_ETHERSCAN_API_KEY",
+    },
+    "blockscout": {
+        "base": "https://api.blockscout.com/v2/api",
+        "chain_param": "chain_id",
+        "key_env": "WF_BLOCKSCOUT_API_KEY",
+    },
 }
 
 
@@ -39,9 +46,16 @@ class ChainError(RuntimeError):
 
 
 class ExplorerClient:
-    def __init__(self, provider: str = "etherscan", api_key: str | None = None, base: str | None = None,
-                 chain_id: int = 137, timeout: float = 20.0, min_interval_s: float = 0.25,
-                 session: Any = None):
+    def __init__(
+        self,
+        provider: str = "etherscan",
+        api_key: str | None = None,
+        base: str | None = None,
+        chain_id: int = 137,
+        timeout: float = 20.0,
+        min_interval_s: float = 0.25,
+        session: Any = None,
+    ):
         cfg = PROVIDERS[provider]
         self.provider = provider
         self.base = base or cfg["base"]
@@ -49,16 +63,19 @@ class ExplorerClient:
         self.api_key = api_key
         self.chain_id = chain_id
         self.timeout = timeout
-        self.min_interval_s = min_interval_s   # бесплатные тарифы — несколько запросов в секунду
+        self.min_interval_s = min_interval_s  # бесплатные тарифы — несколько запросов в секунду
         self.s = session if session is not None else net.client()
         self._last = 0.0
 
     @classmethod
-    def from_env(cls) -> "ExplorerClient | None":
+    def from_env(cls) -> ExplorerClient | None:
         provider = os.environ.get("WF_CHAIN_PROVIDER", "").lower()
         if not provider:
-            provider = "etherscan" if os.environ.get("WF_ETHERSCAN_API_KEY") else (
-                "blockscout" if os.environ.get("WF_BLOCKSCOUT_API_KEY") else "")
+            provider = (
+                "etherscan"
+                if os.environ.get("WF_ETHERSCAN_API_KEY")
+                else ("blockscout" if os.environ.get("WF_BLOCKSCOUT_API_KEY") else "")
+            )
         if provider not in PROVIDERS:
             return None
         key = os.environ.get(PROVIDERS[provider]["key_env"])
@@ -72,9 +89,18 @@ class ExplorerClient:
             wait = self.min_interval_s - (time.time() - self._last)
             if wait > 0:
                 time.sleep(wait)
-            params = {self.chain_param: self.chain_id, "module": "account", "action": "tokentx",
-                      "contractaddress": token, "address": address, "page": page, "offset": page_size,
-                      "startblock": 0, "endblock": 99_999_999, "sort": "asc"}
+            params = {
+                self.chain_param: self.chain_id,
+                "module": "account",
+                "action": "tokentx",
+                "contractaddress": token,
+                "address": address,
+                "page": page,
+                "offset": page_size,
+                "startblock": 0,
+                "endblock": 99_999_999,
+                "sort": "asc",
+            }
             if self.api_key:
                 params["apikey"] = self.api_key
             r = self.s.get(self.base, params=params, timeout=self.timeout)
@@ -105,7 +131,7 @@ def parse_transfers(rows: list[dict], tokens: tuple = DEFAULT_TOKENS) -> list[di
             continue
         try:
             decimals = int(r.get("tokenDecimal") or 6)
-            amount = int(r["value"]) / 10 ** decimals
+            amount = int(r["value"]) / 10**decimals
             ts = int(r["timeStamp"])
         except (KeyError, ValueError, TypeError):
             continue
@@ -115,13 +141,22 @@ def parse_transfers(rows: list[dict], tokens: tuple = DEFAULT_TOKENS) -> list[di
     return out
 
 
-def sync_transfers(db: DB, client: ExplorerClient, wallets: list[str], tokens: tuple = DEFAULT_TOKENS,
-                   max_wallets: int = 60, refresh_days: int = 30) -> dict:
+def sync_transfers(
+    db: DB,
+    client: ExplorerClient,
+    wallets: list[str],
+    tokens: tuple = DEFAULT_TOKENS,
+    max_wallets: int = 60,
+    refresh_days: int = 30,
+) -> dict:
     """Загружает переводы USDC для кошельков, у которых их ещё нет (или давно не обновлялись)."""
     now = now_ts()
     done = {r["wallet"]: r["fetched_ts"] for r in db.query("SELECT wallet, fetched_ts FROM chain_sync")}
-    todo = [w for w in dict.fromkeys(x.lower() for x in wallets)
-            if w not in done or now - (done[w] or 0) > refresh_days * 86400][:max_wallets]
+    todo = [
+        w
+        for w in dict.fromkeys(x.lower() for x in wallets)
+        if w not in done or now - (done[w] or 0) > refresh_days * 86400
+    ][:max_wallets]
     n_rows, errors = 0, 0
     with db.job("chain_transfers") as job:
         for w in todo:

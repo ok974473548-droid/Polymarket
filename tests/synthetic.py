@@ -11,21 +11,22 @@
 Фейковые клиенты (FakeGamma, FakeData, FakeClob) отдают данные в форматах
 настоящих API Polymarket, поэтому через них проходит тот же код загрузки.
 """
+
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import numpy as np
 
 DAY = 86400
 CATS = ["politics", "sports", "economics", "tech", "crypto"]
-EXCHANGE = "0xexchange00000000000000000000000000000"   # общий биржевой кошелёк — в allowlist
+EXCHANGE = "0xexchange00000000000000000000000000000"  # общий биржевой кошелёк — в allowlist
 
 
 def _iso(ts: int) -> str:
-    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.fromtimestamp(ts, tz=UTC).isoformat().replace("+00:00", "Z")
 
 
 @dataclass
@@ -53,9 +54,19 @@ class Market:
 
 
 class SyntheticWorld:
-    def __init__(self, seed: int = 1, n_events: int = 500, days: int = 400, n_skilled: int = 5,
-                 n_random: int = 40, now: int = 1_790_000_000, step_h: int = 3, skill_noise: float = 0.05,
-                 price_noise: float = 0.13, bets_per_wallet: tuple = (90, 140)):
+    def __init__(
+        self,
+        seed: int = 1,
+        n_events: int = 500,
+        days: int = 400,
+        n_skilled: int = 5,
+        n_random: int = 40,
+        now: int = 1_790_000_000,
+        step_h: int = 3,
+        skill_noise: float = 0.05,
+        price_noise: float = 0.13,
+        bets_per_wallet: tuple = (90, 140),
+    ):
         self.rng = np.random.default_rng(seed)
         self.now = now
         self.t0 = now - days * DAY
@@ -85,8 +96,18 @@ class SyntheticWorld:
                 t_res = t_open + life
                 pi = float(np.clip(r.beta(2, 2), 0.03, 0.97))
                 y = int(r.random() < pi)
-                m = Market(f"0xm{mid:05d}", f"ev{ev:05d}", cat, f"Synthetic question #{mid}?",
-                           t_open, t_res, pi, y, f"t{mid:05d}y", f"t{mid:05d}n")
+                m = Market(
+                    f"0xm{mid:05d}",
+                    f"ev{ev:05d}",
+                    cat,
+                    f"Synthetic question #{mid}?",
+                    t_open,
+                    t_res,
+                    pi,
+                    y,
+                    f"t{mid:05d}y",
+                    f"t{mid:05d}n",
+                )
                 self._make_path(m)
                 self.markets[m.market_id] = m
                 self.token_market[m.yes_token] = m.market_id
@@ -104,8 +125,7 @@ class SyntheticWorld:
         # сначала рынок постепенно узнаёт истинную вероятность π (на этом зарабатывают «умные»,
         # отсюда их положительный CLV), ближе к концу цена сходится к исходу y
         y_end = m.y if m.t_resolve <= self.now else m.pi
-        path = (p0 + (m.pi - p0) * (1 - np.exp(-4 * frac)) + (y_end - m.pi) * frac ** 3
-                + r.normal(0, 0.01, len(times)))
+        path = p0 + (m.pi - p0) * (1 - np.exp(-4 * frac)) + (y_end - m.pi) * frac**3 + r.normal(0, 0.01, len(times))
         if jump_at is not None:
             pre = times < jump_at
             path = np.where(pre, p0 + r.normal(0, 0.005, len(times)), y_end * 0.9 + 0.05)
@@ -126,19 +146,34 @@ class SyntheticWorld:
     def _trade(self, wallet: str, token: str, side: str, price: float, size_usd: float, ts: int) -> None:
         price = float(np.clip(price, 0.01, 0.99))
         shares = size_usd / price
-        self.trades.append({
-            "proxy_wallet": wallet, "side": side, "token_id": token,
-            "condition_id": self.token_market[token], "size": round(shares, 4), "price": round(price, 4),
-            "timestamp": int(ts), "outcome": "Yes" if token.endswith("y") else "No",
-            "transaction_hash": f"0x{len(self.trades):064x}", "title": "",
-        })
+        self.trades.append(
+            {
+                "proxy_wallet": wallet,
+                "side": side,
+                "token_id": token,
+                "condition_id": self.token_market[token],
+                "size": round(shares, 4),
+                "price": round(price, 4),
+                "timestamp": int(ts),
+                "outcome": "Yes" if token.endswith("y") else "No",
+                "transaction_hash": f"0x{len(self.trades):064x}",
+                "title": "",
+            }
+        )
         m = self.markets[self.token_market[token]]
         m.volume += size_usd
         self.first_seen[wallet] = min(self.first_seen.get(wallet, ts), ts)
 
     def _fund(self, wallet: str, funder: str, ts: int, amount: float = 5000.0) -> None:
-        self.transfers.append({"transfer_id": f"x{len(self.transfers)}", "ts": int(ts),
-                               "from_wallet": funder, "to_wallet": wallet, "amount": amount})
+        self.transfers.append(
+            {
+                "transfer_id": f"x{len(self.transfers)}",
+                "ts": int(ts),
+                "from_wallet": funder,
+                "to_wallet": wallet,
+                "amount": amount,
+            }
+        )
 
     def _bet(self, wallet: str, m: Market, token: str, ts: int, size: float, hold_prob: float) -> None:
         p = m.price(token, ts)
@@ -247,11 +282,22 @@ class SyntheticWorld:
             self._trade(w, tok, "BUY", m.price(tok, ts), 40_000.0, ts)
 
     # ------------------------------------------------------------ живые события для агента
-    def add_live_market(self, category: str = "economics", pi: float = 0.7, price: float = 0.55,
-                        life_days: float = 14) -> Market:
+    def add_live_market(
+        self, category: str = "economics", pi: float = 0.7, price: float = 0.55, life_days: float = 14
+    ) -> Market:
         mid = len(self.markets)
-        m = Market(f"0xm{mid:05d}", f"ev_live{mid}", category, f"Live question #{mid}?",
-                   self.now - DAY, int(self.now + life_days * DAY), pi, 1, f"t{mid:05d}y", f"t{mid:05d}n")
+        m = Market(
+            f"0xm{mid:05d}",
+            f"ev_live{mid}",
+            category,
+            f"Live question #{mid}?",
+            self.now - DAY,
+            int(self.now + life_days * DAY),
+            pi,
+            1,
+            f"t{mid:05d}y",
+            f"t{mid:05d}n",
+        )
         m.times = np.array([m.t_open, self.now], dtype=np.int64)
         m.yes_prices = np.array([price, price])
         self.markets[m.market_id] = m
@@ -271,19 +317,29 @@ class SyntheticWorld:
     # ------------------------------------------------------------ форматы API
     def gamma_market(self, m: Market) -> dict:
         res = self.resolved(m)
-        prices = [str(m.y), str(1 - m.y)] if res else [f"{m.price(m.yes_token, self.now):.3f}",
-                                                         f"{1 - m.price(m.yes_token, self.now):.3f}"]
+        prices = (
+            [str(m.y), str(1 - m.y)]
+            if res
+            else [f"{m.price(m.yes_token, self.now):.3f}", f"{1 - m.price(m.yes_token, self.now):.3f}"]
+        )
         return {
-            "conditionId": m.market_id, "question": m.question, "category": m.category,
-            "clobTokenIds": json.dumps([m.yes_token, m.no_token]), "outcomes": json.dumps(["Yes", "No"]),
-            "outcomePrices": json.dumps(prices), "endDate": _iso(m.t_resolve), "closed": res,
-            "closedTime": _iso(m.t_resolve) if res else None, "volumeNum": m.volume,
-            "liquidityNum": max(20_000.0, m.volume / 5), "events": [{"id": m.event_id, "title": m.event_id}],
+            "conditionId": m.market_id,
+            "question": m.question,
+            "category": m.category,
+            "clobTokenIds": json.dumps([m.yes_token, m.no_token]),
+            "outcomes": json.dumps(["Yes", "No"]),
+            "outcomePrices": json.dumps(prices),
+            "endDate": _iso(m.t_resolve),
+            "closed": res,
+            "closedTime": _iso(m.t_resolve) if res else None,
+            "volumeNum": m.volume,
+            "liquidityNum": max(20_000.0, m.volume / 5),
+            "events": [{"id": m.event_id, "title": m.event_id}],
             "description": "Resolves YES if the synthetic event happens.",
         }
 
     def price_points(self, token: str, start: int | None = None, end: int | None = None):
-        if token not in self.token_market:      # токен не из этого мира (например, остался в базе от прошлого демо)
+        if token not in self.token_market:  # токен не из этого мира (например, остался в базе от прошлого демо)
             return []
         m = self.markets[self.token_market[token]]
         start, end = start or 0, min(end or self.now, self.now)
@@ -352,6 +408,7 @@ class FakeClob:
 def load_world(db, world: SyntheticWorld) -> None:
     """Загружает синтетический мир в БД через тот же пайплайн, что и реальные данные."""
     from whalefollow.ingest import pipeline
+
     pipeline.sync_markets(db, FakeGamma(world))
     pipeline.store_trades(db, world.trades)
     tokens = [t for m in world.markets.values() for t in (m.yes_token, m.no_token)]

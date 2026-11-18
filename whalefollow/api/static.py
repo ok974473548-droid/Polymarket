@@ -1,4 +1,5 @@
 """Файлы интерфейса (папка web/): чтение из памяти, сжатая копия и метка версии (ETag)."""
+
 from __future__ import annotations
 
 import gzip
@@ -9,9 +10,16 @@ from pathlib import Path
 from typing import Any
 
 WEB_DIR = Path(str(resources.files("whalefollow").joinpath("web")))
-CTYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
-          ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon",
-          ".json": "application/json; charset=utf-8", ".webmanifest": "application/manifest+json"}
+CTYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+    ".json": "application/json; charset=utf-8",
+    ".webmanifest": "application/manifest+json",
+}
 GZIP_MIN = 1024
 COMPRESSIBLE = ("text/", "application/json", "application/manifest+json", "image/svg+xml")
 _cache: dict[str, tuple[tuple[int, int], dict[str, Any]]] = {}
@@ -22,11 +30,11 @@ def _target(path: str) -> Path | None:
     rel = path.lstrip("/") or "index.html"
     target = (WEB_DIR / rel).resolve()
     if not target.is_relative_to(WEB_DIR.resolve()):
-        return None                                   # попытка выйти за пределы папки
+        return None  # попытка выйти за пределы папки
     if not target.is_file():
         if "." in rel.rsplit("/", 1)[-1]:
             return None
-        target = WEB_DIR / "index.html"               # путь без расширения — роутинг на клиенте
+        target = WEB_DIR / "index.html"  # путь без расширения — роутинг на клиенте
     return target
 
 
@@ -43,8 +51,12 @@ def static_entry(path: str) -> dict[str, Any] | None:
             return hit[1]
     data = target.read_bytes()
     ctype = CTYPES.get(target.suffix, "application/octet-stream")
-    entry = {"data": data, "ctype": ctype, "etag": '"' + hashlib.sha1(data).hexdigest()[:16] + '"',
-             "gz": gzip.compress(data, 6) if ctype.startswith(COMPRESSIBLE) and len(data) >= GZIP_MIN else None}
+    entry = {
+        "data": data,
+        "ctype": ctype,
+        "etag": '"' + hashlib.sha1(data).hexdigest()[:16] + '"',
+        "gz": gzip.compress(data, 6) if ctype.startswith(COMPRESSIBLE) and len(data) >= GZIP_MIN else None,
+    }
     with _lock:
         _cache[key] = ((st.st_mtime_ns, st.st_size), entry)
     return entry

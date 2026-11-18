@@ -1,4 +1,5 @@
 """Решение по сигналу (ТЗ 10.1–10.3): комбинация оценок, остаточный edge, дробный Келли."""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
@@ -10,7 +11,7 @@ from ..config import Params
 
 @dataclass
 class Decision:
-    decision: str                      # BUY | SKIP
+    decision: str  # BUY | SKIP
     size_usd: float = 0.0
     q_whale: float | None = None
     q_llm: float | None = None
@@ -33,9 +34,20 @@ def kelly(q: float, p: float) -> float:
     return (q - p) / (1 - p)
 
 
-def decide(*, ask_now: float, vwap: float, edge_cat: float, q_llm: float | None, llm_trusted: bool,
-           fee_per_share: float, bankroll: float, conviction: float, days_left: float,
-           params: Params, whale_price: float | None = None) -> Decision:
+def decide(
+    *,
+    ask_now: float,
+    vwap: float,
+    edge_cat: float,
+    q_llm: float | None,
+    llm_trusted: bool,
+    fee_per_share: float,
+    bankroll: float,
+    conviction: float,
+    days_left: float,
+    params: Params,
+    whale_price: float | None = None,
+) -> Decision:
     # Оценка «по киту»: его цена входа плюс его обычное преимущество в этой теме. Если цена после его
     # сделки выросла, рост — это уже частично отыгранная его информация: прибавлять преимущество к новой
     # цене значило бы посчитать его дважды. Если цена упала — берём текущую (осторожнее).
@@ -49,7 +61,7 @@ def decide(*, ask_now: float, vwap: float, edge_cat: float, q_llm: float | None,
         q_final = q_whale
     else:
         if abs(q_whale - q_llm) > params.agree_max_diff:
-            d.reasons.append("disagree")       # кит и независимая оценка расходятся — пропуск, а не усреднение
+            d.reasons.append("disagree")  # кит и независимая оценка расходятся — пропуск, а не усреднение
             return d
         w = params.w_llm_trusted if llm_trusted else params.w_llm_untrusted
         q_final = (1 - w) * q_whale + w * q_llm
@@ -64,7 +76,7 @@ def decide(*, ask_now: float, vwap: float, edge_cat: float, q_llm: float | None,
         if d.annual_return < params.min_annual_return:
             d.reasons.append("low_annual_return")
             return d
-    d.kelly_full = kelly(d.q_eff, min(vwap + fee_per_share, 0.999))     # цена акции вместе с комиссией
+    d.kelly_full = kelly(d.q_eff, min(vwap + fee_per_share, 0.999))  # цена акции вместе с комиссией
     d.kelly_frac = params.kelly_fraction * d.kelly_full
     lo, hi = params.conviction_clamp
     d.size_usd = round(d.kelly_frac * bankroll * float(np.clip(conviction, lo, hi)), 2)

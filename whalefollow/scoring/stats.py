@@ -1,4 +1,5 @@
 """Статистика скоринга (ТЗ 6.3–6.4): сжатие, bootstrap, тест «навык или везение», BH."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -18,9 +19,16 @@ def wmean(x: np.ndarray, w: np.ndarray) -> float:
     return float(np.sum(x[m] * w[m]) / np.sum(w[m]))
 
 
-def bootstrap_wmean(x: np.ndarray, w: np.ndarray, b: int, rng: np.random.Generator,
-                    k: float | None = None, q_lo: float = 5, q_hi: float = 95,
-                    chunk: int = 1000) -> tuple[float, float]:
+def bootstrap_wmean(
+    x: np.ndarray,
+    w: np.ndarray,
+    b: int,
+    rng: np.random.Generator,
+    k: float | None = None,
+    q_lo: float = 5,
+    q_hi: float = 95,
+    chunk: int = 1000,
+) -> tuple[float, float]:
     """Перцентильный ДИ средневзвешенного по пересборкам кластеров (с повторами).
 
     Если задан k, к каждой пересборке применяется сжатие n/(n+k) — получаем ДИ E_shrunk.
@@ -39,15 +47,16 @@ def bootstrap_wmean(x: np.ndarray, w: np.ndarray, b: int, rng: np.random.Generat
         size = min(chunk, b - s)
         idx = rng.integers(0, n, (size, n))
         ws = w[idx]
-        out[s:s + size] = (x[idx] * ws).sum(1) / ws.sum(1)
+        out[s : s + size] = (x[idx] * ws).sum(1) / ws.sum(1)
     if k:
         out *= n / (n + k)
     lo, hi = np.percentile(out, [q_lo, q_hi])
     return float(lo), float(hi)
 
 
-def null_pvalue(p: np.ndarray, r: np.ndarray, w: np.ndarray, sims: int, rng: np.random.Generator,
-                chunk: int = 1000) -> float:
+def null_pvalue(
+    p: np.ndarray, r: np.ndarray, w: np.ndarray, sims: int, rng: np.random.Generator, chunk: int = 1000
+) -> float:
     """Тест «навык или везение» (6.4).
 
     H0: рынок откалиброван, исход позиции i ~ Bernoulli(p_i). Статистика

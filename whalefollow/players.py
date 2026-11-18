@@ -10,13 +10,14 @@
 
 Ответы кэшируются в памяти на несколько минут: повторное открытие карточки — мгновенно.
 """
+
 from __future__ import annotations
 
 import logging
 import re
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .util import pmap
 
@@ -66,7 +67,7 @@ def form_weeks(series: list[dict], weeks: int = 26, now: int | None = None) -> l
     start = now - weeks * 7 * DAY
     out, j, last = [], 0, None
     pts = sorted(series, key=lambda p: p["ts"])
-    for k in range(weeks + 1):                      # значение кривой на границе каждой недели
+    for k in range(weeks + 1):  # значение кривой на границе каждой недели
         edge = start + k * 7 * DAY
         while j < len(pts) and pts[j]["ts"] <= edge:
             last = pts[j]["pnl"]
@@ -96,9 +97,14 @@ def form_summary(weeks: list[dict]) -> dict:
         run = run + 1 if s else 0
         best = max(best, run)
     last4 = sum(w["pnl"] for w in weeks[-4:])
-    return {"weeks": len(weeks), "green_share": round(sum(signs) / len(signs), 2) if signs else None,
-            "streak_now": cur, "streak_best": best, "last4_pnl": round(last4, 2),
-            "state": "hot" if cur >= 3 and last4 > 0 else ("cold" if last4 < 0 else "neutral")}
+    return {
+        "weeks": len(weeks),
+        "green_share": round(sum(signs) / len(signs), 2) if signs else None,
+        "streak_now": cur,
+        "streak_best": best,
+        "last4_pnl": round(last4, 2),
+        "state": "hot" if cur >= 3 and last4 > 0 else ("cold" if last4 < 0 else "neutral"),
+    }
 
 
 def max_drawdown(series: list[dict]) -> float:
@@ -113,7 +119,7 @@ def _iso_ts(s) -> int | None:
     if not s:
         return None
     try:
-        return int(datetime.fromisoformat(str(s).replace("Z", "+00:00")).replace(tzinfo=timezone.utc).timestamp())
+        return int(datetime.fromisoformat(str(s).replace("Z", "+00:00")).replace(tzinfo=UTC).timestamp())
     except ValueError:
         return None
 
@@ -121,17 +127,26 @@ def _iso_ts(s) -> int | None:
 def position_card(r: dict) -> dict:
     """Позиция игрока (поля /v2/positions) → строка для интерфейса."""
     size = _f(r.get("current_size")) or 0.0
-    return {"title": r.get("title"), "outcome": r.get("outcome"), "token_id": str(r.get("token_id") or ""),
-            "market_id": r.get("condition_id"), "icon": r.get("icon"),
-            "url": f"https://polymarket.com/event/{r['event_slug']}" if r.get("event_slug") else None,
-            "shares": round(size, 2), "avg_cents": round((_f(r.get("avg_price")) or 0) * 100, 1),
-            "now_cents": round((_f(r.get("current_price")) or 0) * 100, 1),
-            "value_usd": round(_f(r.get("current_value")) or 0, 2),
-            "cost_usd": round(_f(r.get("total_cost_usdc")) or _f(r.get("entry_cost_usdc")) or 0, 2),
-            "pnl_usd": round(_f(r.get("total_pnl")) or 0, 2), "pnl_pct": _f(r.get("percent_pnl")),
-            "realized_usd": round(_f(r.get("realized_pnl")) or 0, 2),
-            "end_ts": _iso_ts(r.get("end_date")), "first_ts": r.get("first_entry_at"), "last_ts": r.get("last_event_at"),
-            "status": r.get("status")}
+    return {
+        "title": r.get("title"),
+        "outcome": r.get("outcome"),
+        "token_id": str(r.get("token_id") or ""),
+        "market_id": r.get("condition_id"),
+        "icon": r.get("icon"),
+        "url": f"https://polymarket.com/event/{r['event_slug']}" if r.get("event_slug") else None,
+        "shares": round(size, 2),
+        "avg_cents": round((_f(r.get("avg_price")) or 0) * 100, 1),
+        "now_cents": round((_f(r.get("current_price")) or 0) * 100, 1),
+        "value_usd": round(_f(r.get("current_value")) or 0, 2),
+        "cost_usd": round(_f(r.get("total_cost_usdc")) or _f(r.get("entry_cost_usdc")) or 0, 2),
+        "pnl_usd": round(_f(r.get("total_pnl")) or 0, 2),
+        "pnl_pct": _f(r.get("percent_pnl")),
+        "realized_usd": round(_f(r.get("realized_pnl")) or 0, 2),
+        "end_ts": _iso_ts(r.get("end_date")),
+        "first_ts": r.get("first_entry_at"),
+        "last_ts": r.get("last_event_at"),
+        "status": r.get("status"),
+    }
 
 
 class Players:
@@ -156,10 +171,16 @@ class Players:
             if self.gamma is not None and hasattr(self.gamma, "public_profile"):
                 try:
                     prof = self.gamma.public_profile(w)
-                except Exception:  # noqa: BLE001 — без профиля карточка всё равно строится
+                except Exception:
                     prof = None
-            return [{"wallet": w, "name": (prof or {}).get("name") or (prof or {}).get("pseudonym"),
-                     "image": (prof or {}).get("profileImage"), "exact": True}]
+            return [
+                {
+                    "wallet": w,
+                    "name": (prof or {}).get("name") or (prof or {}).get("pseudonym"),
+                    "image": (prof or {}).get("profileImage"),
+                    "exact": True,
+                }
+            ]
         name = text
         u = re.search(r"polymarket\.com/(?:@|profile/@?)([^/?#\s]+)", text)
         if u:
@@ -194,7 +215,8 @@ class Players:
             "rank_all": lambda: d.standing(wallet, "all"),
             "rank_month": lambda: d.standing(wallet, "month"),
             "open": (lambda: d.positions_page(wallet, status="OPEN", sort_by="CURRENT_VALUE", limit=12))
-            if with_positions else None,
+            if with_positions
+            else None,
         }
         jobs = {k: v for k, v in jobs.items() if v is not None}
         got, errors = {}, []
@@ -209,8 +231,11 @@ class Players:
         prof = got.get("profile") or {}
         stats = got.get("stats") or {}
         ra, rm = got.get("rank_all") or {}, got.get("rank_month") or {}
-        series = [{"ts": int(p["timestamp"]), "pnl": round(point_pnl(p), 2)} for p in (got.get("pnl") or [])
-                  if p.get("timestamp") is not None]
+        series = [
+            {"ts": int(p["timestamp"]), "pnl": round(point_pnl(p), 2)}
+            for p in (got.get("pnl") or [])
+            if p.get("timestamp") is not None
+        ]
         series.sort(key=lambda p: p["ts"])
         allp = stats.get("all_time_pnl") or {}
         pnl_all = point_pnl(allp) if allp else (series[-1]["pnl"] if series else _f(ra.get("pnl")))
@@ -221,25 +246,39 @@ class Players:
             cut = now - days * DAY
             base = next((p["pnl"] for p in reversed(series) if p["ts"] <= cut), series[0]["pnl"])
             return round(series[-1]["pnl"] - base, 2)
+
         weeks = form_weeks(series, 26, now)
         v30 = got.get("vol30") or {}
         name = prof.get("name") or ra.get("user_name") or prof.get("pseudonym")
         out = {
-            "ok": True, "wallet": wallet, "name": name, "pseudonym": prof.get("pseudonym"),
-            "image": prof.get("profileImage") or ra.get("profile_image"), "x": prof.get("xUsername") or ra.get("x_username"),
-            "verified": bool(prof.get("verifiedBadge") or ra.get("verified")), "bio": prof.get("bio"),
+            "ok": True,
+            "wallet": wallet,
+            "name": name,
+            "pseudonym": prof.get("pseudonym"),
+            "image": prof.get("profileImage") or ra.get("profile_image"),
+            "x": prof.get("xUsername") or ra.get("x_username"),
+            "verified": bool(prof.get("verifiedBadge") or ra.get("verified")),
+            "bio": prof.get("bio"),
             "profile_url": f"https://polymarket.com/profile/{wallet}",
             "joined_ts": stats.get("join_date") or _iso_ts(prof.get("createdAt")),
             "pnl_all_usd": round(pnl_all, 2) if pnl_all is not None else None,
-            "pnl_30d_usd": delta(30), "pnl_7d_usd": delta(7), "pnl_90d_usd": delta(90),
-            "markets": stats.get("trades"), "biggest_win_usd": _f(stats.get("biggest_win")),
-            "trades": allp.get("trade_count"), "volume_usd": _f(allp.get("volume_usdc")),
-            "volume_30d_usd": _f(v30.get("volume_usdc")), "trades_30d": v30.get("trade_count"),
+            "pnl_30d_usd": delta(30),
+            "pnl_7d_usd": delta(7),
+            "pnl_90d_usd": delta(90),
+            "markets": stats.get("trades"),
+            "biggest_win_usd": _f(stats.get("biggest_win")),
+            "trades": allp.get("trade_count"),
+            "volume_usd": _f(allp.get("volume_usdc")),
+            "volume_30d_usd": _f(v30.get("volume_usdc")),
+            "trades_30d": v30.get("trade_count"),
             "value_usd": _f(got.get("value")),
-            "rank_pnl": ra.get("rank_pnl") or None, "rank_volume": ra.get("rank_volume") or None,
+            "rank_pnl": ra.get("rank_pnl") or None,
+            "rank_volume": ra.get("rank_volume") or None,
             "rank_pnl_month": rm.get("rank_pnl") or None,
-            "series": _thin(series, 300), "max_drawdown_usd": max_drawdown(series),
-            "weeks": weeks, "form": form_summary(weeks),
+            "series": _thin(series, 300),
+            "max_drawdown_usd": max_drawdown(series),
+            "weeks": weeks,
+            "form": form_summary(weeks),
             "partial": errors,
         }
         if with_positions:
@@ -260,7 +299,7 @@ class Players:
             jobs["holders"] = lambda: self.data.holders(market_id, limit=10, include_pnl=True)
         for w in (wallets or [])[:4]:
             if hasattr(self.data, "positions_page"):
-                jobs["w:" + w] = (lambda w=w: self.data.positions_page(w, condition=market_id, status="OPEN", limit=5))
+                jobs["w:" + w] = lambda w=w: self.data.positions_page(w, condition=market_id, status="OPEN", limit=5)
         got = {}
         for (k, _), res, exc in pmap(lambda kv: kv[1](), list(jobs.items()), workers=max(1, len(jobs))):
             if exc is None:
@@ -278,36 +317,68 @@ class Players:
             label = outcomes[toks.index(tok)] if tok in toks and toks.index(tok) < len(outcomes) else None
             for h in hs:
                 w = str(h.get("proxy_wallet") or "").lower()
-                holders.append({"wallet": w, "name": h.get("name") or h.get("pseudonym"), "image": h.get("profile_image"),
-                                "token_id": tok, "outcome": label, "shares": round(_f(h.get("amount")) or 0, 1),
-                                "avg_cents": round((_f(h.get("avg_price")) or 0) * 100, 1) if h.get("avg_price") is not None else None,
-                                "pnl_usd": round(_f(h.get("total_pnl")) or 0, 2) if h.get("total_pnl") is not None else None,
-                                "value_usd": round(_f(h.get("current_value")) or 0, 2) if h.get("current_value") is not None else None,
-                                "ours": w in mine, "same_side": token_id is not None and tok == str(token_id)})
+                holders.append(
+                    {
+                        "wallet": w,
+                        "name": h.get("name") or h.get("pseudonym"),
+                        "image": h.get("profile_image"),
+                        "token_id": tok,
+                        "outcome": label,
+                        "shares": round(_f(h.get("amount")) or 0, 1),
+                        "avg_cents": round((_f(h.get("avg_price")) or 0) * 100, 1)
+                        if h.get("avg_price") is not None
+                        else None,
+                        "pnl_usd": round(_f(h.get("total_pnl")) or 0, 2) if h.get("total_pnl") is not None else None,
+                        "value_usd": round(_f(h.get("current_value")) or 0, 2)
+                        if h.get("current_value") is not None
+                        else None,
+                        "ours": w in mine,
+                        "same_side": token_id is not None and tok == str(token_id),
+                    }
+                )
         holders.sort(key=lambda h: -(h["value_usd"] or h["shares"] or 0))
         whale_pos = []
         for k, rows in got.items():
             if k.startswith("w:"):
                 for r in rows or []:
                     whale_pos.append({**position_card(r), "wallet": k[2:]})
-        out = {"ok": bool(raw) or bool(holders), "market_id": market_id,
-               "question": raw.get("question"), "rules": raw.get("description"), "image": raw.get("image") or raw.get("icon"),
-               "end_ts": _iso_ts(raw.get("endDate")), "start_ts": _iso_ts(raw.get("startDate")),
-               "volume_usd": _f(raw.get("volumeNum") or raw.get("volume")),
-               "volume_24h_usd": _f(raw.get("volume24hr")), "liquidity_usd": _f(raw.get("liquidityNum") or raw.get("liquidity")),
-               "spread": _f(raw.get("spread")), "best_bid": _f(raw.get("bestBid")), "best_ask": _f(raw.get("bestAsk")),
-               "change_1d": _f(raw.get("oneDayPriceChange")), "event_title": ev.get("title"),
-               "url": f"https://polymarket.com/event/{ev['slug']}" if ev.get("slug") else
-               (f"https://polymarket.com/market/{raw['slug']}" if raw.get("slug") else None),
-               "outcomes": [{"label": o, "price": prices[i] if i < len(prices) else None,
-                             "token_id": toks[i] if i < len(toks) else None, "ours": token_id is not None and
-                             i < len(toks) and toks[i] == str(token_id)} for i, o in enumerate(outcomes)],
-               "holders": holders[:16], "whale_positions": whale_pos}
+        out = {
+            "ok": bool(raw) or bool(holders),
+            "market_id": market_id,
+            "question": raw.get("question"),
+            "rules": raw.get("description"),
+            "image": raw.get("image") or raw.get("icon"),
+            "end_ts": _iso_ts(raw.get("endDate")),
+            "start_ts": _iso_ts(raw.get("startDate")),
+            "volume_usd": _f(raw.get("volumeNum") or raw.get("volume")),
+            "volume_24h_usd": _f(raw.get("volume24hr")),
+            "liquidity_usd": _f(raw.get("liquidityNum") or raw.get("liquidity")),
+            "spread": _f(raw.get("spread")),
+            "best_bid": _f(raw.get("bestBid")),
+            "best_ask": _f(raw.get("bestAsk")),
+            "change_1d": _f(raw.get("oneDayPriceChange")),
+            "event_title": ev.get("title"),
+            "url": f"https://polymarket.com/event/{ev['slug']}"
+            if ev.get("slug")
+            else (f"https://polymarket.com/market/{raw['slug']}" if raw.get("slug") else None),
+            "outcomes": [
+                {
+                    "label": o,
+                    "price": prices[i] if i < len(prices) else None,
+                    "token_id": toks[i] if i < len(toks) else None,
+                    "ours": token_id is not None and i < len(toks) and toks[i] == str(token_id),
+                }
+                for i, o in enumerate(outcomes)
+            ],
+            "holders": holders[:16],
+            "whale_positions": whale_pos,
+        }
         return self.markets.put(key, out)
 
 
 def _jl(v) -> list:
     import json
+
     if isinstance(v, list):
         return v
     try:

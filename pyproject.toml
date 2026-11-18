@@ -30,3 +30,32 @@ whalefollow = ["schema.sql", "web/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["whalefollow/web"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM", "RUF100", "PERF", "PLE"]
+ignore = [
+  "E501",    # длинные строки переносит форматер; оставшиеся — строки и SQL
+  "E731",    # короткие lambda в таблицах маршрутов и настроек
+  "B008",    # FastAPI: значения по умолчанию через Body()/Query()
+  "B905",    # zip(strict=...) — длины совпадают по построению
+  "SIM105",  # contextlib.suppress не короче try/except/pass
+  "SIM108",  # тернарный оператор не всегда читаемее
+  "PERF203", # try в цикле — сетевые запросы по одному
+  "PERF401", # списковые включения не всегда читаемее
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011", "B017", "SIM117", "F811"]   # F811: фикстуры pytest, импортированные из других тестов
+"whalefollow/migrations/versions/*" = ["I001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["whalefollow"]
+known-local-folder = ["conftest", "synthetic"]
+
+[tool.ruff.format]
+quote-style = "double"

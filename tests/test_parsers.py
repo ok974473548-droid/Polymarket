@@ -3,15 +3,30 @@ import json
 from whalefollow.ingest.polymarket import parse_book, parse_market, parse_price_history, parse_trade, trade_id_for
 
 GAMMA_RESOLVED = {
-    "conditionId": "0xabc", "question": "Will the central bank cut rates in December?",
-    "clobTokenIds": json.dumps(["111", "222"]), "outcomes": json.dumps(["Yes", "No"]),
-    "outcomePrices": json.dumps(["1", "0"]), "closed": True, "endDate": "2026-12-15T00:00:00Z",
-    "closedTime": "2026-12-15T12:00:00Z", "volumeNum": 125000.5, "liquidityNum": 30000,
+    "conditionId": "0xabc",
+    "question": "Will the central bank cut rates in December?",
+    "clobTokenIds": json.dumps(["111", "222"]),
+    "outcomes": json.dumps(["Yes", "No"]),
+    "outcomePrices": json.dumps(["1", "0"]),
+    "closed": True,
+    "endDate": "2026-12-15T00:00:00Z",
+    "closedTime": "2026-12-15T12:00:00Z",
+    "volumeNum": 125000.5,
+    "liquidityNum": 30000,
     "events": [{"id": 77, "title": "Fed December", "tags": [{"slug": "economy"}]}],
 }
-TRADE_V2 = {"proxy_wallet": "0xAbC0000000000000000000000000000000000001", "side": "BUY", "token_id": "111",
-            "condition_id": "0xabc", "size": 100.0, "price": 0.55, "timestamp": 1790000000,
-            "transaction_hash": "0xdead", "outcome": "Yes", "outcome_index": 0}
+TRADE_V2 = {
+    "proxy_wallet": "0xAbC0000000000000000000000000000000000001",
+    "side": "BUY",
+    "token_id": "111",
+    "condition_id": "0xabc",
+    "size": 100.0,
+    "price": 0.55,
+    "timestamp": 1790000000,
+    "transaction_hash": "0xdead",
+    "outcome": "Yes",
+    "outcome_index": 0,
+}
 
 
 def test_parse_market_resolved():
@@ -36,8 +51,12 @@ def test_parse_trade_and_stable_id():
 
 
 def test_parse_book_sorted():
-    bids, asks = parse_book({"bids": [{"price": "0.40", "size": "10"}, {"price": "0.45", "size": "5"}],
-                             "asks": [{"price": "0.52", "size": "3"}, {"price": "0.50", "size": "7"}]})
+    bids, asks = parse_book(
+        {
+            "bids": [{"price": "0.40", "size": "10"}, {"price": "0.45", "size": "5"}],
+            "asks": [{"price": "0.52", "size": "3"}, {"price": "0.50", "size": "7"}],
+        }
+    )
     assert bids[0][0] == 0.45 and asks[0][0] == 0.50
 
 

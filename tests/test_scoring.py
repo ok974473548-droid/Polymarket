@@ -1,4 +1,5 @@
 """Скоринг на синтетическом рынке: находит заложенный навык и не находит случайный (критерий этапа 3 ТЗ)."""
+
 import pandas as pd
 
 from whalefollow.config import Params
@@ -46,12 +47,17 @@ def test_watchlist_built_from_approved(scored_world):
 
 def test_exchange_funder_does_not_link_wallets():
     p = Params(funder_allowlist=("0xexch",))
-    wallets = pd.DataFrame({"wallet": ["a", "b", "c", "d"], "owner_eoa": [None] * 4,
-                            "funder_wallet": ["0xexch", "0xexch", "0xown", "0xown"]})
+    wallets = pd.DataFrame(
+        {
+            "wallet": ["a", "b", "c", "d"],
+            "owner_eoa": [None] * 4,
+            "funder_wallet": ["0xexch", "0xexch", "0xown", "0xown"],
+        }
+    )
     links = compute_links(pd.DataFrame(), wallets, pd.DataFrame(columns=["from_wallet", "to_wallet", "amount"]), p)
     assert ("a", "b") not in links and links[("c", "d")]["L1"]
     mapping, grey = cluster_wallets(links, p)
-    assert mapping == {} and grey and grey[0][:2] == ("c", "d")   # один L1 = серая зона, не склейка
+    assert mapping == {} and grey and grey[0][:2] == ("c", "d")  # один L1 = серая зона, не склейка
 
 
 def test_direct_transfer_merges():

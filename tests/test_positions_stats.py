@@ -5,20 +5,39 @@ import pytest
 from whalefollow.positions import _build
 from whalefollow.scoring.stats import bh_qvalues, bootstrap_wmean, null_pvalue, shrink
 
-MK = pd.DataFrame([{"market_id": "m1", "event_id": "e1", "category": "economics", "status": "resolved", "resolved_ts": 500},
-                   {"market_id": "m2", "event_id": "e2", "category": "sports", "status": "open", "resolved_ts": None}])
-TOK = pd.DataFrame([{"token_id": "y1", "market_id": "m1", "payout": 1.0},
-                    {"token_id": "y2", "market_id": "m2", "payout": None}])
+MK = pd.DataFrame(
+    [
+        {"market_id": "m1", "event_id": "e1", "category": "economics", "status": "resolved", "resolved_ts": 500},
+        {"market_id": "m2", "event_id": "e2", "category": "sports", "status": "open", "resolved_ts": None},
+    ]
+)
+TOK = pd.DataFrame(
+    [{"token_id": "y1", "market_id": "m1", "payout": 1.0}, {"token_id": "y2", "market_id": "m2", "payout": None}]
+)
 
 
 def _t(i, ts, w, tok, side, price, shares):
-    return {"trade_id": str(i), "ts": ts, "wallet": w, "token_id": tok, "market_id": None, "side": side,
-            "price": price, "size_shares": shares, "size_usd": price * shares}
+    return {
+        "trade_id": str(i),
+        "ts": ts,
+        "wallet": w,
+        "token_id": tok,
+        "market_id": None,
+        "side": side,
+        "price": price,
+        "size_shares": shares,
+        "size_usd": price * shares,
+    }
 
 
 def test_position_resolved_with_partial_sell():
-    tr = pd.DataFrame([_t(1, 10, "w", "y1", "BUY", 0.4, 100), _t(2, 20, "w", "y1", "BUY", 0.6, 100),
-                       _t(3, 30, "w", "y1", "SELL", 0.7, 50)])
+    tr = pd.DataFrame(
+        [
+            _t(1, 10, "w", "y1", "BUY", 0.4, 100),
+            _t(2, 20, "w", "y1", "BUY", 0.6, 100),
+            _t(3, 30, "w", "y1", "SELL", 0.7, 50),
+        ]
+    )
     p = _build(tr, MK, TOK).iloc[0]
     assert p["avg_entry"] == pytest.approx(0.5)
     # R = (35 выручки + 150 оставшихся × 1) / 200 купленных
@@ -55,7 +74,7 @@ def test_null_pvalue_separates_skill_from_luck():
     n = 150
     p = rng.uniform(0.2, 0.8, n)
     w = np.ones(n)
-    lucky = (rng.random(n) < p).astype(float)            # исходы как у рынка — навыка нет
+    lucky = (rng.random(n) < p).astype(float)  # исходы как у рынка — навыка нет
     skilled = (rng.random(n) < np.clip(p + 0.15, 0, 1)).astype(float)
     assert null_pvalue(p, skilled, w, 4000, rng) < 0.01
     assert null_pvalue(p, lucky, w, 4000, rng) > 0.01

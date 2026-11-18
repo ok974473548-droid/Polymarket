@@ -1,8 +1,9 @@
 """Лимиты и стопы (ТЗ 10.4). Работают поверх решения и могут только уменьшить ставку."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from ..config import DEFAULT_SETTINGS, Params
 from ..db import DB, now_ts
@@ -12,13 +13,13 @@ MIN_ORDER_USD = 1.0
 
 
 def _day_start(ts: int) -> int:
-    d = datetime.fromtimestamp(ts, tz=timezone.utc)
-    return int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp())
+    d = datetime.fromtimestamp(ts, tz=UTC)
+    return int(datetime(d.year, d.month, d.day, tzinfo=UTC).timestamp())
 
 
 def _month_start(ts: int) -> int:
-    d = datetime.fromtimestamp(ts, tz=timezone.utc)
-    return int(datetime(d.year, d.month, 1, tzinfo=timezone.utc).timestamp())
+    d = datetime.fromtimestamp(ts, tz=UTC)
+    return int(datetime(d.year, d.month, 1, tzinfo=UTC).timestamp())
 
 
 @dataclass
@@ -41,7 +42,9 @@ class RiskManager:
             v = self.db.get_setting(k)
             if v is not None:
                 # вложенные настройки дополняются новыми ключами по умолчанию (например, новые источники)
-                s[k] = {**DEFAULT_SETTINGS[k], **v} if isinstance(v, dict) and isinstance(DEFAULT_SETTINGS[k], dict) else v
+                s[k] = (
+                    {**DEFAULT_SETTINGS[k], **v} if isinstance(v, dict) and isinstance(DEFAULT_SETTINGS[k], dict) else v
+                )
         return s
 
     @property
@@ -55,7 +58,9 @@ class RiskManager:
     def set_stopped(self, value: bool) -> None:
         self.db.set_state("kill_switch", bool(value))
         if value:
-            self.db.notify("stopped", "Система остановлена", "Новые ставки не создаются. Открытые остаются до закрытия рынков.")
+            self.db.notify(
+                "stopped", "Система остановлена", "Новые ставки не создаются. Открытые остаются до закрытия рынков."
+            )
 
     def pause_reason(self, now: int | None = None) -> str | None:
         now = now or now_ts()
@@ -74,7 +79,12 @@ class RiskManager:
         bank = float(s["bankroll_usd"])
         eq_now = self.pf.equity(bank)
         for key, start, frac, until in (
-            ("day", _day_start(now), float(s.get("daily_loss_stop_frac", self.p.daily_stop_frac)), _day_start(now) + 86400),
+            (
+                "day",
+                _day_start(now),
+                float(s.get("daily_loss_stop_frac", self.p.daily_stop_frac)),
+                _day_start(now) + 86400,
+            ),
             ("month", _month_start(now), float(s.get("monthly_loss_stop_frac", self.p.monthly_stop_frac)), None),
         ):
             mark = self.db.get_state(f"equity_{key}_start")
@@ -88,8 +98,10 @@ class RiskManager:
                 if self.pause_reason(now) != reason:
                     self.db.set_state("paused", {"reason": reason, "until": until, "ts": now})
                     title = "Система на паузе" if key == "day" else "Пауза: убыток за месяц"
-                    body = (f"Убыток за {'сегодня' if key == 'day' else 'месяц'} достиг {loss:.0%} — сработал защитный лимит."
-                            + (" Работа продолжится завтра." if key == "day" else " Нужна ручная проверка."))
+                    body = (
+                        f"Убыток за {'сегодня' if key == 'day' else 'месяц'} достиг {loss:.0%} — сработал защитный лимит."
+                        + (" Работа продолжится завтра." if key == "day" else " Нужна ручная проверка.")
+                    )
                     self.db.notify("pause", title, body)
                 return reason
         return None
@@ -113,8 +125,14 @@ class RiskManager:
         exposure = {"total": 0.0, "event": 0.0, "category": 0.0}
         n_entity = 0
         for pos in open_pos:
-            m = self.db.one("SELECT m.event_id, m.category FROM tokens t JOIN markets m ON m.market_id=t.market_id "
-                            "WHERE t.token_id=?", (pos["token_id"],)) or {}
+            m = (
+                self.db.one(
+                    "SELECT m.event_id, m.category FROM tokens t JOIN markets m ON m.market_id=t.market_id "
+                    "WHERE t.token_id=?",
+                    (pos["token_id"],),
+                )
+                or {}
+            )
             exposure["total"] += pos["cost"]
             if m.get("event_id") and m.get("event_id") == market.get("event_id"):
                 exposure["event"] += pos["cost"]

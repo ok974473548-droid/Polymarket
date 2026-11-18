@@ -1,11 +1,11 @@
 """Сквозной сценарий агента и HTTP API на синтетическом рынке."""
+
 import json
 import threading
 import urllib.request
 
 import pytest
 
-from conftest import fast_params
 from whalefollow.agent import Agent
 from whalefollow.api.server import serve
 from whalefollow.db import DB
@@ -16,6 +16,8 @@ from whalefollow.positions import assign_entities, build_positions
 from whalefollow.scoring.scorer import run_scoring
 from whalefollow.scoring.sybil import run_antisybil
 from whalefollow.services import Services
+
+from conftest import fast_params
 from synthetic import FakeClob, FakeData, FakeGamma, SyntheticWorld, load_world
 
 
@@ -30,15 +32,26 @@ def env():
     run_antisybil(db, params)
     assign_entities(db)
     scores = run_scoring(db, params, now=world.now)
-    agent = Agent(db, params, FakeData(world), FakeClob(world), FakeGamma(world),
-                  estimator=FunctionEstimator(lambda ctx: 0.72), clock=lambda: world.now)
-    agent.run_once()   # первая догрузка истории сигналов не создаёт
+    agent = Agent(
+        db,
+        params,
+        FakeData(world),
+        FakeClob(world),
+        FakeGamma(world),
+        estimator=FunctionEstimator(lambda ctx: 0.72),
+        clock=lambda: world.now,
+    )
+    agent.run_once()  # первая догрузка истории сигналов не создаёт
     best = scores[scores.status == "approved"].sort_values("score", ascending=False)
     whale = None
     for e in best["entity_id"]:
-        cats = [r["category"] for r in db.query("SELECT category FROM wallet_category_scores WHERE entity_id=? "
-                                                "AND status='approved'", (e,))
-                if r["category"] in ("economics", "politics", "sports", "tech")]
+        cats = [
+            r["category"]
+            for r in db.query(
+                "SELECT category FROM wallet_category_scores WHERE entity_id=? AND status='approved'", (e,)
+            )
+            if r["category"] in ("economics", "politics", "sports", "tech")
+        ]
         if cats:
             whale, cat = e, cats[0]
             break
@@ -83,8 +96,9 @@ def test_skip_when_news_disagree(env):
     m = _live_market(env)
     world.whale_trade_now(agent.wallets_of(env["whale"])[0], m, m.yes_token, 3000)
     agent.run_once()
-    dec = db.one("SELECT d.* FROM decisions d JOIN signals s ON s.signal_id=d.signal_id WHERE s.market_id=?",
-                 (m.market_id,))
+    dec = db.one(
+        "SELECT d.* FROM decisions d JOIN signals s ON s.signal_id=d.signal_id WHERE s.market_id=?", (m.market_id,)
+    )
     assert dec["decision"] == "SKIP" and "disagree" in json.loads(dec["reasons"])["codes"]
     agent.estimator = FunctionEstimator(lambda ctx: 0.72)
 
@@ -145,8 +159,9 @@ def test_settlement_and_notifications(env):
 
 def _http(port, method, path, body=None):
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=data, method=method,
-                                 headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}", data=data, method=method, headers={"Content-Type": "application/json"}
+    )
     try:
         with urllib.request.urlopen(req, timeout=60) as r:
             return r.status, json.loads(r.read())
@@ -172,10 +187,15 @@ def test_http_api(env):
         code, st = _http(port, "PUT", "/api/settings", {"max_bet_usd": 30, "mode": "auto"})
         assert code == 200 and st["settings"]["max_bet_usd"] == 30 and "mode" in st["errors"]
         random_wallet = next(w for w, r in env["world"].roles.items() if r == "random")
-        code, chk = _http(port, "POST", "/api/whales/check", {"address": f"https://polymarket.com/profile/{random_wallet}", "wait": True})
+        code, chk = _http(
+            port,
+            "POST",
+            "/api/whales/check",
+            {"address": f"https://polymarket.com/profile/{random_wallet}", "wait": True},
+        )
         assert code == 200 and chk["fits"] is False and len(chk["checks"]) == 3
         code, add = _http(port, "POST", "/api/whales", {"entity_id": chk["entity_id"], "mode": "copy"})
-        assert code == 200 and add["mode"] == "watch" and add["message"]     # не прошёл — только следить
+        assert code == 200 and add["mode"] == "watch" and add["message"]  # не прошёл — только следить
         code, ob = _http(port, "POST", "/api/onboarding", {"jurisdiction_ok": True, "risk_ack": False})
         assert code == 200 and ob["ok"] is False
         code, st = _http(port, "POST", "/api/stop")
@@ -195,8 +215,12 @@ def test_web_ui_served(env):
     port = httpd.server_address[1]
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     try:
-        for path, needle in (("/", b"WhaleFollow"), ("/app.js", b"viewDashboard"), ("/app.css", b"--accent"),
-                             ("/whales/anything", b"<!doctype html>")):
+        for path, needle in (
+            ("/", b"WhaleFollow"),
+            ("/app.js", b"viewDashboard"),
+            ("/app.css", b"--accent"),
+            ("/whales/anything", b"<!doctype html>"),
+        ):
             with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=10) as r:
                 assert r.status == 200 and needle in r.read()
         for bad in ("/../pyproject.toml", "/%2e%2e/schema.sql", "/nope.js"):

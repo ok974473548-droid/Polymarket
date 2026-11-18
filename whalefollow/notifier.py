@@ -10,47 +10,58 @@
 Бот принимает нажатия и команды только из чата WF_TELEGRAM_CHAT_ID — остальные игнорируются.
 Отправка и приём идут в фоновых потоках, чтобы не задерживать агента.
 """
-from __future__ import annotations
 
-from typing import Any
+from __future__ import annotations
 
 import logging
 import os
 import queue
 import threading
 import time
+from typing import Any
 
 from . import net
-
 from .config import DEFAULT_SETTINGS
 from .db import DB
 
 log = logging.getLogger(__name__)
 
-KIND_TO_SETTING = {"signal": "signals", "settled": "signals", "whale_exit": "whale_exit", "whale_status": "whale_exit",
-                   "whale_check": "whale_exit", "system": "system", "settings": "system",
-                   "pause": "limits", "stopped": "limits", "weekly": "weekly"}
+KIND_TO_SETTING = {
+    "signal": "signals",
+    "settled": "signals",
+    "whale_exit": "whale_exit",
+    "whale_status": "whale_exit",
+    "whale_check": "whale_exit",
+    "system": "system",
+    "settings": "system",
+    "pause": "limits",
+    "stopped": "limits",
+    "weekly": "weekly",
+}
 
-HELP = ("Команды:\n/status — состояние системы\n/stop — остановить всё (новые ставки не делаются)\n"
-        "/resume — продолжить работу\n/help — эта справка\n\nПод сигналами — кнопки «Купить» и «Пропустить».")
+HELP = (
+    "Команды:\n/status — состояние системы\n/stop — остановить всё (новые ставки не делаются)\n"
+    "/resume — продолжить работу\n/help — эта справка\n\nПод сигналами — кнопки «Купить» и «Пропустить»."
+)
 
 
 class TelegramNotifier:
-    def __init__(self, db: DB, token: str, chat_id: str, public_url: str | None = None,
-                 session: Any = None, poll: bool = False):
+    def __init__(
+        self, db: DB, token: str, chat_id: str, public_url: str | None = None, session: Any = None, poll: bool = False
+    ):
         self.db, self.token, self.chat_id = db, token, str(chat_id)
         self.public_url = (public_url or os.environ.get("WF_PUBLIC_URL", "http://localhost:8787")).rstrip("/")
         self.s = session if session is not None else net.client()
         self.api = f"https://api.telegram.org/bot{token}"
         self.q: queue.Queue = queue.Queue()
         self.sent = 0
-        self.services = None                 # подключается attach(): кнопки и команды
+        self.services = None  # подключается attach(): кнопки и команды
         self._offset = 0
         self._stop = threading.Event()
         threading.Thread(target=self._worker, daemon=True, name="tg-send").start()
 
     @classmethod
-    def from_env(cls, db: DB) -> "TelegramNotifier | None":
+    def from_env(cls, db: DB) -> TelegramNotifier | None:
         token, chat = os.environ.get("WF_TELEGRAM_BOT_TOKEN"), os.environ.get("WF_TELEGRAM_CHAT_ID")
         if not token or not chat:
             return None
@@ -90,11 +101,20 @@ class TelegramNotifier:
         if not ref or self.services is None:
             return None
         if n["kind"] == "signal" and ref.startswith("s_"):
-            return {"inline_keyboard": [[{"text": "✅ Купить", "callback_data": f"c:{ref}"},
-                                         {"text": "Пропустить", "callback_data": f"r:{ref}"}]]}
+            return {
+                "inline_keyboard": [
+                    [
+                        {"text": "✅ Купить", "callback_data": f"c:{ref}"},
+                        {"text": "Пропустить", "callback_data": f"r:{ref}"},
+                    ]
+                ]
+            }
         if n["kind"] == "whale_exit" and ref.startswith("s_"):
-            return {"inline_keyboard": [[{"text": "Держать", "callback_data": f"h:{ref}"},
-                                         {"text": "Продать", "callback_data": f"x:{ref}"}]]}
+            return {
+                "inline_keyboard": [
+                    [{"text": "Держать", "callback_data": f"h:{ref}"}, {"text": "Продать", "callback_data": f"x:{ref}"}]
+                ]
+            }
         return None
 
     def on_notify(self, n: dict) -> None:
@@ -127,12 +147,15 @@ class TelegramNotifier:
     def _poll_loop(self) -> None:
         while not self._stop.is_set():
             try:
-                res = self._call("getUpdates", {"offset": self._offset, "timeout": 25,
-                                                "allowed_updates": ["message", "callback_query"]}, timeout=35)
+                res = self._call(
+                    "getUpdates",
+                    {"offset": self._offset, "timeout": 25, "allowed_updates": ["message", "callback_query"]},
+                    timeout=35,
+                )
                 for upd in (res or {}).get("result", []):
                     self._offset = max(self._offset, int(upd["update_id"]) + 1)
                     self.handle_update(upd)
-            except Exception as exc:  # noqa: BLE001 — сеть пропадает; пробуем снова
+            except Exception as exc:
                 log.warning("Telegram: приём обновлений: %s", exc)
                 self._stop.wait(10)
 
@@ -150,9 +173,15 @@ class TelegramNotifier:
             try:
                 self._call("answerCallbackQuery", {"callback_query_id": cq["id"], "text": text[:190]})
                 if msg.get("message_id"):
-                    self._call("editMessageText", {"chat_id": self.chat_id, "message_id": msg["message_id"],
-                                                   "text": f"{msg.get('text', '')}\n\n→ {text}",
-                                                   "disable_web_page_preview": True})
+                    self._call(
+                        "editMessageText",
+                        {
+                            "chat_id": self.chat_id,
+                            "message_id": msg["message_id"],
+                            "text": f"{msg.get('text', '')}\n\n→ {text}",
+                            "disable_web_page_preview": True,
+                        },
+                    )
             except net.HTTPError as exc:
                 log.warning("Telegram: ответ на нажатие: %s", exc)
             return text
@@ -185,7 +214,7 @@ class TelegramNotifier:
             if act in ("h", "x"):
                 r = agent.resolve_exit(sid, "hold" if act == "h" else "sell")
                 return {"held": "Держим позицию", "sold": "Продано"}.get(r.get("status"), r.get("error") or "Готово")
-        except Exception as exc:  # noqa: BLE001 — ответ пользователю, а не падение бота
+        except Exception as exc:
             log.warning("Telegram: действие %s: %s", data, exc)
             return f"Ошибка: {exc}"[:180]
         return "Неизвестное действие"
@@ -200,10 +229,12 @@ class TelegramNotifier:
             st = svc.status()
             d = svc.dashboard()
             bal = d.get("balance", {}) if isinstance(d, dict) else {}
-            return (f"{'Работает' if st.get('agent_ok') else 'Агент не отвечает'}"
-                    f"{' · ОСТАНОВЛЕНО' if st.get('stopped') else ''}\n"
-                    f"Ждут решения: {st.get('need_decision', 0)}\n"
-                    f"Баланс: ${bal.get('equity_usd', bal.get('balance_usd', 0)):,.0f}".replace(",", " "))
+            return (
+                f"{'Работает' if st.get('agent_ok') else 'Агент не отвечает'}"
+                f"{' · ОСТАНОВЛЕНО' if st.get('stopped') else ''}\n"
+                f"Ждут решения: {st.get('need_decision', 0)}\n"
+                f"Баланс: ${bal.get('equity_usd', bal.get('balance_usd', 0)):,.0f}".replace(",", " ")
+            )
         if cmd == "/stop":
             svc.stop_all()
             return "Остановлено: новые ставки не делаются. /resume — продолжить."
