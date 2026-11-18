@@ -1,0 +1,311 @@
+"""Тонкий слой БД: SQLite (по умолчанию) или PostgreSQL (если установлен psycopg).
+
+URL: "sqlite:///path/to.db", "sqlite://:memory:" или "postgresql://user:pass@host/db".
+SQL в коде пишется с плейсхолдером "?" — для PostgreSQL он переводится в "%s".
+"""
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import threading
+import time
+import uuid
+from contextlib import contextmanager
+from importlib import resources
+from typing import Any, Iterable, Sequence
+
+
+def new_id(prefix: str = "") -> str:
+    return prefix + uuid.uuid4().hex[:16]
+
+
+def now_ts() -> int:
+    return int(time.time())
+
+
+SQLITE_PRAGMAS = (
+    "PRAGMA synchronous=NORMAL",      # в режиме WAL безопасно и в разы быстрее записи по одной строке
+    "PRAGMA busy_timeout=60000",
+    "PRAGMA temp_store=MEMORY",
+    "PRAGMA cache_size=-65536",       # 64 МБ кэша страниц на соединение
+    "PRAGMA mmap_size=268435456",
+)
+
+
+class DB:
+    """Для файла SQLite у каждого потока своё соединение: экраны читают, пока агент или
+    пересчёт пишут (WAL). Запись идёт под общим замком процесса — без конкуренции писателей.
+    Для ":memory:" (тесты) и PostgreSQL — одно соединение под замком, как раньше."""
+
+    def __init__(self, url: str | None = None):
+        self.url = url or os.environ.get("WF_DB_URL", "sqlite:///whalefollow.db")
+        self._lock = threading.RLock()     # замок записи (и всех операций для общего соединения)
+        self._local = threading.local()
+        self._shared = None
+        self._shared_depth = 0
+        self.listeners: list = []           # подписчики на уведомления (Telegram и т.п.)
+        if self.url.startswith("postgres"):
+            import psycopg  # type: ignore  # noqa: устанавливается extras [postgres]
+            from psycopg.rows import dict_row  # type: ignore
+            self.kind = "pg"
+            self._shared = psycopg.connect(self.url, row_factory=dict_row, autocommit=True)
+        else:
+            path = self.url.split("sqlite://", 1)[-1]
+            path = path[1:] if path.startswith("/") else path
+            self.kind = "sqlite"
+            self.path = path or ":memory:"
+            if self.path == ":memory:":
+                self._shared = self._connect()
+            else:
+                c = self._connect()
+                c.execute("PRAGMA journal_mode=WAL")
+                self._local.conn = c
+
+    def _connect(self):
+        c = sqlite3.connect(self.path, check_same_thread=False, timeout=60)
+        c.row_factory = sqlite3.Row
+        for p in SQLITE_PRAGMAS:
+            c.execute(p)
+        return c
+
+    @property
+    def per_thread(self) -> bool:
+        return self._shared is None
+
+    @property
+    def conn(self):
+        if self._shared is not None:
+            return self._shared
+        c = getattr(self._local, "conn", None)
+        if c is None:
+            c = self._local.conn = self._connect()
+        return c
+
+    @property
+    def _tx_depth(self) -> int:
+        return self._shared_depth if self._shared is not None else getattr(self._local, "depth", 0)
+
+    @_tx_depth.setter
+    def _tx_depth(self, v: int) -> None:
+        if self._shared is not None:
+            self._shared_depth = v
+        else:
+            self._local.depth = v
+
+    @contextmanager
+    def _read(self):
+        """Чтение: со своим соединением потока — без замка, с общим — под замком."""
+        if self.per_thread:
+            yield self.conn
+        else:
+            with self._lock:
+                yield self.conn
+
+    # --- базовые операции ---
+    def _sql(self, sql: str) -> str:
+        return sql.replace("?", "%s") if self.kind == "pg" else sql
+
+    def execute(self, sql: str, params: Sequence[Any] = ()) -> None:
+        with self._lock:
+            self._execute(sql, params)
+
+    def _execute(self, sql: str, params: Sequence[Any] = ()) -> None:
+        self.conn.execute(self._sql(sql), tuple(params))
+        if self.kind == "sqlite" and self._tx_depth == 0:
+            self.conn.commit()
+
+    def executemany(self, sql: str, rows: Iterable[Sequence[Any]]) -> int:
+        with self._lock:
+            return self._executemany(sql, rows)
+
+    def _executemany(self, sql: str, rows: Iterable[Sequence[Any]]) -> int:
+        rows = [tuple(r) for r in rows]
+        if not rows:
+            return 0
+        if self.kind == "pg":
+            with self.conn.cursor() as cur:
+                cur.executemany(self._sql(sql), rows)
+        else:
+            self.conn.executemany(sql, rows)
+            if self._tx_depth == 0:
+                self.conn.commit()
+        return len(rows)
+
+    def query(self, sql: str, params: Sequence[Any] = ()) -> list[dict]:
+        with self._read() as conn:
+            cur = conn.execute(self._sql(sql), tuple(params))
+            return [dict(r) for r in cur.fetchall()]
+
+    def frame(self, sql: str, params: Sequence[Any] = ()):
+        """Результат запроса сразу в pandas (в разы быстрее, чем через список словарей)."""
+        import pandas as pd
+        if self.kind == "sqlite":
+            with self._read() as conn:
+                return pd.read_sql_query(sql, conn, params=tuple(params))
+        return pd.DataFrame(self.query(sql, params))
+
+    def one(self, sql: str, params: Sequence[Any] = ()) -> dict | None:
+        rows = self.query(sql, params)
+        return rows[0] if rows else None
+
+    def scalar(self, sql: str, params: Sequence[Any] = (), default=None):
+        row = self.one(sql, params)
+        if not row:
+            return default
+        val = next(iter(row.values()))
+        return default if val is None else val
+
+    @contextmanager
+    def tx(self):
+        with self._lock:
+            if self.kind == "pg":
+                with self.conn.transaction():
+                    yield self
+                return
+            with self._sqlite_tx():
+                yield self
+
+    @contextmanager
+    def _sqlite_tx(self):
+        self._tx_depth += 1
+        try:
+            yield self
+            if self._tx_depth == 1:
+                self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        finally:
+            self._tx_depth -= 1
+
+    # колонки, добавленные после первых версий: в существующую базу они дописываются при запуске
+    MIGRATIONS = {
+        "trades": {"source": "TEXT"},                 # NULL — сделка; split | merge — операция из журнала кошелька
+        "markets": {"fee_rate": "REAL",               # ставка комиссии тейкера: fee = shares × rate × p × (1−p)
+                    "url": "TEXT"},                   # страница события на polymarket.com
+        "signals": {"detected_ts": "INTEGER", "info": "TEXT"},
+    }
+
+    def _columns(self, table: str) -> set[str]:
+        if self.kind == "sqlite":
+            return {r["name"] for r in self.query(f"PRAGMA table_info({table})")}
+        return {r["column_name"] for r in self.query(
+            "SELECT column_name FROM information_schema.columns WHERE table_name=?", (table,))}
+
+    def init_schema(self) -> None:
+        sql = resources.files("whalefollow").joinpath("schema.sql").read_text(encoding="utf-8")
+        statements = []
+        for st in (s.strip() for s in sql.split(";")):
+            body = "\n".join(ln for ln in st.splitlines() if not ln.strip().startswith("--")).strip()
+            if body:
+                statements.append(body)
+        tables = [b for b in statements if not b.upper().startswith("CREATE INDEX")]
+        indexes = [b for b in statements if b.upper().startswith("CREATE INDEX")]
+        with self._lock:
+            for b in tables:
+                self.conn.execute(b)
+            for table, cols in self.MIGRATIONS.items():
+                have = self._columns(table)
+                for col, typ in cols.items():
+                    if col not in have:
+                        self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+            for b in indexes:                          # индексы — после миграций (могут ссылаться на новые колонки)
+                self.conn.execute(b)
+            if self.kind == "sqlite":
+                self.conn.commit()
+
+    def upsert(self, table: str, row: dict, keys: Sequence[str]) -> None:
+        cols = list(row)
+        placeholders = ",".join("?" for _ in cols)
+        updates = ",".join(f"{c}=excluded.{c}" for c in cols if c not in keys) or f"{keys[0]}=excluded.{keys[0]}"
+        sql = (f"INSERT INTO {table} ({','.join(cols)}) VALUES ({placeholders}) "
+               f"ON CONFLICT ({','.join(keys)}) DO UPDATE SET {updates}")
+        self.execute(sql, [row[c] for c in cols])
+
+    def upsert_many(self, table: str, rows: list[dict], keys: Sequence[str]) -> int:
+        if not rows:
+            return 0
+        cols = list(rows[0])
+        placeholders = ",".join("?" for _ in cols)
+        updates = ",".join(f"{c}=excluded.{c}" for c in cols if c not in keys) or f"{keys[0]}=excluded.{keys[0]}"
+        sql = (f"INSERT INTO {table} ({','.join(cols)}) VALUES ({placeholders}) "
+               f"ON CONFLICT ({','.join(keys)}) DO UPDATE SET {updates}")
+        return self.executemany(sql, ([r[c] for c in cols] for r in rows))
+
+    def upsert_df(self, table: str, df, keys: Sequence[str]) -> int:
+        """upsert из DataFrame без перекладки в список словарей (быстро для сотен тысяч строк)."""
+        if df is None or len(df) == 0:
+            return 0
+        cols = list(df.columns)
+        placeholders = ",".join("?" for _ in cols)
+        updates = ",".join(f"{c}=excluded.{c}" for c in cols if c not in keys) or f"{keys[0]}=excluded.{keys[0]}"
+        sql = (f"INSERT INTO {table} ({','.join(cols)}) VALUES ({placeholders}) "
+               f"ON CONFLICT ({','.join(keys)}) DO UPDATE SET {updates}")
+        obj = df.astype(object).where(df.notna(), None)
+        return self.executemany(sql, obj.itertuples(index=False, name=None))
+
+    def insert_ignore(self, table: str, rows: list[dict]) -> int:
+        """Идемпотентная вставка: повторная загрузка не создаёт дублей (правило 1 раздела 4)."""
+        if not rows:
+            return 0
+        cols = list(rows[0])
+        placeholders = ",".join("?" for _ in cols)
+        sql = f"INSERT INTO {table} ({','.join(cols)}) VALUES ({placeholders}) ON CONFLICT DO NOTHING"
+        data = [tuple(r[c] for c in cols) for r in rows]
+        with self._lock:
+            return self._insert_ignore(sql, data)
+
+    def _insert_ignore(self, sql: str, data: list[tuple]) -> int:
+        if self.kind == "pg":
+            with self.conn.cursor() as cur:
+                cur.executemany(self._sql(sql), data)
+                return max(cur.rowcount, 0)
+        before = self.conn.total_changes
+        self.conn.executemany(sql, data)
+        if self._tx_depth == 0:
+            self.conn.commit()
+        return self.conn.total_changes - before
+
+    # --- настройки и состояние ---
+    def get_setting(self, key: str, default=None):
+        row = self.one("SELECT value FROM settings WHERE key=?", (key,))
+        return default if row is None else json.loads(row["value"])
+
+    def set_setting(self, key: str, value) -> None:
+        self.upsert("settings", {"key": key, "value": json.dumps(value)}, ["key"])
+
+    def get_state(self, key: str, default=None):
+        row = self.one("SELECT value FROM risk_state WHERE key=?", (key,))
+        return default if row is None else json.loads(row["value"])
+
+    def set_state(self, key: str, value) -> None:
+        self.upsert("risk_state", {"key": key, "value": json.dumps(value), "updated_ts": now_ts()}, ["key"])
+
+    @contextmanager
+    def job(self, name: str):
+        """Журнал запусков задач (job_runs)."""
+        run = {"run_id": new_id("job_"), "job": name, "started_at": now_ts(),
+               "finished_at": None, "status": "running", "n_rows": 0, "error": None}
+        self.upsert("job_runs", run, ["run_id"])
+        counter = {"rows": 0}
+        try:
+            yield counter
+            run.update(status="ok", finished_at=now_ts(), n_rows=counter["rows"])
+        except Exception as exc:
+            run.update(status="error", finished_at=now_ts(), error=repr(exc)[:500])
+            raise
+        finally:
+            self.upsert("job_runs", run, ["run_id"])
+
+    def notify(self, kind: str, title: str, body: str = "", ref: str = "", ts: int | None = None) -> None:
+        row = {"notif_id": new_id("n_"), "ts": ts or now_ts(), "kind": kind,
+               "title": title, "body": body, "ref": ref, "is_read": 0}
+        self.upsert("notifications", row, ["notif_id"])
+        from .events import bus
+        bus.publish("notification", about=kind)
+        for fn in self.listeners:
+            try:
+                fn(row)
+            except Exception:  # уведомление не должно ронять агента
+                pass

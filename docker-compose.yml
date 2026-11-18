@@ -1,0 +1,15 @@
+services:
+  # WhaleFollow на реальных данных Polymarket: интерфейс, сбор данных и агент по расписанию.
+  # Запуск: docker compose up -d --build   → http://localhost:8787
+  # Проверка доступа к Polymarket: docker compose run --rm app whalefollow check
+  app:
+    build: .
+    env_file: [.env]
+    # Только с этого компьютера. Чтобы открыть с телефона или другого устройства в сети —
+    # задайте WF_UI_PASSWORD в .env и замените на "8787:8787" (в интернет — только через HTTPS).
+    ports: ["127.0.0.1:8787:8787"]
+    volumes: ["wf-data:/data"]
+    restart: unless-stopped
+
+volumes:
+  wf-data:
