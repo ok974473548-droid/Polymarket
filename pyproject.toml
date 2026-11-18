@@ -22,7 +22,7 @@ dependencies = [
 
 [project.optional-dependencies]
 api = []   # сервер FastAPI теперь в основных зависимостях; оставлено для старых команд установки
-postgres = ["psycopg[binary]>=3.1,<4"]
+postgres = ["psycopg[binary]==3.3.9"]
 sentry = ["sentry-sdk==2.75.0"]
 dev = ["pytest==9.2.0", "ruff==0.17.5", "mypy==2.4.1", "pre-commit==4.7.0"]
 

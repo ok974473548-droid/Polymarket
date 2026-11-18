@@ -1,3 +1,4 @@
+import pytest
 """Оптимизация: фоновая проверка кита, пачки рынков, параллельные запросы, чтение БД во время записи."""
 
 import threading
@@ -114,6 +115,7 @@ def test_rate_limiter_burst_then_spacing():
     assert lim2.capacity == 18 and lim2.capacity + 10 * lim2.rate <= 200
 
 
+@pytest.mark.sqlite_only
 def test_reads_not_blocked_by_long_write(tmp_path):
     db = DB(f"sqlite:///{tmp_path}/t.db")
     db.init_schema()

@@ -107,7 +107,8 @@ class DB:
 
     # --- базовые операции ---
     def _sql(self, sql: str) -> str:
-        return sql.replace("?", "%s") if self.kind == "pg" else sql
+        # PostgreSQL (psycopg): «?» → «%s», а знак процента в тексте запроса (LIKE '%…') удваивается
+        return sql.replace("%", "%%").replace("?", "%s") if self.kind == "pg" else sql
 
     def execute(self, sql: str, params: Sequence[Any] = ()) -> None:
         with self._lock:

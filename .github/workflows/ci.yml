@@ -45,6 +45,30 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: python -m pytest -q
 
+  tests-postgres:
+    name: Тесты на PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: wf
+          POSTGRES_PASSWORD: wf
+          POSTGRES_DB: wf
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U wf" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      WF_TEST_PG: postgresql://wf:wf@127.0.0.1:5432/wf
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev,postgres]"
+      - run: python -m pytest -q
+
   docker:
     name: Сборка образа
     runs-on: ubuntu-latest
@@ -55,7 +79,7 @@ jobs:
       - name: Запуск и проверка интерфейса
         run: |
           docker run -d --name wf -p 8787:8787 -e WF_STREAMS=off whalefollow:ci \
-            sh -c "whalefollow init-db && whalefollow serve --host 0.0.0.0"
+            sh -c "whalefollow init-db && whalefollow api --host 0.0.0.0"
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8787/api/status && break; sleep 1; done
           curl -fsS http://127.0.0.1:8787/ | grep -q WhaleFollow
           curl -fsS http://127.0.0.1:8787/openapi.json | grep -q "WhaleFollow API"

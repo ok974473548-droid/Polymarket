@@ -204,7 +204,7 @@ def test_one_order_split_across_makers_gives_one_signal(env):
     before = db.scalar("SELECT COUNT(*) AS n FROM signals")
     res = agent.process_stream_trades(fills)
     assert res["new_trades"] == 5 and res["signals"] == 1
-    sig = db.one("SELECT * FROM signals ORDER BY rowid DESC LIMIT 1")
+    sig = db.one("SELECT * FROM signals WHERE token_id=? AND kind='entry'", (m.yes_token,))
     assert sig["whale_size_usd"] == pytest.approx(sum(0.5 + 0.002 * i for i in range(5)) * 1200)
     assert 0.50 < sig["whale_price"] < 0.51  # средняя цена всей заявки
     again = agent.process_stream_trades([_fill(w, m.yes_token, m.market_id, "BUY", 0.51, 300, now + 120, "0xorder2")])

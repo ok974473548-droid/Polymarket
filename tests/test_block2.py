@@ -191,6 +191,7 @@ def test_telegram_buttons_and_commands():
     assert tg.handle_update({"update_id": 5, "message": {"chat": {"id": 7}, "text": "/stop"}}) is None
 
 
+@pytest.mark.sqlite_only
 def test_backup_and_failure_alerts(tmp_path, monkeypatch):
     monkeypatch.setenv("WF_BACKUP_DIR", str(tmp_path / "bk"))
     db = DB(f"sqlite:///{tmp_path}/main.db")

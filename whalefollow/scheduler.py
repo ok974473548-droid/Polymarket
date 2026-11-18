@@ -142,9 +142,9 @@ class Scheduler:
         whales = [
             r["token_id"]
             for r in self.db.query(
-                "SELECT DISTINCT p.token_id FROM positions p JOIN markets m ON m.market_id=p.market_id "
+                "SELECT p.token_id FROM positions p JOIN markets m ON m.market_id=p.market_id "
                 "WHERE m.status='open' AND p.status='open' AND p.entity_id IN (SELECT entity_id FROM watchlist WHERE mode='copy') "
-                "ORDER BY p.opened_ts DESC LIMIT ?",
+                "GROUP BY p.token_id ORDER BY MAX(p.opened_ts) DESC LIMIT ?",
                 (self.books_max_tokens,),
             )
         ]

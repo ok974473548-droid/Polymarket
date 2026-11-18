@@ -47,6 +47,7 @@ def _legacy_db(path):
     c.close()
 
 
+@pytest.mark.sqlite_only
 def test_legacy_database_is_stamped_and_keeps_data(tmp_path):
     p = tmp_path / "old.db"
     _legacy_db(p)
@@ -64,9 +65,15 @@ def test_legacy_database_is_stamped_and_keeps_data(tmp_path):
 
 def test_new_database_is_on_head(db):
     assert db.schema_version() == migrations.head()
-    assert db.scalar("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table'") >= 30
+    import sqlalchemy as sa
+
+    from whalefollow.migrations import _engine
+
+    engine, _ = _engine(db)
+    assert len(sa.inspect(engine).get_table_names()) >= 34
 
 
+@pytest.mark.sqlite_only
 def test_next_migration_is_applied(tmp_path):
     """Следующие изменения схемы приходят миграциями: новая версия применяется к базе на последней версии."""
     loc = tmp_path / "mig"

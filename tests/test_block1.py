@@ -293,6 +293,7 @@ def test_paper_buy_charges_taker_fee(db):
     assert Portfolio(db).cash(1000.0) == pytest.approx(1000 - 50 - 1.25)
 
 
+@pytest.mark.sqlite_only
 def test_old_database_gets_new_columns(tmp_path):
     p = tmp_path / "old.db"
     DB(f"sqlite:///{p}").init_schema()

@@ -10,6 +10,7 @@ Create Date: 2026-11-18
 
 from __future__ import annotations
 
+import re
 from importlib import resources
 
 from alembic import op
@@ -46,12 +47,17 @@ def upgrade() -> None:
     statements = _statements()
     tables = [b for b in statements if not b.upper().startswith("CREATE INDEX")]
     indexes = [b for b in statements if b.upper().startswith("CREATE INDEX")]
+    if bind.dialect.name == "postgresql":
+        # в SQLite INTEGER — 64 бита, в PostgreSQL — 32: суммы и отметки времени в мс не влезли бы
+        tables = [re.sub(r"\bINTEGER\b", "BIGINT", b) for b in tables]
     for b in tables:
         bind.exec_driver_sql(b)
     insp = sa.inspect(bind)
     for table, cols in LEGACY_COLUMNS.items():
         have = {c["name"] for c in insp.get_columns(table)}
         for col, typ in cols.items():
+            if bind.dialect.name == "postgresql" and typ == "INTEGER":
+                typ = "BIGINT"
             if col not in have:
                 bind.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
     for b in indexes:  # индексы — после колонок (могут ссылаться на новые)
