@@ -1,6 +1,6 @@
 [project]
 name = "whalefollow"
-version = "0.17.0.dev0"
+version = "0.17.0"
 description = "WhaleFollow: отбор сильных игроков Polymarket и агент копирования ставок (v1: данные, скоринг, бэктест, бумажная торговля)"
 requires-python = ">=3.11"
 # Существующие зависимости — диапазонами (как в 0.13), новые пакеты — точными версиями; pandas заменён polars (0.16)

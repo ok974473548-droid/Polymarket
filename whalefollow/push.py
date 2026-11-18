@@ -103,7 +103,9 @@ class Vapid:
             assert isinstance(key, ec.EllipticCurvePrivateKey)
             return cls(key, contact())
         key = ec.generate_private_key(ec.SECP256R1())
-        pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        pem = key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        )
         db.set_state("push_vapid", {"private": pem.decode(), "created_ts": now_ts()})
         return cls(key, contact())
 
@@ -242,7 +244,14 @@ def subscribe(db: DB, sub: dict, label: str = "") -> dict:
         return {"ok": False, "error": "Ключи подписки повреждены"}
     db.upsert(
         "push_subscriptions",
-        {"endpoint": endpoint, "p256dh": p256dh, "auth": auth, "label": label[:120], "created_ts": now_ts(), "fails": 0},
+        {
+            "endpoint": endpoint,
+            "p256dh": p256dh,
+            "auth": auth,
+            "label": label[:120],
+            "created_ts": now_ts(),
+            "fails": 0,
+        },
         ["endpoint"],
     )
     return {"ok": True, "devices": devices(db)}

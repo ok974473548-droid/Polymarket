@@ -44,7 +44,8 @@
       const ink = "#93A7AA";
       const grid = { stroke: "rgba(236,230,218,.07)", width: 1 };
       type S = Record<string, unknown>;
-      const series: S[] = [{}];
+      // ось X: в подписи под графиком — дата точки под курсором (без служебного «Value»)
+      const series: S[] = [{ label: "Дата", value: (_u: unknown, v: number | null) => (v === null || v === undefined ? "—" : fmtX(v)) }];
       const data: (number | null)[][] = [xs];
       if (band) {
         series.push({ stroke: "transparent", points: { show: false }, label: "низ" });
@@ -66,7 +67,7 @@
       const opts = {
         width: box.clientWidth || 300,
         height,
-        legend: { show: !mini, live: true },
+        legend: { show: !mini && lines.length > 1, live: true }, // одна линия — подпись не нужна
         cursor: mini ? { show: false } : { points: { size: 6 }, drag: { x: true, y: false } },
         scales: { x: { time: false } },
         bands: band ? [{ series: [2, 1], fill: band.color + "22" }] : [],
@@ -90,4 +91,4 @@
   });
 </script>
 
-<div class="uplot-box" class:mini bind:this={box} role="img" aria-label={label} style="min-height:{height}px"></div>
+<div class="uplot-box" class:mini class:has-band={!!band} bind:this={box} role="img" aria-label={label} style="min-height:{height}px"></div>

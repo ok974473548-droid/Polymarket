@@ -1894,7 +1894,12 @@ class Services:
         if not push.devices(self.db):
             return {"ok": False, "error": "Нет подписанных устройств — включите push на этом устройстве"}
         r = self._push().send_all(
-            {"title": "WhaleFollow: проверка", "body": "Push работает — сюда придут новые сигналы и выход кита.", "url": "/#/", "tag": "test"}
+            {
+                "title": "WhaleFollow: проверка",
+                "body": "Push работает — сюда придут новые сигналы и выход кита.",
+                "url": "/#/",
+                "tag": "test",
+            }
         )
         if r["sent"]:
             return {"ok": True, **r}

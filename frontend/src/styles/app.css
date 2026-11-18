@@ -309,6 +309,7 @@ kbd{display:inline-flex;align-items:center;justify-content:center;min-width:20px
 .scale-mk.fair{color:var(--brass-2)} .scale-mk.fair span{top:32px}
 .scale-mk.now{color:var(--pearl)} .scale-mk.now span{top:-20px;font-weight:600}
 .scale-mk.now::after{content:"";position:absolute;left:-6px;top:8px;width:12px;height:12px;border-radius:99px;background:var(--pearl);box-shadow:0 0 0 4px rgba(236,230,218,.12)}
+.scale-mk.near-l span{transform:translateX(calc(-100% - 4px))} .scale-mk.near-r span{transform:translateX(4px)}
 .scale-ends{position:absolute;left:0;right:0;bottom:-6px;display:flex;justify-content:space-between;font-size:11.5px}
 
 .ring{position:relative;width:132px;height:150px;display:flex;flex-direction:column;align-items:center;justify-self:end}
@@ -353,6 +354,14 @@ details.more>summary::-webkit-details-marker{display:none}
   .decide-facts b{font-size:21px}
   .decide-main{gap:14px}
   .decide-act .btn.xl{flex:1}
+  /* телефон: «Купить / Пропустить» всегда под рукой — прилипают над нижним меню, пока карточка на экране */
+  .decide-act{position:sticky;bottom:calc(var(--nav-h,58px) + env(safe-area-inset-bottom,0px));z-index:6;margin:0 -16px;padding:10px 16px 12px;
+    background:linear-gradient(180deg,rgba(10,23,28,.86),var(--abyss) 40%);border-top:1px solid var(--line);backdrop-filter:blur(6px)}
+  .decide-act .stake .num{font-size:24px;margin:0}
+  .decide-act .stake{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding-right:120px}
+  .decide-act .row{gap:8px!important}
+  .decide-act .row .link{position:absolute;top:8px;right:16px;min-height:32px!important;font-size:13px}
+  .decide-act .btn.xl{min-height:48px;padding:0 14px}
   .kbd-hint,.sig-nav kbd,.btn kbd{display:none}
 }
 
@@ -476,3 +485,7 @@ body.drawer-open{overflow:hidden}
 @media (max-width: 760px) { .rot-form { grid-template-columns: 1fr 1fr; } }
 .rot-name { min-width: 0; max-width: 48%; flex-shrink: 1; }
 .rot-name .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* uPlot: служебные ряды полосы разброса (низ/верх) в подписи не показываем */
+.uplot-box.has-band .u-legend .u-series:nth-child(2),.uplot-box.has-band .u-legend .u-series:nth-child(3){display:none}
+.uplot-box .u-legend{font:12.5px/1.4 "Golos Text",system-ui,sans-serif;color:var(--ink-2)}

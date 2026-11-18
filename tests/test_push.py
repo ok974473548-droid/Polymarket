@@ -24,7 +24,9 @@ def _priv(b64: str) -> ec.EllipticCurvePrivateKey:
 
 
 def _pub(key: ec.EllipticCurvePrivateKey) -> str:
-    return b64u(key.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint))
+    return b64u(
+        key.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+    )
 
 
 def _decrypt(body: bytes, ua_key: ec.EllipticCurvePrivateKey, auth: bytes) -> bytes:

@@ -1,0 +1,122 @@
+// Главные сценарии: «диагностика», «добавить игрока», «решить по сигналу», «продать ставку».
+// Демо-сервер: 4 сигнала ждут решения, одна ставка уже куплена, три кита на копировании.
+import { expect, test, type Page } from "@playwright/test";
+
+async function toast(page: Page, re: RegExp) {
+  await expect(page.locator("#toast")).toHaveText(re);
+}
+
+test.describe.configure({ mode: "serial" });
+
+test("первый экран: сигналы, меню и живое состояние @phone", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("#pending-list .sig-row").first()).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  // меню разделов и индикатор системы
+  await expect(page.locator("[data-nav]").first()).toBeVisible();
+});
+
+test("диагностика: сводка, процессы, данные и отчёт", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/#/settings");
+  await page.getByRole("link", { name: /Диагностика/ }).click();
+  await expect(page).toHaveURL(/#\/diagnostics$/);
+  await expect(page.getByRole("heading", { name: "Диагностика" })).toBeVisible();
+  await expect(page.locator(".statement .figure")).toHaveText("4 из 4");
+  await expect(page.locator("#diag-services")).toContainText("работает");
+  await expect(page.getByText("Сделок китов")).toBeVisible();
+  await page.locator("[data-act=diag-copy]").click();
+  await toast(page, /Отчёт скопирован|Выделено/);
+  await page.getByText("Текст отчёта").click();
+  await expect(page.locator("#diag-report")).not.toBeEmpty();
+});
+
+test("добавить игрока: поиск, карточка, добавление и ход проверки", async ({ page }) => {
+  await page.goto("/#/whales");
+  const whales = page.locator(".whales-grid.click");
+  await expect(whales.first()).toBeVisible();
+  const before = await whales.count();
+  await page.getByRole("link", { name: "Добавить игрока" }).click();
+  await expect(page).toHaveURL(/#\/whales\/add$/);
+  // рейтинг Polymarket загрузился, отметка пачкой показывает панель выбора
+  const rows = page.locator("#lb-ledger .lb-row[data-id]");
+  await expect(rows.first()).toBeVisible();
+  await page.locator("#lb-ledger [data-act=lb-pick]").nth(3).check(); // киты из списка отмечены ✓, без флажка
+  await expect(page.locator("#bulk")).toBeVisible();
+  await expect(page.locator("#bulk-n")).toHaveText("Выбрано: 1");
+  await page.locator("[data-act=bulk-clear]").click();
+  await expect(page.locator("#bulk")).toBeHidden();
+  // поиск по имени → карточка игрока
+  await page.locator("#finder-q").fill("whale_one");
+  await page.getByRole("button", { name: "Найти" }).click();
+  const card = page.locator("#finder-out .pcard");
+  const pick = page.locator("[data-act=pshow]");
+  await expect(card.or(pick.first())).toBeVisible(); // точное совпадение имени — сразу карточка, иначе список
+  if (await pick.count()) await pick.first().click();
+  await expect(card).toBeVisible();
+  await expect(card).toContainText("Прибыль за всё время");
+  await card.locator("[data-act=padd]").click();
+  await toast(page, /Добавлено: 1/);
+  // проверка идёт в фоне: видно ход проверки или её итог
+  await expect(page.locator("#check-result")).toContainText(/Проверяем игрока|Результат проверки/, { timeout: 30_000 });
+  await page.goto("/#/whales");
+  await expect(whales).toHaveCount(before + 1);
+});
+
+test("решить по сигналу: карточка, покупка, переход к следующему", async ({ page }) => {
+  await page.goto("/");
+  const first = page.locator("#pending-list .sig-row").first();
+  const before = await page.locator("#pending-list .sig-row").count();
+  expect(before).toBeGreaterThan(1);
+  await first.click();
+  await expect(page).toHaveURL(/#\/signal\//);
+  const url = page.url();
+  // карточка «решение за 5 секунд»: цена, отсчёт времени, кнопки
+  await expect(page.locator("[data-act=confirm]")).toBeVisible();
+  await expect(page.locator("[data-act=skip]")).toBeVisible();
+  await page.locator("[data-act=confirm]").click();
+  await toast(page, /Куплено на \$[\d\s ,]+ по \d+¢/);
+  await expect(page).not.toHaveURL(url); // следующий сигнал или список
+  // следующий сигнал — пропустить горячей клавишей S
+  if (/#\/signal\//.test(page.url())) {
+    await expect(page.locator("[data-act=skip]")).toBeVisible(); // карточка следующего сигнала загрузилась
+    await page.keyboard.press("s");
+    await toast(page, /Сигнал пропущен/);
+  }
+  await page.goto("/#/positions/open");
+  await expect(page.locator("a.ledger-row.bets-grid")).toHaveCount(2);
+});
+
+test("продать ставку: подтверждение и закрытая позиция", async ({ page }) => {
+  await page.goto("/#/positions/open");
+  const rows = page.locator("a.ledger-row.bets-grid");
+  const n = await rows.count();
+  expect(n).toBeGreaterThan(0);
+  await rows.first().click();
+  await expect(page).toHaveURL(/#\/bet\//);
+  await expect(page.getByText("Если продать сейчас")).toBeVisible();
+  await page.locator("[data-act=sell-bet]").click();
+  const dlg = page.locator("dialog[open]");
+  await expect(dlg).toContainText("Продать ставку сейчас?");
+  await dlg.getByRole("button", { name: "Продать" }).click();
+  await toast(page, /Продано за \$/);
+  await page.goto("/#/positions/open");
+  await expect(rows).toHaveCount(n - 1);
+  await page.goto("/#/positions/closed");
+  await expect(page.locator("a.ledger-row.bets-grid").first()).toBeVisible();
+});
+
+test("горячие клавиши и боковая панель игрока", async ({ page }) => {
+  await page.goto("/");
+  await page.keyboard.press("?");
+  await expect(page.locator("dialog[open]")).toContainText(/Горячие клавиши|клавиш/i);
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("g");
+  await page.keyboard.press("w");
+  await expect(page).toHaveURL(/#\/whales$/);
+  await page.goto("/#/whales/add");
+  await page.locator("#lb-ledger .lb-row[data-id]").first().click();
+  await expect(page.locator(".drawer.on")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".drawer.on")).toBeHidden();
+});

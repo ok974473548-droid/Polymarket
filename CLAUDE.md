@@ -13,6 +13,8 @@
 - Docker: `docker compose up --build` — три процесса (`api`, `realtime`, `worker`) + шаг `migrate`, интерфейс на :8787, база в томе `/data`.
 - Тесты на PostgreSQL: `WF_TEST_PG=postgresql://... python -m pytest -q` (каждая база теста — своя схема; `@pytest.mark.sqlite_only` — только SQLite).
 - CLI: `whalefollow api | realtime | worker` (роли), `whalefollow run` (всё в одном), `whalefollow check`, `whalefollow alive <роль>`.
+- Интерфейс: `cd frontend && npm ci && npm run check && npm run build` (сборка → `whalefollow/web`, её коммитим);
+  сценарии: `WF_PYTHON=../.venv/bin/python npx playwright test` (демо-сервер `tests/demo_server.py`, без сети).
 
 ## Карта модулей (`whalefollow/`)
 | Модуль | Что делает |
@@ -36,7 +38,9 @@
 | `api/app.py`, `api/routes.py`, `api/schemas.py`, `api/static.py`, `api/server.py` | FastAPI: вход/CSRF/заголовки (ASGI-слой), маршруты, модели pydantic, статика с ETag, SSE; `serve()` — обёртка uvicorn |
 | `migrations/` | Alembic: `0001_baseline` = `schema.sql` + старые колонки; `DB.init_schema()` = upgrade head |
 | `logs.py` | structlog: JSON в Docker, консоль локально, Sentry по `SENTRY_DSN` |
-| `web/` | Интерфейс без сборки: `index.html`, `panels.js` (грузится ДО `app.js`), `app.js`, `app.css` |
+| `web/` | Готовая сборка интерфейса (не править руками — собирается из `frontend/`), PWA: `sw.js`, `manifest.webmanifest`, иконки |
+| `frontend/` | Интерфейс: Svelte 5 + TypeScript + Vite. `src/views/` — экраны, `src/components/` — блоки (графики: `PriceChart` — lightweight-charts, `Plot` — uPlot), `src/lib/` — API, состояние, роутер, живые события, горячие клавиши, push; `public/` — sw.js, манифест, иконки; `e2e/` — сценарии Playwright |
+| `push.py` | Push-уведомления (Web Push: шифрование RFC 8291, подпись VAPID), подписки устройств, отправка в фоне |
 | `fees.py`, `categories.py` | Комиссии Polymarket по темам; единый список тем |
 | `diagnostics.py` | Экран «Диагностика»: проверки всех API и потоков |
 
@@ -122,7 +126,10 @@
 Готово, когда: полный пересчёт заметно быстрее (замер в README); экран ротации работает на реальных китах;
 чек-лист `trading-math-audit` пройден для нового кода.
 
-### [ ] Этап 4. Новый интерфейс
+### [x] Этап 4. Новый интерфейс
+> Выполнен в v0.17.0: замер первого экрана — в README (компьютер 230 → 145 мс, телефон 1,02 → 0,79 с);
+> сценарии Playwright зелёные; push — свой модуль `push.py` (Web Push на `cryptography`, без сторонних служб).
+
 1. TypeScript + Vite + Svelte (папка `frontend/`, сборка кладётся в `whalefollow/web/` при сборке образа).
    Перенести все экраны и поведение: живые обновления (SSE), горячие клавиши, боковые панели,
    мини-карточки, карточка сигнала «решение за 5 секунд», пачечное добавление, диагностика.

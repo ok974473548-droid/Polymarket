@@ -66,8 +66,10 @@ class TuneIn(_In):
 
 
 class PushSubscribeIn(_In):
-    subscription: dict[str, Any] | None = Field(None, description="PushSubscription.toJSON() браузера: endpoint и keys")
-    label: str = Field("", description="Браузер/устройство — для списка")
+    subscription: dict[str, Any] | None = Field(
+        default=None, description="PushSubscription.toJSON() браузера: endpoint и keys"
+    )
+    label: str = Field(default="", description="Браузер/устройство — для списка")
 
 
 class PushUnsubscribeIn(_In):

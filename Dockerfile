@@ -1,8 +1,17 @@
+# Интерфейс (frontend/: Svelte + TypeScript) собирается здесь; в образ попадает только готовая сборка.
+FROM node:22-slim AS web
+WORKDIR /src/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY frontend ./
+RUN npm run build
+
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 WF_DB_URL=sqlite:////data/whalefollow.db WF_LOG_FORMAT=json
 WORKDIR /app
 COPY pyproject.toml README.md alembic.ini ./
 COPY whalefollow ./whalefollow
+COPY --from=web /src/whalefollow/web ./whalefollow/web
 COPY tests ./tests
 RUN pip install --no-cache-dir -e ".[dev]"
 # расширение DuckDB для чтения истории прямо из файла SQLite — ставится при сборке, а не при первом запуске

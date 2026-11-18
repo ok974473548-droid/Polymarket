@@ -47,6 +47,8 @@
     return { lo, hi };
   });
   const x = (v: number) => ((Math.min(Math.max(v, scale.lo), scale.hi) - scale.lo) / (scale.hi - scale.lo)) * 100;
+  // подписи «кит» и «сейчас» рядом — разводим в стороны, чтобы не наезжали
+  const near = $derived(!!L && ask !== null && Math.abs(x(L.whale_price) - x(ask)) < 12);
 
   // кольцо обратного отсчёта
   const R = 30,
@@ -116,9 +118,9 @@
           <div class="scale" role="img" aria-label="Цена кита {cents(L.whale_price * 100)}, сейчас {cents((ask ?? L.ask) * 100)}, наша оценка {cents(L.q_eff * 100)}">
             <div class="scale-track"></div>
             <div class="scale-zone {ok ? 'ok' : 'bad'}" style="left:{Math.min(x(ask), x(L.q_eff))}%;width:{Math.abs(x(ask) - x(L.q_eff))}%"></div>
-            <div class="scale-mk whale" style="left:{x(L.whale_price)}%"><span>кит</span></div>
+            <div class="scale-mk whale" class:near-l={near && L.whale_price <= ask} class:near-r={near && L.whale_price > ask} style="left:{x(L.whale_price)}%"><span>кит</span></div>
             <div class="scale-mk fair" style="left:{x(L.q_eff)}%"><span>оценка {cents(L.q_eff * 100)}</span></div>
-            <div class="scale-mk now" style="left:{x(ask)}%"><span>сейчас</span></div>
+            <div class="scale-mk now" class:near-l={near && ask < L.whale_price} class:near-r={near && ask >= L.whale_price} style="left:{x(ask)}%"><span>сейчас</span></div>
             <div class="scale-ends sub"><span>{cents(scale.lo * 100)}</span><span>{cents(scale.hi * 100)}</span></div>
           </div>
         </div>
