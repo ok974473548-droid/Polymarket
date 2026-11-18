@@ -160,3 +160,25 @@ def test_verdict_is_calibrated_on_random_worlds():
             simulate_rotation(w, FormRule(window_weeks=6, min_bets=5), now=NOW, n_random=10)["verdict"]["holds"] is True
         )
     assert hits <= 4
+
+
+def test_ideal_can_stay_in_cash():
+    """Было: в неделю, когда все киты в минусе, «идеал» брал лучшего из проигравших и оказывался ниже ротации,
+    которая стояла в деньгах. Стало: потолок никогда не ниже ротации."""
+    whales = make_whales([-1500, -1200, -900, -2000], seed=8, noise=50)
+    r = simulate_rotation(whales, FormRule(window_weeks=4, min_bets=1), now=NOW)
+    rot, ideal = np.array(r["curves"]["rotation"]), np.array(r["curves"]["ideal"])
+    assert r["weeks_in_cash"] > 0 and np.all(np.diff(ideal) >= np.diff(rot) - 0.02)
+
+
+def test_taker_fee_is_charged():
+    """Было: кривые без комиссии. Стало: вычитается комиссия тейкера сумма × ставка × (1 − цена) за каждую покупку."""
+    base = make_whales([1500, 1200, -900], seed=6)
+    with_fee = [Whale(w.entity_id, w.name, w.series, [(*b, 0.5, 0.04) for b in w.buys]) for w in base]
+    no_fee = [Whale(w.entity_id, w.name, w.series, [(*b, 0.5, 0.0) for b in w.buys]) for w in base]
+    rule = FormRule(window_weeks=6, min_bets=5)
+    a = simulate_rotation(no_fee, rule, now=NOW)["curves"]["all"]
+    b = simulate_rotation(with_fee, rule, now=NOW)["curves"]["all"]
+    # покупки $1000 в день по цене 0,5 и ставке 0,04 → $140 комиссии в неделю на вложенные $28 000 = 0,5%
+    weekly = (np.diff(a) - np.diff(b))[1:]
+    assert np.allclose(weekly, 0.5, atol=0.02)

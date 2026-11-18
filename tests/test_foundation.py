@@ -291,3 +291,26 @@ def test_ws_proxy_only_for_wss_and_respects_no_proxy(monkeypatch):
     assert _proxy_for("ws-live-data.polymarket.com", "wss") == "http://proxy.local:3128"
     assert _proxy_for("ws-live-data.polymarket.com", "ws") is None
     assert _proxy_for("feed.internal", "wss") is None and _proxy_for("localhost", "wss") is None
+
+
+def test_pg_real_columns_become_double():
+    """Было (0.14–0.15, PostgreSQL): колонки REAL — 32 бита, цены теряли точность. Стало: DOUBLE PRECISION."""
+    from conftest import PG_MODE
+
+    if not PG_MODE:
+        pytest.skip("только PostgreSQL")
+    db = DB("sqlite://:memory:")  # в режиме PostgreSQL — своя схема
+    db.init_schema()
+    db.execute("ALTER TABLE trades ALTER COLUMN price TYPE REAL")
+    db.execute("UPDATE alembic_version SET version_num='0003'")
+    assert migrations.upgrade(db) == migrations.head()
+    t = db.scalar(
+        "SELECT data_type FROM information_schema.columns WHERE table_schema=current_schema() "
+        "AND table_name='trades' AND column_name='price'"
+    )
+    assert t == "double precision"
+    db.execute(
+        "INSERT INTO trades (trade_id, ts, ts_fetched, wallet, token_id, side, price, size_shares, size_usd) "
+        "VALUES ('x', 1, 1, 'w', 't', 'BUY', 0.4839002607379329, 1, 1)"
+    )
+    assert db.scalar("SELECT price FROM trades WHERE trade_id='x'") == 0.4839002607379329

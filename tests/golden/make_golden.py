@@ -67,7 +67,9 @@ def _counts(s) -> dict:
 def dump_tables(db: DB) -> dict:
     out = {}
     for t, order in TABLES.items():
-        rows = db.query(f"SELECT * FROM {t} ORDER BY {order}")
+        keys = [k.strip() for k in order.split(",")]
+        # порядок — в Python: PostgreSQL сортирует текст по правилам языка, SQLite — по кодам символов
+        rows = sorted(db.query(f"SELECT * FROM {t}"), key=lambda r: tuple(str(r[k]) for k in keys))
         for r in rows:
             for k in list(r):
                 if k in SKIP_COLS:

@@ -204,7 +204,7 @@ class QuotePublisher:
         self._stop = threading.Event()
 
     def collect(self) -> list[dict]:
-        rows = []
+        rows: list[dict] = []
         c = getattr(self.books, "_client", None)
         if c is None or not c.alive(self.books.STALE_S):
             return rows

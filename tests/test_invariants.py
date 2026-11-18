@@ -113,11 +113,17 @@ def test_fee_invariants(rate, n, p):
 book = st.lists(st.tuples(price, st.floats(0.0, 2000.0)), min_size=0, max_size=8).map(lambda lv: sorted(lv))
 
 
+def test_walk_skips_dust_levels():
+    """Было: уровень с объёмом 5e-324 акций давал среднюю цену 0. Стало: такие уровни пропускаются."""
+    f = walk([(0.5, 5e-324), (0.6, 100.0)], usd=1.0)
+    assert f.avg_price == pytest.approx(0.6) and f.complete
+
+
 @FAST
 @given(book, st.floats(1.0, 3000.0))
 def test_walk_invariants(levels, usd):
     f = walk(levels, usd=usd)
-    valid = [(p, s) for p, s in levels if p > 0 and s > 0]
+    valid = [(p, s) for p, s in levels if p > 0 and s > 1e-9]
     depth = sum(p * s for p, s in valid)
     assert f.filled_usd <= usd + 1e-6 and f.filled_usd <= depth + 1e-6
     assert f.complete == (depth >= usd - 1e-6)
@@ -135,7 +141,7 @@ def test_walk_invariants(levels, usd):
 def test_walk_by_shares(levels, n):
     f = walk(levels, shares=n)
     assert f.shares <= n + 1e-6
-    assert f.complete == (sum(s for p, s in levels if p > 0 and s > 0) >= n - 1e-6)
+    assert f.complete == (sum(s for p, s in levels if p > 0 and s > 1e-9) >= n - 1e-6)
 
 
 # ---------------------------------------------------------------- виртуальная покупка

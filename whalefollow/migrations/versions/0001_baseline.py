@@ -50,14 +50,16 @@ def upgrade() -> None:
     if bind.dialect.name == "postgresql":
         # в SQLite INTEGER — 64 бита, в PostgreSQL — 32: суммы и отметки времени в мс не влезли бы
         tables = [re.sub(r"\bINTEGER\b", "BIGINT", b) for b in tables]
+        # REAL в PostgreSQL — 32 бита (~7 знаков), в SQLite — 64: цены и суммы теряли бы точность
+        tables = [re.sub(r"\bREAL\b", "DOUBLE PRECISION", b) for b in tables]
     for b in tables:
         bind.exec_driver_sql(b)
     insp = sa.inspect(bind)
     for table, cols in LEGACY_COLUMNS.items():
         have = {c["name"] for c in insp.get_columns(table)}
         for col, typ in cols.items():
-            if bind.dialect.name == "postgresql" and typ == "INTEGER":
-                typ = "BIGINT"
+            if bind.dialect.name == "postgresql":
+                typ = {"INTEGER": "BIGINT", "REAL": "DOUBLE PRECISION"}.get(typ, typ)
             if col not in have:
                 bind.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
     for b in indexes:  # индексы — после колонок (могут ссылаться на новые)

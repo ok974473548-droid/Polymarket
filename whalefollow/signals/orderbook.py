@@ -18,7 +18,7 @@ def walk(levels: list[tuple[float, float]], usd: float | None = None, shares: fl
     """Проходит уровни (asks — для покупки, bids — для продажи), пока не наберёт usd или shares."""
     got_sh, got_usd, worst = 0.0, 0.0, float("nan")
     for price, size in levels:
-        if price <= 0 or size <= 0:
+        if price <= 0 or size <= 1e-9:  # пустые и «пыльные» уровни (ничтожный объём) не берём
             continue
         if usd is not None:
             need = usd - got_usd

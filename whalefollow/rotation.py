@@ -13,8 +13,12 @@
   * неделя кита учитывается, только если у нас есть его сделки за это время (с первой сохранённой сделки) —
     иначе прибыль делилась бы на пропущенный объём;
     никого не выбрали — неделя «в деньгах» (0%);
-  * «идеал задним числом» каждую неделю берёт лучших по уже известному результату — это недостижимо,
-    кривая показывает лишь потолок;
+  * «идеал задним числом» каждую неделю берёт лучших по уже известному результату (или остаётся в деньгах, если
+    все в минусе) — это недостижимо, кривая показывает лишь потолок;
+  * из прибыли вычитается наша комиссия тейкера за повторённые покупки; задержка входа и проскальзывание
+    не моделируются (их показывает «что было бы» по каждому киту);
+  * пул — киты из списка пользователя сегодня: если их добавили за хорошие результаты, все кривые выглядят
+    лучше, чем было бы на самом деле (ошибка выжившего). Сравнивать стоит кривые между собой;
   * «случайный выбор» — столько же китов, сколько выбрала ротация, 300 случайных розыгрышей (медиана и разброс).
 
 Главная цифра — держится ли форма: ранговая корреляция (Спирмен) результата кита в прошлом окне и в следующем
@@ -35,6 +39,7 @@ MIN_DENOM_USD = 100.0  # вложено меньше — неделю кита �
 CAPITAL_WEEKS = 4  # вложенное ≈ столько недель типичных покупок
 CAPITAL_LOOKBACK = 12  # типичные покупки — среднее за столько последних недель (крупные киты ставят рывками)
 WEEK_CLIP = 1.0  # недельный результат кита ограничен ±100% вложенного
+DEFAULT_FEE_RATE = 0.05  # ставка комиссии тейкера, если тема рынка неизвестна (fees.DEFAULT_RATE)
 
 
 @dataclass(frozen=True)
@@ -61,7 +66,8 @@ class Whale:
     entity_id: str
     name: str
     series: list[tuple[int, float]]  # (время, накопленная прибыль $) — по возрастанию времени
-    buys: list[tuple[int, float, str]]  # (время, сумма покупки $, рынок)
+    # (время, сумма покупки $, рынок[, цена, ставка комиссии]) — цена и ставка нужны для нашей комиссии тейкера
+    buys: list[tuple]
 
 
 def merge_series(series_list: list[list[tuple[int, float]]]) -> list[tuple[int, float]]:
@@ -191,16 +197,22 @@ def simulate_rotation(whales: list[Whale], rule: FormRule, now: int, seed: int =
     E = len(prepared)
     cum = np.full((E, K), np.nan)
     vol = np.zeros((E, K))  # объём покупок за неделю, заканчивающуюся в T_k
+    fee = np.zeros((E, K))  # наша комиссия тейкера, если бы мы повторили эти покупки
     bets_w: list[list[set]] = [[set() for _ in range(K)] for _ in range(E)]
     for i, (w, ts) in enumerate(prepared):
         for k, t in enumerate(bounds):
             v = value_at(w.series, ts, t)
             cum[i, k] = np.nan if v is None else v
-        for t, usd, market in w.buys:
+        for b in w.buys:
+            t, usd, market = b[0], b[1], b[2]
             k = int(math.ceil((t - bounds[0]) / WEEK)) if t > bounds[0] else -1
             if 1 <= k < K:
                 vol[i, k] += usd
                 bets_w[i][k].add(market)
+                px = b[3] if len(b) > 3 and b[3] is not None else 0.5
+                rate = b[4] if len(b) > 4 and b[4] is not None else DEFAULT_FEE_RATE
+                # комиссия Polymarket: акции × ставка × p × (1 − p) = сумма × ставка × (1 − p)
+                fee[i, k] += usd * rate * (1.0 - px)
     # недели, где у нас есть сделки кита: прибыль без сделок делилась бы на пропущенный объём
     covered_from = np.array(
         [math.ceil((min(b[0] for b in w.buys) - bounds[0]) / WEEK) if w.buys else K + 1 for w, _ in prepared]
@@ -212,7 +224,7 @@ def simulate_rotation(whales: list[Whale], rule: FormRule, now: int, seed: int =
         lo = max(1, k - CAPITAL_LOOKBACK + 1)
         n_cov = np.clip(k + 1 - np.maximum(lo, covered_from), 1, None)  # недель с данными в окне
         denom = vol[:, lo : k + 1].sum(axis=1) / n_cov * CAPITAL_WEEKS
-        pnl = cum[:, k] - cum[:, k - 1]
+        pnl = cum[:, k] - cum[:, k - 1] - fee[:, k]  # копируем рыночными покупками — платим комиссию тейкера
         ok = np.isfinite(pnl) & (denom >= MIN_DENOM_USD)
         ret[ok, k] = np.clip(pnl[ok] / denom[ok], -WEEK_CLIP, WEEK_CLIP)
 
@@ -250,7 +262,8 @@ def simulate_rotation(whales: list[Whale], rule: FormRule, now: int, seed: int =
         r_rot = float(r_next[sel].mean()) if n_sel else 0.0
         r_all = float(r_next[avail].mean()) if avail.any() else 0.0
         n_pick = max(1, n_sel)
-        r_ideal = float(np.sort(r_next[avail])[::-1][:n_pick].mean()) if avail.any() else 0.0
+        # идеал тоже может остаться «в деньгах», если все в минусе: иначе потолок оказался бы ниже ротации
+        r_ideal = max(0.0, float(np.sort(r_next[avail])[::-1][:n_pick].mean())) if avail.any() else 0.0
         if avail.any():
             pool = r_next[avail]
             m = min(n_pick, len(pool))
@@ -324,7 +337,7 @@ def simulate_rotation(whales: list[Whale], rule: FormRule, now: int, seed: int =
                 "why": "; ".join(reasons) or "в форме",
             }
         )
-    current.sort(key=lambda r: (not r["in_form"], -(r.get("gain_usd") or 0)))
+    current.sort(key=lambda r: (not r["in_form"], -float(r.get("gain_usd") or 0)))  # type: ignore[arg-type]
     pers = persistence(pairs)
     total = {
         "rotation": curve_rot[-1],
@@ -376,10 +389,11 @@ def load_whales(db: Any, players: Any, entity_ids: list[str] | None = None, name
         series = merge_series([res for _, res, exc in got if exc is None and res])
         ph = ",".join("?" for _ in wallets)
         buys = [
-            (int(r["ts"]), float(r["size_usd"] or 0), r["market_id"] or r["token_id"])
+            (int(r["ts"]), float(r["size_usd"] or 0), r["market_id"] or r["token_id"], r["price"], r["fee_rate"])
             for r in db.query(
-                f"SELECT ts, size_usd, market_id, token_id FROM trades WHERE wallet IN ({ph}) AND side='BUY' "
-                "AND (source IS NULL OR source='')",
+                "SELECT t.ts, t.size_usd, t.market_id, t.token_id, t.price, m.fee_rate FROM trades t "
+                f"LEFT JOIN markets m ON m.market_id=t.market_id WHERE t.wallet IN ({ph}) AND t.side='BUY' "
+                "AND (t.source IS NULL OR t.source='')",
                 wallets,
             )
         ]
