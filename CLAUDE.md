@@ -8,10 +8,11 @@
 Файл `.env` пользователя никогда не попадает в архивы и коммиты.
 
 ## Запуск и проверка
-- `pip install -e ".[dev]"`, тесты: `python -m pytest -q` (≈165 тестов, ~45 с, без сети —
+- `pip install -e ".[dev]"`, тесты: `python -m pytest -q` (≈175 тестов, ~55 с, без сети —
   синтетический мир в `tests/synthetic.py`).
-- Docker: `docker compose up --build`, интерфейс на :8787, база в томе `/data`.
-- CLI: `whalefollow run` (сервер + планировщик + агент + потоки), `whalefollow check` (доступность API).
+- Docker: `docker compose up --build` — три процесса (`api`, `realtime`, `worker`) + шаг `migrate`, интерфейс на :8787, база в томе `/data`.
+- Тесты на PostgreSQL: `WF_TEST_PG=postgresql://... python -m pytest -q` (каждая база теста — своя схема; `@pytest.mark.sqlite_only` — только SQLite).
+- CLI: `whalefollow api | realtime | worker` (роли), `whalefollow run` (всё в одном), `whalefollow check`, `whalefollow alive <роль>`.
 
 ## Карта модулей (`whalefollow/`)
 | Модуль | Что делает |
@@ -27,7 +28,8 @@
 | `execution/paper.py` | Виртуальные покупки/продажи/расчёт, портфель из fills |
 | `agent.py` | Цикл: опрос/поток → склейка исполнений одной заявки → сигнал → решение |
 | `streams.py`, `ws.py` | WebSocket: стаканы (CLOB market) и лента сделок (RTDS) — клиент на библиотеке websockets (sync API, потоки) |
-| `scheduler.py` | Фоновые задачи (рынки, цены, пересчёт китов, резервные копии…) |
+| `scheduler.py` | Фоновые задачи; группы fast/books — в realtime, slow/heavy — в worker; состояние — `scheduler_state()` |
+| `runtime.py` | Роли процессов: пульс (`service_status`), очередь проверок (`CheckRunner`), живые цены (`QuotePublisher`) |
 | `services.py` | Всё для экранов интерфейса (большой файл — читать частями по grep) |
 | `api/app.py`, `api/routes.py`, `api/schemas.py`, `api/static.py`, `api/server.py` | FastAPI: вход/CSRF/заголовки (ASGI-слой), маршруты, модели pydantic, статика с ETag, SSE; `serve()` — обёртка uvicorn |
 | `migrations/` | Alembic: `0001_baseline` = `schema.sql` + старые колонки; `DB.init_schema()` = upgrade head |
@@ -84,7 +86,9 @@
 на живом Polymarket — все строки OK; экран «Диагностика» — все проверки зелёные; время ответа API
 не хуже прежнего.
 
-### [ ] Этап 2. Разделение на сервисы
+### [x] Этап 2. Разделение на сервисы
+> Выполнен в v0.15.0: замер задержки сигнала — в README; тесты на SQLite и PostgreSQL.
+
 1. Три процесса в `docker-compose.yml` из одного образа:
    - `api` — интерфейс, API, живые события;
    - `realtime` — агент, потоки WebSocket, сигналы (ничего тяжёлого — всегда быстрый);

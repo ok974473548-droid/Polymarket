@@ -260,3 +260,25 @@ def test_realtime_makes_signals_without_worker(world_db, monkeypatch):
         assert "score" not in (rt_db.get_state("scheduler:realtime") or {})  # тяжёлое — не здесь
     finally:
         sched.stop()
+
+
+def test_worker_jobs_run_without_agent(world_db):
+    """В процессе worker нет агента: задачи, которым нужны открытые ставки, берут их из базы."""
+    world, path, _, _ = world_db
+    db = _proc_db(path)
+    sch = Scheduler(
+        db,
+        fast_params(),
+        FakeGamma(world),
+        FakeData(world),
+        FakeClob(world),
+        None,
+        groups=("slow", "heavy"),
+        role="worker",
+    )
+    assert isinstance(sch._active_tokens(), list)
+    sch.run_due("slow")
+    st = db.get_state("scheduler:worker")
+    assert st["prices"]["ok"] is True, st["prices"]["error"]
+    assert all(v["ok"] is not False for v in st.values()), {k: v["error"] for k, v in st.items() if v["ok"] is False}
+    assert "agent" not in st and "books" not in st

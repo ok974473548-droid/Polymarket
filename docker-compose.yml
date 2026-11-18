@@ -7,6 +7,7 @@
 # Всё в одном процессе, как до версии 0.15: docker compose run --rm -p 127.0.0.1:8787:8787 api whalefollow run --host 0.0.0.0
 
 x-app: &app
+  build: .
   image: whalefollow:latest
   env_file: [.env]
   volumes: ["wf-data:/data"]
@@ -16,7 +17,6 @@ services:
   migrate:
     # обновление схемы базы до запуска процессов (один раз при каждом старте)
     <<: *app
-    build: .
     command: ["whalefollow", "init-db"]
     restart: "no"
 

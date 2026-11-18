@@ -88,7 +88,7 @@ if PG_MODE:
             with psycopg.connect(_PG, autocommit=True) as c:
                 for (name,) in c.execute("SELECT nspname FROM pg_namespace WHERE nspname LIKE 't\\_%'").fetchall():
                     c.execute(f"DROP SCHEMA {name} CASCADE")
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
 

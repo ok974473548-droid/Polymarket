@@ -174,7 +174,8 @@ def test_ws_client_frames_keepalive_and_reconnect():
         assert cli.alive(5)
         srv.drop()  # обрыв → переподключение и повторная подписка
         assert wait_for(lambda: cli.stats["connects"] == 2 and len(opens) == 2, timeout=6)
-        assert opens == [1, 2] and srv.received.count('{"type": "sub"}') == 2
+        # подписка после переподключения может быть ещё в пути до тестового сервера — ждём её
+        assert wait_for(lambda: srv.received.count('{"type": "sub"}') == 2) and opens == [1, 2]
     finally:
         cli.stop()
         srv.close()

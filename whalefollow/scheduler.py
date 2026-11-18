@@ -33,6 +33,7 @@ from datetime import UTC
 
 from .config import Params
 from .db import DB, now_ts
+from .execution.paper import Portfolio
 from .ingest import pipeline
 from .positions import assign_entities, build_positions
 from .scoring.scorer import run_scoring
@@ -137,7 +138,9 @@ class Scheduler:
     def _active_tokens(self) -> list[str]:
         """Токены, по которым нужен свежий стакан: наши открытые ставки, ждущие сигналы,
         открытые позиции китов из живого списка в открытых рынках."""
-        ours = [p["token_id"] for p in self.agent.pf.open_positions()]
+        # в процессе worker агента нет — открытые ставки берутся из базы напрямую
+        pf = self.agent.pf if self.agent is not None else Portfolio(self.db)
+        ours = [p["token_id"] for p in pf.open_positions()]
         pend = [r["token_id"] for r in self.db.query("SELECT token_id FROM signals WHERE status='pending'")]
         whales = [
             r["token_id"]
