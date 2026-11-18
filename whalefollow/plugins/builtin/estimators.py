@@ -162,8 +162,6 @@ class CryptoThreshold(EstimatorPlugin):
     description = "Вероятность коснуться порога или быть выше/ниже него к дате — по цене и волатильности из досье (логнормальная модель)"
 
     def applies(self, ev: EventInfo, dossier: list[dict]) -> bool:
-        if any((x.get("meta") or {}).get("opt") for x in dossier):
-            return False  # есть улыбка опционов — она точнее одной волатильности; крипто дважды не учитываем
         return any(x["kind"] == "data" and (x.get("meta") or {}).get("metric") == "spot" for x in dossier)
 
     def estimate(
@@ -269,48 +267,6 @@ class WeatherEnsemble(EstimatorPlugin):
         return [
             ComponentEstimate(k, min(max(v / tot if full else v, 0.001), 0.999), quality, note) for k, v in raw.items()
         ]
-
-
-# ---------------------------------------------------------------- крипто по опционам Deribit (F4)
-class CryptoOptionsModel(EstimatorPlugin):
-    name = "crypto_options_model"
-    title = "Крипто: опционы (улыбка волатильности)"
-    description = (
-        "Вероятность «выше / ниже / между / коснётся» к дате рынка по ценам опционов Deribit со всей улыбкой "
-        "волатильности; если цена уже касалась порога с начала окна — исход почти решён"
-    )
-    quality = 0.7
-
-    def applies(self, ev: EventInfo, dossier: list[dict]) -> bool:
-        return any((x.get("meta") or {}).get("opt") for x in dossier)
-
-    def estimate(
-        self, ctx: PluginContext, ev: EventInfo, dossier: list[dict], market: dict[str, float]
-    ) -> list[ComponentEstimate]:
-        from ...eventhub import crypto as K
-
-        opt = next(x["meta"]["opt"] for x in dossier if (x.get("meta") or {}).get("opt"))
-        now = time.time()
-        if not ev.end_ts or ev.end_ts <= now:
-            return []
-        out = []
-        for o in ev.outcomes:
-            th = parse_threshold(o.question) or parse_threshold(o.title)
-            if not th:
-                continue
-            p = K.probability(
-                opt["smiles"], float(opt["spot"]), float(ev.end_ts), th, now, opt.get("hi"), opt.get("lo")
-            )
-            if p is None:
-                continue
-            kind = (
-                "коснуться"
-                if th["kind"] == "touch"
-                else "быть " + {"up": "выше", "down": "ниже"}.get(th["dir"], "между")
-            )
-            note = f"цена {opt['spot']:,.0f}, порог {th['k']:,.0f}, {kind}; по улыбке опционов".replace(",", " ")
-            out.append(ComponentEstimate(o.key, min(max(p, 0.001), 0.999), self.quality, note))
-        return out
 
 
 # ---------------------------------------------------------------- погода по станции рынка (F2)
@@ -427,7 +383,6 @@ class AIBlind(EstimatorPlugin):
 PLUGINS = [
     MarketCalibrated(),
     Platforms(),
-    CryptoOptionsModel(),
     CryptoThreshold(),
     WeatherStationModel(),
     WeatherEnsemble(),
