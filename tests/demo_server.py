@@ -58,6 +58,48 @@ class DemoData(FakeData):
         return rows[offset : offset + limit]
 
 
+def _demo_source():
+    from whalefollow.estimator.sources import Forecast, NewsItem
+    from whalefollow.plugins import Evidence, SourcePlugin
+
+    class Demo(SourcePlugin):
+        name = "demo_source"
+        title = "Демо-источник"
+        description = "Новости, прогнозы и данные для демонстрации (без сети)"
+
+        def news(self, ctx, query, since_ts):
+            now = int(time.time())
+            return [
+                NewsItem(
+                    "Демо-новости",
+                    "media",
+                    now - 3600 * (i + 1),
+                    f"Новость {i + 1}: {query}",
+                    f"https://example.org/n{i}",
+                )
+                for i in range(3)
+            ]
+
+        def forecasts(self, ctx, question, market=None):
+            return [Forecast("Демо-площадка", question, "https://example.org/f", 0.33)]
+
+        def dossier(self, ctx, ev):
+            out = self.news_and_forecasts(ctx, ev)
+            out.append(
+                Evidence(
+                    "data", "Демо-данные", "Явка на прошлых выборах", value=41.5, unit="%", note="пример числа по теме"
+                )
+            )
+            return out
+
+        def news_and_forecasts(self, ctx, ev):
+            from whalefollow.eventhub.dossier import _default
+
+            return _default(self, ctx, ev)
+
+    return Demo()
+
+
 def build(db_url: str = "sqlite://:memory:") -> tuple[Services, dict]:
     _mix(DemoData, ReadyData)
     _mix(FakeGamma, ReadyGamma)
@@ -73,6 +115,11 @@ def build(db_url: str = "sqlite://:memory:") -> tuple[Services, dict]:
     sc = run_scoring(db, p, now=w.now)
     db.set_setting("onboarding", {"jurisdiction_ok": True, "risk_ack": True, "ts": 1})
     db.set_setting("categories", categories.KEYS + ["other"])
+    # досье без сети: встроенные сетевые источники выключены, вместо них — демонстрационный источник
+    db.set_setting("news_sources", dict.fromkeys(("google_news", "manifold", "kalshi", "bookmakers", "reddit"), False))
+    from whalefollow import plugins
+
+    plugins.registry().register(_demo_source(), "демо")
     data = DemoData(w)
     ReadyData.__init__(data)
     gamma = EventsGamma(w, evs)

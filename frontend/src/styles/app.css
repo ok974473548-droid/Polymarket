@@ -560,3 +560,10 @@ body.drawer-open{overflow:hidden}
   .ev-head h1{font-size:26px!important}
   .ev-filters input{min-width:0!important;flex:1}
 }
+/* досье события */
+.ledger-row.dz-fc{grid-template-columns:minmax(0,1fr) 90px 90px}
+.dz-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.dz-card{display:flex;flex-direction:column;gap:4px;padding:16px}
+.dz-card .big{font-size:26px}
+.dz-src{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+@media (max-width:860px){ .ledger-row.dz-fc{grid-template-columns:1fr 1fr!important} }

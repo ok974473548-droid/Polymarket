@@ -171,3 +171,17 @@ test("события: список по темам, страница событ�
   await page.goto("/#/positions/open");
   await expect(page.locator("a.ledger-row.bets-grid", { hasText: "своя ставка по событию" })).toHaveCount(1);
 });
+
+test("досье события: сбор в фоне, прогнозы других площадок, данные и новости", async ({ page }) => {
+  await page.goto("/#/events/9001");
+  const dz = page.locator("#dossier");
+  await expect(dz).toBeVisible();
+  await expect(dz).toContainText(/факт(а|ов)? из \d/, { timeout: 20000 });
+  await expect(dz).toContainText("Другие площадки прогнозов");
+  await expect(dz).toContainText("Демо-площадка");
+  await expect(dz).toContainText("Явка на прошлых выборах");
+  await expect(dz).toContainText("Новость 1");
+  await expect(dz.locator(".dz-src")).toContainText("Демо-источник");
+  await dz.locator("[data-act=dossier-refresh]").click();
+  await expect(dz).toContainText(/факт(а|ов)? из \d/, { timeout: 20000 });
+});

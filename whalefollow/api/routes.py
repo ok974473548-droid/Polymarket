@@ -38,6 +38,7 @@ GET  /api/catalog?topic&sort&q&offset  «События»: список собы
 GET  /api/catalog/{id}                событие: исходы, цены, правила, наши ставки, лимиты модуля
 GET  /api/catalog/{id}/history?period=1w&keys=a,b   история цен исходов (1h 6h 1d 1w 1m all)
 GET  /api/catalog/{id}/live?tokens=a,b живые цены исходов (поток стаканов или стакан CLOB)
+GET  /api/catalog/{id}/dossier?collect=auto|force|no  досье события: факты из источников и ход сбора
 POST /api/catalog/{id}/buy            {token_id, usd, max_price?} — виртуальная покупка исхода
 GET  /api/plugins                     экран «Плагины»: источники, уведомления, стратегии, состояние и ошибки
 PATCH /api/plugins/{name}             {enabled} — включить/выключить плагин
@@ -337,6 +338,10 @@ def build_router(svc: Services) -> APIRouter:
     @r.get("/catalog/{event_id}/live", tags=["События"])
     def event_live(request: Request, event_id: str, tokens: str | None = None) -> Response:
         return J(request, svc.event_live(event_id, _csv(tokens)))
+
+    @r.get("/catalog/{event_id}/dossier", tags=["События"])
+    def event_dossier(request: Request, event_id: str, collect: str = "auto") -> Response:
+        return J(request, svc.event_dossier(event_id, collect if collect in ("auto", "force", "no") else "auto"))
 
     @r.post("/catalog/{event_id}/buy", tags=["События"])
     def event_buy(request: Request, event_id: str, body: S.EventBuyIn | None = None) -> Response:

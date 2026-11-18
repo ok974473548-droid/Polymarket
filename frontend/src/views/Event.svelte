@@ -3,6 +3,7 @@
   // наши ставки в этом событии. Всё обновляется само: цены — раз в 3 с (или сразу из потока), событие — раз в 15 с.
   import { onDestroy, untrack } from "svelte";
   import BuyDialog from "../components/BuyDialog.svelte";
+  import Dossier from "../components/Dossier.svelte";
   import EventChart from "../components/EventChart.svelte";
   import { api, type Json } from "../lib/api";
   import { centsOf, type ChartLine, changeText, endText, LINE_COLORS, mid, pctOf, type Quote, TOPIC_LABEL } from "../lib/events";
@@ -22,7 +23,7 @@
   let open = $state<string | null>(null); // раскрытый исход (стакан)
   let showAll = $state(false);
   let order = $state<{ token: string; title: string; side: string; ask: number | null } | null>(null);
-  let tab = $state("rules");
+  let tab = $state("dossier");
 
   async function loadEvent() {
     try {
@@ -291,10 +292,13 @@
 
   <section class="card col" style="gap:10px">
     <div class="seg" role="group" aria-label="Подробности">
+      <button aria-pressed={tab === "dossier"} data-tab="dossier" onclick={() => (tab = "dossier")}>Досье</button>
       <button aria-pressed={tab === "rules"} onclick={() => (tab = "rules")}>Правила</button>
       <button aria-pressed={tab === "about"} onclick={() => (tab = "about")}>О ставках</button>
     </div>
-    {#if tab === "rules"}
+    {#if tab === "dossier"}
+      <Dossier eventId={id} outcomes={openRows} {priceOf} />
+    {:else if tab === "rules"}
       <div class="ev-rules">{ev.description || "Правила не указаны"}</div>
       {#if ev.resolution_source}<div class="sub">Источник исхода: <a class="link" href={safeUrl(ev.resolution_source)} target="_blank" rel="noopener">{ev.resolution_source}</a></div>{/if}
     {:else}

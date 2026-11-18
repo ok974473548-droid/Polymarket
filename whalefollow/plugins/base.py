@@ -56,6 +56,49 @@ class Plugin:
         return {"name": self.name, "kind": self.kind, "title": self.title or self.name, "description": self.description}
 
 
+# ---------------------------------------------------------------- досье события (модуль «События»)
+@dataclass
+class OutcomeInfo:
+    key: str  # токен «Да» исхода — ключ на экране
+    title: str  # «Rene Haas», «Да», «Команда А»
+    question: str  # полный вопрос рынка исхода
+    price: float | None  # цена Polymarket сейчас (0–1)
+    market_id: str = ""
+    yes_token: str = ""
+    no_token: str = ""
+
+
+@dataclass
+class EventInfo:
+    """Событие Polymarket, по которому собирается досье."""
+
+    id: str
+    title: str
+    topic: str  # тема приложения: politics, sports, crypto, weather, economics, ...
+    description: str = ""
+    end_ts: int | None = None
+    tags: list[str] = field(default_factory=list)
+    outcomes: list[OutcomeInfo] = field(default_factory=list)  # открытые исходы, по убыванию цены
+
+
+@dataclass
+class Evidence:
+    """Факт для досье. kind: news — статья/сообщение; forecast — вероятность того же события в другом месте
+    (value 0–1); data — число по теме (цена, волатильность, прогноз погоды, статистика; value + unit);
+    flow — сделки и держатели на самом Polymarket."""
+
+    kind: str
+    source: str
+    title: str
+    url: str = ""
+    ts: int = 0  # время публикации/измерения (unix)
+    value: float | None = None
+    unit: str = ""
+    outcome_key: str = ""  # к какому исходу относится ("" — к событию целиком)
+    note: str = ""  # пояснение простыми словами
+    meta: dict = field(default_factory=dict)  # сырые данные для модели (этап C), например члены ансамбля прогноза
+
+
 # ---------------------------------------------------------------- источники
 class SourcePlugin(Plugin):
     """Источник данных для проверки сигнала: новости и/или вероятности с других площадок.
@@ -69,6 +112,16 @@ class SourcePlugin(Plugin):
     kind = "source"
     sync_interval_s: float | None = None  # None — фоновой задачи нет
     job_name: str = ""  # имя фоновой задачи (по умолчанию plugin:<name>)
+    topics: tuple[str, ...] | None = None  # темы событий, где источник полезен (None — все)
+
+    def applies(self, ev: EventInfo) -> bool:
+        """Нужен ли источник для досье этого события (по умолчанию — по теме)."""
+        return self.topics is None or ev.topic in self.topics
+
+    def dossier(self, ctx: PluginContext, ev: EventInfo) -> list[Evidence] | None:
+        """Факты для досье события. None — ядро само спросит news() по названию события и forecasts()
+        по вопросам главных исходов."""
+        return None
 
     def news(self, ctx: PluginContext, query: str, since_ts: int) -> list:
         return []

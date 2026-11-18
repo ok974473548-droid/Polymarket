@@ -1998,6 +1998,31 @@ class Services:
             return {"ok": False, "error": str(exc)[:200], "quotes": {}}
         return {"ok": True, "ts": time.time(), "quotes": qs}
 
+    def _dossier_clients(self) -> dict:
+        return {k: v for k, v in (("data", self.data), ("gamma", self.gamma), ("clob", self.clob)) if v is not None}
+
+    def event_dossier(self, event_id: str, collect: str = "auto") -> dict:
+        """Досье события: последние собранные факты + ход сбора. collect: auto — собрать, если досье нет или оно
+        старше 30 мин; force — собрать заново; no — только показать."""
+        from .eventhub import dossier
+
+        cat = self._events()
+        if cat is None:
+            return {"ok": False, "error": "Нет подключения к Polymarket"}
+        cur = dossier.load(self.db, event_id)
+        job = dossier.job_state(event_id)
+        stale = cur["collected_ts"] is None or time.time() - cur["collected_ts"] > dossier.STALE_S
+        running = bool(job and job["state"] == "running")
+        if not running and (collect == "force" or (collect == "auto" and stale)):
+            try:
+                ev = cat.get(event_id)
+            except Exception as exc:
+                return {"ok": False, "error": f"Polymarket не ответил: {exc}"[:200], **cur}
+            if ev is None:
+                return {"ok": False, "error": "Событие не найдено"}
+            job = dossier.start(self.db, ev, self._dossier_clients())
+        return {"ok": True, **cur, "job": job, "stale": stale}
+
     def event_buy(self, event_id: str, token_id: str, usd: float, max_price: float | None = None) -> dict:
         """Виртуальная покупка исхода со страницы события: лимиты модуля «События» и общие стопы."""
         now = int(self.clock())
