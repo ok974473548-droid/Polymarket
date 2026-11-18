@@ -32,6 +32,8 @@ GET  /api/notifications, POST /api/notifications/read
 POST /api/stop, POST /api/resume      «Остановить всё» / возобновить
 GET  /api/journal?limit=100           журнал всех решений
 GET  /api/trial                       прогресс пробного режима и работа сбора данных
+GET  /api/rotation?window_weeks&min_bets&min_result_usd&max_drawdown_share  ротация китов по форме
+PUT  /api/rotation/rule               сохранить правило «в форме»
 
 Обработчики синхронные: FastAPI выполняет их в пуле потоков, долгий запрос не держит остальные.
 Ответ собирается сразу в JSON (без промежуточного обхода jsonable_encoder) — см. `json_response`.
@@ -90,6 +92,13 @@ def _need(v: Any, msg: str = "Не найдено") -> Any:
 def _int(v: Any) -> int | None:
     try:
         return int(v) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _float(v: Any) -> float | None:
+    try:
+        return float(v) if v not in (None, "") else None
     except (TypeError, ValueError):
         return None
 
@@ -202,6 +211,30 @@ def build_router(svc: Services) -> APIRouter:
     @r.get("/players/{wallet}", tags=["Игроки"])
     def player(request: Request, wallet: str, mini: str | None = None, refresh: str | None = None) -> Response:
         return J(request, svc.player_card(wallet, mini=mini == "1", refresh=refresh == "1"))
+
+    @r.get("/rotation", tags=["Киты"])
+    def rotation(
+        request: Request,
+        window_weeks: str | None = None,
+        min_bets: str | None = None,
+        min_result_usd: str | None = None,
+        max_drawdown_share: str | None = None,
+    ) -> Response:
+        rule = {
+            k: v
+            for k, v in {
+                "window_weeks": _int(window_weeks),
+                "min_bets": _int(min_bets),
+                "min_result_usd": _float(min_result_usd),
+                "max_drawdown_share": _float(max_drawdown_share),
+            }.items()
+            if v is not None
+        }
+        return J(request, svc.rotation(rule))
+
+    @r.put("/rotation/rule", tags=["Киты"])
+    def rotation_rule(request: Request, body: S.RotationRuleIn | None = None) -> Response:
+        return J(request, svc.rotation(body.rule() if body else {}, save=True))
 
     @r.get("/markets/{token_id}", tags=["Рынки"])
     def market(request: Request, token_id: str) -> Response:

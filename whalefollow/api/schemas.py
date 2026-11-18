@@ -65,6 +65,16 @@ class TuneIn(_In):
     edge_threshold: float = 0
 
 
+class RotationRuleIn(_In):
+    window_weeks: int | None = Field(None, description="Окно для оценки формы, недель (2–52)")
+    min_bets: int | None = Field(None, description="Минимум ставок (разных рынков) в окне")
+    min_result_usd: float | None = Field(None, description="Результат за окно не ниже, $")
+    max_drawdown_share: float | None = Field(None, description="Просадка в окне — не больше этой доли заработанного")
+
+    def rule(self) -> dict:
+        return {k: v for k, v in self.model_dump().items() if v is not None}
+
+
 class SettingsIn(BaseModel):
     """Любые поля экрана «Настройки»; проверяет их сервис и возвращает ошибки по полям."""
 

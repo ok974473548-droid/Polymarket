@@ -2058,6 +2058,39 @@ class Services:
         lines.append(f"Агент: {'работает' if d['agent_ok'] else 'не отвечает'}; ИИ: {d['ai'].get('effective')}")
         return "\n".join(lines)
 
+    # ------------------------------------------------------------ ротация китов по форме
+    ROTATION_TTL = 600
+
+    def rotation(self, rule: dict | None = None, save: bool = False) -> dict:
+        """Экран «Ротация по форме»: правило «в форме», кривые и главная цифра — держится ли форма.
+        rule — изменения правила (не сохраняются, если save=False: можно примерить)."""
+        from dataclasses import asdict, astuple
+
+        from . import rotation as rot
+
+        r = rot.FormRule.from_dict({**(self.db.get_setting("rotation_rule") or {}), **(rule or {})})
+        if save:
+            self.db.set_setting("rotation_rule", asdict(r))
+        if self.players is None:
+            return {"ok": False, "error": "Нет подключения к данным Polymarket", "rule": asdict(r)}
+        now = int(self.clock())
+        wl = sorted(e["entity_id"] for e in self.db.query("SELECT entity_id FROM watchlist WHERE mode != 'off'"))
+        key = (astuple(r), now // self.ROTATION_TTL, tuple(wl))
+        cache = self.__dict__.setdefault("_rotation_cache", {})
+        if key in cache:
+            return cache[key]
+
+        def name_of(e: str):
+            c = self.players.cards.get((e, True)) or self.players.cards.get((e, False))
+            return c.get("name") if c and c.get("ok") else None
+
+        whales = rot.load_whales(self.db, self.players, wl, name_of=name_of)
+        res = rot.simulate_rotation(whales, r, now=now)
+        res["pool"] = len(wl)
+        cache.clear()
+        cache[key] = res
+        return res
+
     # ------------------------------------------------------------ поиск китов в рейтинге
     LB_CATS = {"overall": "OVERALL", **{k: k.upper() for k in _cats.KEYS}}
     LB_PAGE = 50

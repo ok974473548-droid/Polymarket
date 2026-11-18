@@ -157,6 +157,17 @@ class Players:
         self.cards = TTLCache(300)
         self.markets = TTLCache(90)
         self.search = TTLCache(120)
+        self.pnl = TTLCache(3600)  # кривые прибыли по дням — для ротации китов (меняются раз в день)
+
+    def pnl_series(self, wallet: str) -> list[tuple[int, float]]:
+        """Готовая кривая накопленной прибыли игрока из Polymarket: [(время, прибыль $)], по дням, вся история."""
+        wallet = wallet.lower()
+        hit = self.pnl.get(wallet)
+        if hit is not None:
+            return hit
+        pts = self.data.user_pnl(wallet, "all", "1d") or []
+        out = sorted((int(p["timestamp"]), round(point_pnl(p), 2)) for p in pts if p.get("timestamp") is not None)
+        return self.pnl.put(wallet, out)
 
     # ------------------------------------------------------------ поиск игрока
     def resolve(self, text: str) -> list[dict]:
