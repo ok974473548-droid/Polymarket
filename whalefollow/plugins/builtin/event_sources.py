@@ -587,4 +587,63 @@ class PolymarketFlow(SourcePlugin):
         return out + [e for _, e in big[:6]]
 
 
-PLUGINS = [CryptoMarket(), Weather(), Fred(), Metaculus(), PolymarketFlow()]
+class _StateKV:
+    """Кэш погодной модели в состоянии базы (координаты станций, поправка на станцию на сутки)."""
+
+    def __init__(self, db: Any):
+        self.db = db
+
+    def get(self, key: str) -> Any:
+        return self.db.get_state(key) if self.db is not None else None
+
+    def set(self, key: str, value: Any) -> None:
+        if self.db is not None:
+            self.db.set_state(key, value)
+
+
+def _get_text(url: str, params: dict | None = None) -> str:
+    r = net.client().get(url, params=params, timeout=60)
+    r.raise_for_status()
+    return r.text
+
+
+class WeatherStation(SourcePlugin):
+    name = "weather_station"
+    title = "Погода по станции рынка"
+    description = (
+        "Станция из правил рынка (аэропорт METAR или обсерватория Гонконга), прогнозы 7 моделей (ECMWF, GFS, ICON, "
+        "GEM, JMA, Météo-France, UKMO) с поправкой на станцию по истории, в день события — фактические сводки"
+    )
+    topics = ("weather",)
+
+    def dossier(self, ctx: PluginContext, ev: EventInfo) -> list[Evidence]:
+        from ...eventhub import weather as W
+
+        target = W.parse_target(ev.title, ev.end_ts)
+        station = W.parse_station(ev.description or "")
+        if not target or not station:
+            return []  # не температура или в правилах нет станции — источник здесь не помогает
+        wx = W.station_forecast(_get, _get_text, _StateKV(ctx.db), station, target)
+        if not wx:
+            return []
+        what = "макс." if wx["var"] == "max" else "мин."
+        note = f"{len(wx['models'])} моделей, " + (wx.get("cal_note") or f"поправка по {wx['n']} дням станции")
+        if wx.get("seen") is not None:
+            note += f"; уже наблюдалось {wx['seen']:.1f} °C ({wx.get('obs_n', 0)} сводок)".replace(".", ",", 1)
+        return [
+            Evidence(
+                "data",
+                f"Станция {wx['station']}",
+                f"Прогноз станции {wx['name'] or wx['station']}: {what} {wx['mu']:.1f} °C ± {wx['sigma']:.1f} на {wx['date']}".replace(
+                    ".", ","
+                ),
+                f"https://aviationweather.gov/data/metar/?ids={wx['station']}" if wx["station"] != "HKO" else W.HKO,
+                value=wx["mu"],
+                unit="°C",
+                note=note,
+                meta={"wx": wx},
+            )
+        ]
+
+
+PLUGINS = [CryptoMarket(), Weather(), WeatherStation(), Fred(), Metaculus(), PolymarketFlow()]

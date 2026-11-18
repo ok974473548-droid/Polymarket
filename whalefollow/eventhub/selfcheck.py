@@ -19,11 +19,29 @@ import json
 import math
 import time
 from collections import defaultdict
+from pathlib import Path
 from typing import Any
 
 from ..db import DB
 
 LAMBDA_PRIOR = 0.3
+# λ по теме, проверенный на истории закрытых рынков отдельным скриптом (честно: подбор на ранних, проверка на поздних).
+# Это стартовое значение темы вместо 0,3; дальше его уточняет самопроверка вперёд.
+VALIDATED = Path(__file__).with_name("validated_topics.json")
+
+
+def topic_priors() -> dict[str, dict]:
+    try:
+        return json.loads(VALIDATED.read_text(encoding="utf-8")).get("topics") or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def prior_for(topic: str | None) -> float:
+    t = topic_priors().get(topic or "")
+    return float(t["lambda"]) if t else LAMBDA_PRIOR
+
+
 LAMBDA_MAX = 0.6
 LAMBDA_K = 100.0  # сжатие λ к исходному: столько «виртуальных» исходов с λ = 0,3
 LAMBDA_GRID = [round(x * 0.025, 3) for x in range(0, 25)]  # 0 … 0,6
@@ -208,12 +226,13 @@ def weight_mult(cmp: dict) -> float:
 
 
 # ---------------------------------------------------------------- λ
-def fit_lambda(rows: list[dict]) -> tuple[float, float, int]:
-    """λ с наименьшим Brier на прошлых анализах (итог = якорь + λ·(сводная − якорь)), затем сжатие к 0,3."""
+def fit_lambda(rows: list[dict], prior: float = LAMBDA_PRIOR) -> tuple[float, float, int]:
+    """λ с наименьшим Brier на прошлых анализах (итог = якорь + λ·(сводная − якорь)), затем сжатие к исходному
+    (0,3 или проверенному на истории для темы)."""
     rows = [r for r in rows if r.get("model_p") is not None and r.get("anchor_p") is not None]
     n = len({(r["event_id"], r["outcome_key"]) for r in rows})
     if n < MIN_OUTCOMES:
-        return LAMBDA_PRIOR, LAMBDA_PRIOR, n
+        return prior, prior, n
 
     def brier_at(lam: float) -> float:
         w = tot = 0.0
@@ -225,7 +244,7 @@ def fit_lambda(rows: list[dict]) -> tuple[float, float, int]:
         return tot / w
 
     best = min(LAMBDA_GRID, key=brier_at)
-    lam = (n * best + LAMBDA_K * LAMBDA_PRIOR) / (n + LAMBDA_K)
+    lam = (n * best + LAMBDA_K * prior) / (n + LAMBDA_K)
     return round(min(LAMBDA_MAX, max(0.0, lam)), 4), best, n
 
 
@@ -245,10 +264,11 @@ def learn(db: DB, now: float | None = None) -> dict:
     topics = {r["topic"] for r in rows if r.get("topic")}
     for t in sorted(topics):
         tr = [r for r in rows if r.get("topic") == t]
-        lt, rt, nt = fit_lambda(tr)
+        pt = prior_for(t)
+        lt, rt, nt = fit_lambda(tr, pt)
         if nt >= TOPIC_MIN:
-            if lt > LAMBDA_PRIOR and compare(tr)["verdict"]["code"] != "better":
-                lt = LAMBDA_PRIOR
+            if lt > pt and compare(tr)["verdict"]["code"] != "better":
+                lt = pt  # выше проверенного — только при доказанной пользе вперёд
             by_topic[t] = {"lambda": lt, "raw": rt, "n": nt}
     weights = {}
     for name, er in estimator_rows(rows).items():
@@ -291,8 +311,12 @@ def params(db: DB) -> dict:
 
 
 def lambda_for(p: dict, topic: str | None) -> float:
+    """λ темы: выученное по закрытым событиям темы; иначе проверенное на истории; иначе общее."""
     t = (p.get("by_topic") or {}).get(topic or "")
-    return float(t["lambda"]) if t else float(p.get("lambda", LAMBDA_PRIOR))
+    if t:
+        return float(t["lambda"])
+    v = topic_priors().get(topic or "")
+    return float(v["lambda"]) if v else float(p.get("lambda", LAMBDA_PRIOR))
 
 
 def mult_for(p: dict, name: str) -> float:

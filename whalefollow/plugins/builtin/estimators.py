@@ -230,6 +230,8 @@ class WeatherEnsemble(EstimatorPlugin):
     spread_c = 0.5
 
     def applies(self, ev: EventInfo, dossier: list[dict]) -> bool:
+        if any((x.get("meta") or {}).get("wx") for x in dossier):
+            return False  # есть прогноз по станции рынка — он точнее; погоду дважды не учитываем
         return any((x.get("meta") or {}).get("members") for x in dossier if x["kind"] == "data")
 
     def estimate(
@@ -264,6 +266,47 @@ class WeatherEnsemble(EstimatorPlugin):
         full = len(raw) == len(ev.outcomes)
         return [
             ComponentEstimate(k, min(max(v / tot if full else v, 0.001), 0.999), quality, note) for k, v in raw.items()
+        ]
+
+
+# ---------------------------------------------------------------- погода по станции рынка (F2)
+class WeatherStationModel(EstimatorPlugin):
+    name = "weather_station_model"
+    title = "Погода: станция рынка, 7 моделей"
+    description = (
+        "Вероятность каждой корзины температуры по прогнозам 7 моделей с поправкой на станцию из правил рынка; "
+        "в день события — с учётом уже наблюдённого"
+    )
+    # проверено на истории закрытых погодных рынков (scripts/check_weather_model.py): за 1,5 суток модель точнее цены
+    quality = 0.9
+
+    def applies(self, ev: EventInfo, dossier: list[dict]) -> bool:
+        return any((x.get("meta") or {}).get("wx") for x in dossier)
+
+    def estimate(
+        self, ctx: PluginContext, ev: EventInfo, dossier: list[dict], market: dict[str, float]
+    ) -> list[ComponentEstimate]:
+        from ...eventhub import weather as W
+
+        wx = next(x["meta"]["wx"] for x in dossier if (x.get("meta") or {}).get("wx"))
+        buckets = {}
+        for o in ev.outcomes:
+            b = parse_bucket(o.title) or parse_bucket(o.question)
+            if b:
+                buckets[o.key] = b
+        if not buckets:
+            return []
+        probs = W.outcome_probs(wx, buckets)
+        # проверено на истории только с поправкой на станцию; без неё (архив сводок недоступен) — малое доверие
+        q = self.quality if int(wx.get("n") or 0) >= 20 and not wx.get("cal_note") else 0.25
+        what = "макс." if wx["var"] == "max" else "мин."
+        note = f"станция {wx['station']}: {what} {wx['mu']:.1f} ± {wx['sigma']:.1f} °C".replace(".", ",")
+        if wx.get("seen") is not None:
+            note += f", уже {wx['seen']:.1f} °C".replace(".", ",")
+        if q < self.quality:
+            note += "; без поправки на станцию — доверие снижено"
+        return [
+            ComponentEstimate(k, min(max(p, 0.001), 0.999), q, note, meta={"wx_mu": wx["mu"]}) for k, p in probs.items()
         ]
 
 
@@ -337,4 +380,12 @@ class AIBlind(EstimatorPlugin):
         return out
 
 
-PLUGINS = [MarketCalibrated(), Platforms(), CryptoThreshold(), WeatherEnsemble(), SmartMoney(), AIBlind()]
+PLUGINS = [
+    MarketCalibrated(),
+    Platforms(),
+    CryptoThreshold(),
+    WeatherStationModel(),
+    WeatherEnsemble(),
+    SmartMoney(),
+    AIBlind(),
+]

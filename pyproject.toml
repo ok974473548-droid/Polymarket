@@ -1,6 +1,6 @@
 [project]
 name = "whalefollow"
-version = "1.6.0"
+version = "1.7.0"
 description = "WhaleFollow: отбор сильных игроков Polymarket и агент копирования ставок (v1: данные, скоринг, бэктест, бумажная торговля)"
 requires-python = ">=3.11"
 # Существующие зависимости — диапазонами (как в 0.13), новые пакеты — точными версиями; pandas заменён polars (0.16)
@@ -22,6 +22,7 @@ dependencies = [
   "pyarrow==26.0.1",
   "anthropic==2.10.0",  # модуль «События»: оценка исходов через Claude (официальный SDK, Apache-2.0)
   "cryptography==50.0.1",  # push-уведомления: шифрование сообщений и подпись VAPID
+  "tzdata==2026.6",  # часовые пояса станций погоды (в образе python:slim системной базы может не быть)
 ]
 
 [project.optional-dependencies]
