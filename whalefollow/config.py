@@ -182,12 +182,14 @@ DEFAULT_SETTINGS = {
         "telegram": True,
         "push": True,
         "email": False,
+        "discord": True,  # работает, если задан WF_DISCORD_WEBHOOK
         "signals": True,
         "whale_exit": True,
         "limits": True,
         "weekly": True,
         "system": True,
     },
+    "plugins": {},  # включение плагинов без своей прежней настройки: {имя: true/false} (экран «Плагины»)
     "paper_started_ts": None,
     "param_overrides": {},
     "auto_discover": False,  # автопоиск китов по всей ленте; выключен — данные только по китам из списка           # подстройка параметров с экрана «Пробный режим» (сейчас — только порог выгоды)

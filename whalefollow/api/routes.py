@@ -34,6 +34,9 @@ GET  /api/journal?limit=100           журнал всех решений
 GET  /api/trial                       прогресс пробного режима и работа сбора данных
 GET  /api/rotation?window_weeks&min_bets&min_result_usd&max_drawdown_share  ротация китов по форме
 PUT  /api/rotation/rule               сохранить правило «в форме»
+GET  /api/plugins                     экран «Плагины»: источники, уведомления, стратегии, состояние и ошибки
+PATCH /api/plugins/{name}             {enabled} — включить/выключить плагин
+GET  /api/plugins/{name}/backtest?days=90  бэктест стратегии на китах из списка
 GET  /api/push/key                    открытый ключ VAPID для подписки и число подписанных устройств
 POST /api/push/subscribe              {subscription, label} — подписать это устройство на push
 POST /api/push/unsubscribe            {endpoint} — отписать
@@ -307,6 +310,19 @@ def build_router(svc: Services) -> APIRouter:
     @r.get("/diagnostics", responses=_doc(S.DiagnosticsOut), tags=["Диагностика"])
     def diagnostics(request: Request, live: str | None = None) -> Response:
         return J(request, svc.diagnostics(live=live == "1"))
+
+    # ---------------------------------------------------------------- плагины
+    @r.get("/plugins", tags=["Плагины"])
+    def plugins_list(request: Request) -> Response:
+        return J(request, svc.plugins_list())
+
+    @r.patch("/plugins/{name}", tags=["Плагины"])
+    def plugin_set(request: Request, name: str, body: S.PluginPatchIn | None = None) -> Response:
+        return J(request, svc.plugin_set(name, body.enabled if body else True))
+
+    @r.get("/plugins/{name}/backtest", tags=["Плагины"])
+    def plugin_backtest(request: Request, name: str, days: str | None = None) -> Response:
+        return J(request, svc.plugin_backtest(name, _int(days) or 90))
 
     # ---------------------------------------------------------------- push-уведомления
     @r.get("/push/key", tags=["Уведомления"])

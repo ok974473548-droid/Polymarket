@@ -1,1 +1,0 @@
-import{A as e,E as t,M as n,j as r,q as i}from"./api-BdZxfZIH.js";var a=n(`<span class="chip g">кит держит</span>`),o=n(`<span class="chip a">кит вышел</span>`);function s(n,s){var c=r(),l=i(c),u=t=>{var n=a();e(t,n)},d=t=>{var n=o();e(t,n)};t(l,e=>{s.st===`держит`?e(u):s.st===`вышел`&&e(d,1)}),e(n,c)}export{s as t};

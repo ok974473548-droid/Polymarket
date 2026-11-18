@@ -18,6 +18,7 @@ const ROUTES: [RegExp, string, string | null][] = [
   [/^#\/results(?:\/(week|month|all))?$/, "results", "results"],
   [/^#\/settings$/, "settings", "settings"],
   [/^#\/diagnostics$/, "diagnostics", "settings"],
+  [/^#\/plugins$/, "plugins", "settings"],
   [/^#\/trial$/, "trial", "results"],
   [/^#\/welcome(?:\/(\d))?$/, "welcome", null],
 ];

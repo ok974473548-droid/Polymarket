@@ -23,7 +23,7 @@ from .decision.engine import Decision, decide
 from .decision.risk import RiskManager
 from .estimator.base import Estimate, MarketContext, NoEstimator
 from .estimator.calibration import load_calibrator, record_outcomes
-from .estimator.sources import build_sources, gather, gather_forecasts, manipulation_flags, materials_for_prompt
+from .estimator.sources import gather, gather_forecasts, manipulation_flags, materials_for_prompt
 from .execution.paper import LiveTradingDisabled, PaperBroker, Portfolio
 from .ingest import pipeline
 from .scoring.scorer import latest_category_scores, short
@@ -263,10 +263,18 @@ class Agent:
     def evaluate(self, sig: dict, now: int | None = None) -> dict:
         now = now or self.clock()
         market = self.db.one("SELECT * FROM markets WHERE market_id=?", (sig["market_id"],)) or {}
+        settings = self.risk.settings()
+        # стратегии-плагины решают, брать ли покупку кита в сигнал (по умолчанию — «Копировать кита»: берёт всё)
+        from .plugins import strategy as strategies
+
+        strat = strategies.gate(self.db, sig, market, settings)
+        if not strat["ok"]:
+            return self._record(
+                sig, Decision("SKIP", reasons=["strategy"]), {"strategies": strat["verdicts"]}, "", "skipped"
+            )
         score = self.score_of(sig["entity_id"])
         cats = latest_category_scores(self.db, sig["entity_id"])
         cat_score = cats.get(market.get("category") or "other")
-        settings = self.risk.settings()
         wl = self.db.one("SELECT categories_off FROM watchlist WHERE entity_id=?", (sig["entity_id"],)) or {}
         ent_pos = self.db.query(
             "SELECT market_id, token_id, remaining_shares, cost_usd, category FROM positions WHERE entity_id=?",
@@ -327,6 +335,7 @@ class Agent:
         )
         details = {
             **chk.details,
+            "strategies": strat["by"],
             "news_flags": research["flags"],
             "llm_trusted": trusted,
             "fee_rate": fee_rate,
@@ -418,9 +427,9 @@ class Agent:
         last = self.db.get_state(key, 0) or 0
         if now - last > self.p.estimate_cache_s:
             if self.sources == "settings":
-                news_src, fc_src = build_sources(
-                    settings.get("news_sources"), settings.get("telegram_channels"), db=self.db
-                )
+                from . import plugins  # источники — плагины (встроенные и свои)
+
+                news_src, fc_src = plugins.research_sources(self.db, settings)
             else:
                 news_src, fc_src = list(self.sources), list(self.forecast_sources)
             try:

@@ -26,7 +26,7 @@
   void loadUsage();
 
   const CATS: [string, string][] = [...TOPICS, ["other", "Разное (тема не указана)"]];
-  const WHERE: [string, string][] = [["telegram", "Telegram"], ["push", "Push"], ["email", "Email"]];
+  const WHERE: [string, string][] = [["telegram", "Telegram"], ["push", "Push"], ["discord", "Discord"], ["email", "Email"]];
   const WHAT: [string, string][] = [["signals", "Новые сигналы"], ["whale_exit", "Кит вышел из позиции"], ["limits", "Лимиты и паузы"], ["weekly", "Итоги недели"], ["system", "Сбои сбора данных"]];
   const MONEY: [string, string, string][] = [
     ["bankroll_usd", "Сумма для торговли", "$"],
@@ -258,7 +258,7 @@
           <div class="sub">
             {integ.telegram
               ? "Telegram подключён: под сигналами — кнопки «Купить» и «Пропустить», команды /status, /stop, /resume."
-              : "Telegram работает, если в файле .env указан бот (см. README)."} Email появится позже; все уведомления видны в колокольчике.
+              : "Telegram работает, если в файле .env указан бот (см. README)."} Discord и почта — по ключам в .env (см. «Плагины»); все уведомления видны в колокольчике.
           </div>
           <PushToggle />
         </div>
@@ -281,6 +281,10 @@
                 : "Последняя копия не удалась — см. «Пробный режим» → «Сбор данных».",
           )}
         </div>
+        <a class="card item" style="text-decoration:none;color:inherit" href="#/plugins">
+          <div class="grow"><b>Плагины</b><div class="sub">Источники данных, каналы уведомлений и стратегии: включить, выключить, состояние, ошибки, бэктест стратегий.</div></div>
+          <span class="btn">Открыть</span>
+        </a>
         <a class="card item" style="text-decoration:none;color:inherit" href="#/diagnostics">
           <div class="grow"><b>Диагностика</b><div class="sub">Проверить доступ к Polymarket и другим источникам, посмотреть ошибки и скопировать отчёт.</div></div>
           <span class="btn">Открыть</span>

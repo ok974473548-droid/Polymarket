@@ -62,6 +62,8 @@ REASONS_RU = {
     "limit_category": "Лимит на одну тему",
     "limit_exposure": "Лимит на все открытые ставки",
     "limit_cash": "Недостаточно денег",
+    "already_holding": "Эта ставка у нас уже есть",
+    "strategy": "Ни одна включённая стратегия не взяла эту ставку",
 }
 CATEGORY_RU = {k: v.lower() for k, v in _cats.LABEL_RU.items()}
 STATUS_RU = {
@@ -1614,6 +1616,7 @@ class Services:
         "score_changes": "Пересчёт изменившихся китов",
         "housekeeping": "Чистка",
         "weekly": "Итоги недели",
+        "rotation": "Форма китов (стратегия «Ротация»)",
     }
 
     def trial(self, target_signals: int = 200, min_weeks: int = 4, max_drawdown: float = 0.15) -> dict:
@@ -1859,6 +1862,80 @@ class Services:
         self.db.set_setting("param_overrides", ov)
         self.db.notify("settings", f"Порог выгоды изменён на {t * 100:.0f}%", "Подстройка по итогам пробного режима")
         return {"ok": True, "tuning": self.tuning()}
+
+    # ------------------------------------------------------------ плагины (экран «Плагины»)
+    def plugins_list(self) -> dict:
+        from . import plugins
+        from .plugins.registry import plugins_dir
+
+        reg = plugins.registry()
+        ctx = plugins.context(self.db)
+        now = time.time()
+        items = []
+        for p in reg.plugins.values():
+            on = reg.is_enabled(p, ctx.settings)
+            try:
+                why = p.available(ctx)
+            except Exception as e:
+                why = f"проверка доступности: {e}"
+            st = plugins.status(self.db, p.name)
+            ok_ts, err_ts = st.get("ok_ts"), st.get("err_ts")
+            if not on:
+                state = "off"
+            elif why:
+                state = "unavailable"
+            elif err_ts and (not ok_ts or err_ts > ok_ts):
+                state = "error"
+            elif ok_ts:
+                state = "ok"
+            else:
+                state = "idle"
+            items.append(
+                {
+                    **p.info(),
+                    "origin": p.origin,
+                    "enabled": on,
+                    "unavailable": why,
+                    "state": state,
+                    "calls": st.get("calls", 0),
+                    "errors": st.get("errors", 0),
+                    "error": st.get("error"),
+                    "note": st.get("note"),
+                    "ok_ago_s": round(now - ok_ts) if ok_ts else None,
+                    "err_ago_s": round(now - err_ts) if err_ts else None,
+                    "has_backtest": p.kind == "strategy",
+                }
+            )
+        order = {k: i for i, k in enumerate(plugins.KINDS)}
+        items.sort(key=lambda x: (order.get(x["kind"], 9), x["origin"] != "встроенный", x["title"]))
+        d = plugins_dir()
+        return {
+            "kinds": [{"kind": k, "title": plugins.KIND_TITLES[k]} for k in plugins.KINDS],
+            "items": items,
+            "load_errors": reg.load_errors,
+            "dir": str(d.resolve()) if d else None,
+            "dir_hint": "/data/plugins (Docker) или папка plugins рядом с запуском; свой путь — WF_PLUGINS_DIR",
+        }
+
+    def plugin_set(self, name: str, enabled: bool) -> dict:
+        from . import plugins
+
+        reg = plugins.registry()
+        if not reg.set_enabled(self.db, name, bool(enabled)):
+            return {"ok": False, "error": "Нет такого плагина"}
+        p = reg.get(name)
+        warn = None
+        if p is not None and p.kind == "strategy":
+            ctx = plugins.context(self.db)
+            if not any(reg.is_enabled(x, ctx.settings) for x in reg.of_kind("strategy")):
+                warn = "Все стратегии выключены — новых сигналов не будет"
+        return {"ok": True, "enabled": bool(enabled), "warning": warn}
+
+    def plugin_backtest(self, name: str, days: int = 90) -> dict:
+        from .plugins import strategy
+
+        days = max(7, min(int(days or 90), 365))
+        return strategy.backtest(self.db, self.p, name, days=days, now=int(self.clock()))
 
     # ------------------------------------------------------------ push-уведомления (Web Push)
     push_sender = None  # PushNotifier процесса (подключает cli); без него — создаётся при первой отправке
@@ -2132,6 +2209,10 @@ class Services:
         whales = rot.load_whales(self.db, self.players, wl, name_of=name_of)
         res = rot.simulate_rotation(whales, r, now=now)
         res["pool"] = len(wl)
+        if not rule or save:  # сохранённое правило → расписание «кто в форме» для стратегии «Ротация по форме»
+            sched = rot.schedule_from(res)
+            if sched:
+                self.db.set_state("rotation_schedule", {"computed_ts": now, "items": sched})
         cache.clear()
         cache[key] = res
         return res

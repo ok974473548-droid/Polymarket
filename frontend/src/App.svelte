@@ -28,6 +28,7 @@
     results: () => import("./views/Results.svelte"),
     settings: () => import("./views/Settings.svelte"),
     diagnostics: () => import("./views/Diagnostics.svelte"),
+    plugins: () => import("./views/Plugins.svelte"),
     trial: () => import("./views/Trial.svelte"),
     welcome: () => import("./views/Welcome.svelte"),
   };

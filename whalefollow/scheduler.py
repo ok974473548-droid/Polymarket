@@ -105,14 +105,19 @@ class Scheduler:
             Job("transfers", 1800, self.job_transfers, "slow"),
             Job("activity", 6 * 3600, self.job_activity, "slow"),
             Job("recategorize", 6 * 3600, self.job_recategorize, "slow"),
-            Job("kalshi", 1800, self.job_kalshi, "slow"),
-            Job("odds", 3600 * float(os.environ.get("WF_ODDS_INTERVAL_H") or 12), self.job_odds, "slow"),
             Job("score", DAY, self.job_score, "heavy"),
             Job("score_changes", 3600, self.job_score_changes, "heavy"),
             Job("housekeeping", DAY, self.job_housekeeping, "heavy"),
             Job("weekly", 7 * DAY, self.job_weekly, "heavy"),
             Job("backup", DAY, self.job_backup, "heavy"),
+            Job("rotation", DAY, self.job_rotation, "heavy"),
         ]
+        # фоновые задачи плагинов-источников (кэш Kalshi, коэффициенты букмекеров, свои плагины)
+        from . import plugins
+
+        clients = {k: v for k, v in (("kalshi", kalshi), ("odds", odds)) if v is not None}
+        for name, interval, fn in plugins.sync_jobs(db, clients):
+            self.jobs.append(Job(name, interval, fn, "slow"))
         if not db.get_setting("paper_started_ts"):
             db.set_setting("paper_started_ts", self.clock())
         # одноразово: тема «Разное» (Polymarket не указал тему) включена и у тех, кто уже сохранял настройки
@@ -368,26 +373,19 @@ class Scheduler:
                 log.warning("сверка %s: %s", e, exc)
         return n
 
-    def _source_on(self, key: str) -> bool:
-        from .config import DEFAULT_SETTINGS
-
-        return bool({**DEFAULT_SETTINGS["news_sources"], **(self.db.get_setting("news_sources") or {})}.get(key))
+    def _plugin_job(self, name: str):
+        for job in self.jobs:
+            if job.name == name:
+                return job.fn()
+        return None
 
     def job_kalshi(self):
-        """Открытые рынки Kalshi в локальный кэш (для поиска похожих вопросов)."""
-        if self.kalshi is None or not self._source_on("kalshi") or not tracked_entities(self.db):
-            return None
-        from .estimator.external import sync_kalshi
-
-        return sync_kalshi(self.db, self.kalshi)
+        """Открытые рынки Kalshi в локальный кэш — теперь задача плагина «kalshi»."""
+        return self._plugin_job("kalshi")
 
     def job_odds(self):
-        """Коэффициенты букмекеров по видам спорта (если задан WF_ODDS_API_KEY)."""
-        if self.odds is None or not self._source_on("bookmakers") or not tracked_entities(self.db):
-            return None
-        from .estimator.external import sync_odds
-
-        return sync_odds(self.db, self.odds)
+        """Коэффициенты букмекеров — задача плагина «bookmakers» (нужен WF_ODDS_API_KEY)."""
+        return self._plugin_job("odds")
 
     def _prepare_scoring(self) -> tuple[bool, list[str] | None]:
         """Позиции → антисибил → игроки (быстрые шаги). (есть ли кого считать, игроки или None — все)."""
@@ -451,7 +449,6 @@ class Scheduler:
         """Резервная копия SQLite раз в сутки (без остановки работы), хранится keep последних."""
         if self.db.kind != "sqlite" or self.db.path == ":memory:":
             return None
-        import os
         import sqlite3
         from datetime import datetime
 
@@ -477,6 +474,29 @@ class Scheduler:
                 if os.path.exists(os.path.join(folder, f + suffix)):
                     os.remove(os.path.join(folder, f + suffix))
         return dst_path
+
+    def job_rotation(self):
+        """Расписание «кто в форме» для стратегии «Ротация по форме» — только если она включена."""
+        from . import plugins
+        from . import rotation as rot
+        from .players import Players
+
+        reg = plugins.registry()
+        p = reg.get("rotation_form")
+        if p is None or self.data is None or not reg.is_enabled(p, plugins.user_settings(self.db)):
+            return None
+        wl = tracked_entities(self.db)
+        if not wl:
+            return None
+        rule = rot.FormRule.from_dict(self.db.get_setting("rotation_rule") or {})
+        now = int(self.clock())
+        res = rot.simulate_rotation(
+            rot.load_whales(self.db, Players(self.data, self.gamma, self.clob), wl), rule, now=now
+        )
+        sched = rot.schedule_from(res)
+        if sched:
+            self.db.set_state("rotation_schedule", {"computed_ts": now, "items": sched})
+        return len(sched)
 
     def job_weekly(self):
         if next(j for j in self.jobs if j.name == "weekly").runs == 0:

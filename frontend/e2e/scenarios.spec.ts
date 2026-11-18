@@ -120,3 +120,22 @@ test("горячие клавиши и боковая панель игрока"
   await page.keyboard.press("Escape");
   await expect(page.locator(".drawer.on")).toBeHidden();
 });
+
+test("плагины: состояние, переключатель и бэктест стратегии", async ({ page }) => {
+  await page.goto("/#/settings");
+  await page.getByRole("link", { name: /Плагины/ }).click();
+  await expect(page).toHaveURL(/#\/plugins$/);
+  for (const h of ["Источники данных", "Уведомления", "Стратегии"]) await expect(page.getByRole("heading", { name: h })).toBeVisible();
+  const cons = page.locator('[data-plugin="consensus"]');
+  await expect(cons).toContainText("выключен");
+  await cons.locator("[data-act=plugin-toggle]").check();
+  await expect(page.locator("#toast")).toHaveText(/«Консенсус китов» включён/);
+  await expect(cons).toContainText(/включён|работает/);
+  await cons.locator("[data-act=plugin-toggle]").uncheck();
+  await expect(page.locator("#toast")).toHaveText(/выключен/);
+  const copy = page.locator('[data-plugin="copy_whale"]');
+  await copy.locator("[data-act=backtest]").click();
+  await expect(copy).toContainText("Итог закрытых ставок", { timeout: 30_000 });
+  await expect(copy).toContainText("Повторили бы");
+  await expect(page.locator('[data-plugin="bookmakers"]')).toContainText(/недоступен|выключен/);
+});

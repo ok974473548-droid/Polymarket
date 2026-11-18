@@ -489,3 +489,9 @@ body.drawer-open{overflow:hidden}
 /* uPlot: служебные ряды полосы разброса (низ/верх) в подписи не показываем */
 .uplot-box.has-band .u-legend .u-series:nth-child(2),.uplot-box.has-band .u-legend .u-series:nth-child(3){display:none}
 .uplot-box .u-legend{font:12.5px/1.4 "Golos Text",system-ui,sans-serif;color:var(--ink-2)}
+
+/* экран «Плагины» */
+.plugin-row{display:flex;gap:16px;align-items:flex-start;padding:16px 20px;border-top:1px solid var(--line)}
+.plugin-row:first-child{border-top:0}
+.plugin-toggle{flex:none;min-height:36px;font-weight:600}
+@media (max-width:860px){ .plugin-row{padding:14px 16px} }

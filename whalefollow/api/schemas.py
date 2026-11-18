@@ -72,6 +72,10 @@ class PushSubscribeIn(_In):
     label: str = Field(default="", description="Браузер/устройство — для списка")
 
 
+class PluginPatchIn(_In):
+    enabled: bool = Field(default=True, description="Включить (true) или выключить (false) плагин")
+
+
 class PushUnsubscribeIn(_In):
     endpoint: str = ""
 

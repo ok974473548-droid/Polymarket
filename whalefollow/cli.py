@@ -234,8 +234,9 @@ def run_role(
     clock=None,
 ):
     """Запуск процесса по роли: api | realtime | worker | all (см. whalefollow/runtime.py)."""
+    from . import plugins
     from .agent import Agent
-    from .notifier import TelegramNotifier
+    from .plugins.notify import NotificationHub
     from .push import PushNotifier
     from .runtime import CheckRunner, Heartbeat, QuotePublisher
     from .scheduler import wait_forever
@@ -265,12 +266,16 @@ def run_role(
                 QuotePublisher(db, agent.streams.books).start()  # живые цены для процесса api
         else:
             print("Потоки реального времени: выключены (WF_STREAMS=off) — только опрос")
-    tg = TelegramNotifier.from_env(db)  # отправка — из любого процесса, где появилось уведомление
-    svc.push_sender = PushNotifier.attach_to(db)  # push на подписанные устройства — так же
+    # уведомления — плагины-каналы (Telegram, push, Discord, почта, свои); отправка — из любого процесса,
+    # где появилось уведомление
+    hub = NotificationHub.attach_to(db)
+    svc.push_sender = PushNotifier(db)  # кнопка «Проверить» в настройках push
     if role in ("realtime", "all"):
-        print("Telegram:", "включён" if tg else "выключен (нет WF_TELEGRAM_BOT_TOKEN / WF_TELEGRAM_CHAT_ID)")
-        if tg is not None:
-            tg.attach(svc)  # кнопки «Купить/Пропустить» и команды /status /stop /resume — только здесь
+        tg_on = bool(os.environ.get("WF_TELEGRAM_BOT_TOKEN") and os.environ.get("WF_TELEGRAM_CHAT_ID"))
+        print("Telegram:", "включён" if tg_on else "выключен (нет WF_TELEGRAM_BOT_TOKEN / WF_TELEGRAM_CHAT_ID)")
+        hub.start_commands(svc)  # кнопки «Купить/Пропустить» и команды /status /stop /resume — только здесь
+    reg = plugins.registry()
+    print(f"Плагины: {len(reg.plugins)}" + (f", ошибок загрузки: {len(reg.load_errors)}" if reg.load_errors else ""))
     runner = None
     if role in ("worker",):
         runner = CheckRunner(svc).start()

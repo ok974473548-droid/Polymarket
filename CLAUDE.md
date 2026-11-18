@@ -40,12 +40,14 @@
 | `logs.py` | structlog: JSON в Docker, консоль локально, Sentry по `SENTRY_DSN` |
 | `web/` | Готовая сборка интерфейса (не править руками — собирается из `frontend/`), PWA: `sw.js`, `manifest.webmanifest`, иконки |
 | `frontend/` | Интерфейс: Svelte 5 + TypeScript + Vite. `src/views/` — экраны, `src/components/` — блоки (графики: `PriceChart` — lightweight-charts, `Plot` — uPlot), `src/lib/` — API, состояние, роутер, живые события, горячие клавиши, push; `public/` — sw.js, манифест, иконки; `e2e/` — сценарии Playwright |
+| `plugins/` | Плагины: `base` (виды: SourcePlugin, NotifierPlugin, StrategyPlugin; Candidate, Verdict, Notice), `registry` (встроенные → entry points `whalefollow.plugins` → файлы из `WF_PLUGINS_DIR`/`/data/plugins`; включение; состояние в `risk_state` «plugin:имя»), `notify` (диспетчер уведомлений), `strategy` (фильтр в `agent.evaluate` и бэктест на `whale_sim`), `builtin/` (6 источников, 4 канала, 3 стратегии) |
 | `push.py` | Push-уведомления (Web Push: шифрование RFC 8291, подпись VAPID), подписки устройств, отправка в фоне |
 | `fees.py`, `categories.py` | Комиссии Polymarket по темам; единый список тем |
 | `diagnostics.py` | Экран «Диагностика»: проверки всех API и потоков |
 
 ## Важные договорённости
 - Данные собираются только по китам из списка пользователя (`tracked.py`, `auto_discover` выключен).
+- Новые источники, каналы уведомлений и стратегии — плагинами (`whalefollow/plugins/`), а не правкой ядра.
 - Polymarket Data API — только v2 (v1 отключён, HTTP 410). Справка: `https://data-api.polymarket.com/v2/openapi.json`.
 - Комиссия тейкера: `акции × ставка × p × (1−p)`, ставки по темам — в `fees.py`.
 - Всё «на момент now», без заглядывания в будущее. Чек-лист ошибок — навык `trading-math-audit`.
@@ -144,7 +146,10 @@
 Готово, когда: все прежние экраны и функции работают в новом интерфейсе; Playwright-сценарии зелёные;
 первый экран открывается быстрее прежнего.
 
-### [ ] Этап 5. Расширения (плагины)
+### [x] Этап 5. Расширения (плагины)
+> Выполнен в v1.0.0: стратегия по умолчанию — «Копировать кита» (сигналы как раньше; бэктест сверен с «что было бы»);
+> прежние флажки источников и уведомлений = включение плагинов; пример — `examples/plugins/example_plugins.py`.
+
 1. Единый интерфейс плагинов (Python entry points) трёх видов:
    - **источники** — новости, прогнозы, букмекеры (перенести текущие из `estimator/sources.py`, `external.py`);
    - **уведомления** — Telegram (есть), Discord, почта;

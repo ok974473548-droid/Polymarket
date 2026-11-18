@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import bisect
 from collections import defaultdict
+from collections.abc import Callable
 
 from .. import fees
 from ..config import Params
@@ -63,9 +64,15 @@ def simulate_whale(
     slippage: float = 0.01,
     start_ts: int | None = None,
     end_ts: int | None = None,
+    accept: Callable[[dict], bool] | None = None,
+    entity_of: dict[str, str] | None = None,
 ) -> dict:
     """Повтор ставок кита с задержкой и комиссиями. По умолчанию — ставки за последние days дней;
-    со start_ts/end_ts — ставки, открытые в этот отрезок (итог — как они закрылись на самом деле)."""
+    со start_ts/end_ts — ставки, открытые в этот отрезок (итог — как они закрылись на самом деле).
+
+    Бэктест стратегии (плагина): wallets — кошельки нескольких китов, entity_of — кошелёк → кит,
+    accept(сделка) — берёт ли стратегия эту покупку (вызывается по порядку времени, видит только прошлое).
+    По каждому исходу копируется первая покупка, которую стратегия взяла; выход — когда ЭТОТ кит вышел."""
     if not wallets:
         return {"ok": False, "error": "Нет кошельков"}
     start = int(start_ts) if start_ts else now - days * DAY
@@ -74,7 +81,7 @@ def simulate_whale(
     delay = int(delay_s if delay_s is not None else params.max_delay_s)
     ph = ",".join("?" for _ in wallets)
     trades = db.query(
-        "SELECT t.ts, t.token_id, t.market_id, t.side, t.price, t.size_shares, t.size_usd, m.category, m.question, "
+        "SELECT t.ts, t.wallet, t.token_id, t.market_id, t.side, t.price, t.size_shares, t.size_usd, m.category, m.question, "
         "m.fee_rate, tk.payout, tk.outcome_label, m.resolved_ts FROM trades t "
         "LEFT JOIN markets m ON m.market_id=t.market_id LEFT JOIN tokens tk ON tk.token_id=t.token_id "
         f"WHERE t.wallet IN ({ph}) AND (t.source IS NULL OR t.source='') AND t.ts>=? ORDER BY t.ts",
@@ -83,20 +90,27 @@ def simulate_whale(
     if not trades:
         return {"ok": True, "bets": [], "summary": _empty(days, delay)}
     # чистая позиция кита по токену во времени — чтобы понять, когда он вышел полностью
-    net: dict[str, float] = defaultdict(float)
+    ent = entity_of or {}
+    net: dict[tuple[str, str], float] = defaultdict(float)  # (кит, исход) → чистая позиция
     exit_ts: dict[str, int] = {}
     exit_px_whale: dict[str, float] = {}  # цена, по которой кит закрыл позицию (последняя продажа)
     first_buy: dict[str, dict] = {}
+    rejected: set[tuple[str, str]] = set()
     for t in trades:
         tok = t["token_id"]
+        e = ent.get(t["wallet"], "")
         sh = float(t["size_shares"] or 0)
         if t["side"] == "BUY":
-            net[tok] += sh
-            if start <= t["ts"] <= end and tok not in first_buy:
-                first_buy[tok] = t
+            net[(e, tok)] += sh
+            if start <= t["ts"] <= end and tok not in first_buy and (e, tok) not in rejected:
+                if accept is None or accept(t):
+                    first_buy[tok] = {**t, "entity": e}
+                else:
+                    rejected.add((e, tok))  # стратегия не взяла первую покупку кита — его докупки не пересматриваем
         else:
-            net[tok] -= sh
-            if tok in first_buy and net[tok] <= 1e-6 and tok not in exit_ts:
+            net[(e, tok)] -= sh
+            fb = first_buy.get(tok)
+            if fb is not None and fb["entity"] == e and net[(e, tok)] <= 1e-6 and tok not in exit_ts:
                 exit_ts[tok] = t["ts"]
                 exit_px_whale[tok] = float(t["price"])
     prices = _Prices(db, list(first_buy))
@@ -106,6 +120,8 @@ def simulate_whale(
     cats_on = set(settings.get("categories") or [])
     spent_day: dict[int, float] = defaultdict(float)
     bets, skipped = [], defaultdict(int)
+    if accept is not None:
+        skipped["strategy"] = len({tok for _, tok in rejected if tok not in first_buy})
     for tok, t in sorted(first_buy.items(), key=lambda kv: kv[1]["ts"]):
         cat = t["category"] or "other"
         if cats_on and cat not in cats_on:
@@ -159,6 +175,7 @@ def simulate_whale(
                 "question": t["question"] or "Рынок загружается",
                 "side": t["outcome_label"],
                 "category": cat,
+                "entity_id": t["entity"] or None,
                 "whale_cents": round(whale_px * 100, 1),
                 "entry_cents": round(entry * 100, 1),
                 "exit_cents": round(exit_px * 100, 1) if exit_px is not None else None,

@@ -46,7 +46,10 @@ export function softRefresh(): void {
   clearTimeout(refreshTimer);
   refreshTimer = setTimeout(() => {
     const a = document.activeElement as HTMLElement | null;
-    const typing = a && ["INPUT", "SELECT", "TEXTAREA"].includes(a.tagName);
+    // флажок или переключатель в фокусе — это не набор текста: после него экран должен обновиться
+    const input = a as HTMLInputElement | null;
+    const toggle = !!input && input.tagName === "INPUT" && ["checkbox", "radio"].includes(input.type);
+    const typing = !!a && ["INPUT", "SELECT", "TEXTAREA"].includes(a.tagName) && !toggle;
     const dialogOpen = !!document.querySelector("dialog[open]");
     if (typing || dialogOpen || app.notifOpen || app.locked) return;
     app.refresh++;

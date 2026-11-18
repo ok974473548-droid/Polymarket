@@ -289,6 +289,7 @@ def simulate_rotation(whales: list[Whale], rule: FormRule, now: int, seed: int =
             {
                 "ts": int(bounds[k]),
                 "in_form": names,
+                "in_form_ids": [prepared[i][0].entity_id for i in np.flatnonzero(form)],
                 "n_in_form": int(form.sum()),
                 "rotation_pct": round(r_rot * 100, 2),
                 "all_pct": round(r_all * 100, 2),
@@ -371,7 +372,25 @@ def simulate_rotation(whales: list[Whale], rule: FormRule, now: int, seed: int =
         "weeks_in_cash": sum(1 for w in weeks_out if w["n_in_form"] == 0),
         "history": weeks_out[-26:],
         "current": current,
+        "current_ts": int(bounds[K - 1]),
     }
+
+
+def schedule_from(res: dict) -> list[dict]:
+    """Расписание «кто в форме» для стратегии-плагина: [{ts пересмотра, ids}] по возрастанию времени.
+    Решение на пересмотре ts действует до следующего пересмотра (как в самой ротации — без заглядывания вперёд).
+    Последняя запись — текущая форма на последней границе недели."""
+    if not res.get("ok"):
+        return []
+    out = [{"ts": int(w["ts"]), "ids": list(w.get("in_form_ids") or [])} for w in res.get("history") or []]
+    if res.get("current_ts"):
+        out.append(
+            {
+                "ts": int(res["current_ts"]),
+                "ids": [c["entity_id"] for c in res.get("current") or [] if c.get("in_form")],
+            }
+        )
+    return sorted(out, key=lambda r: r["ts"])
 
 
 def load_whales(db: Any, players: Any, entity_ids: list[str] | None = None, name_of: Any = None) -> list[Whale]:

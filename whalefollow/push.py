@@ -170,7 +170,8 @@ class PushNotifier:
     def wanted(self, kind: str) -> bool:
         if kind not in PUSH_KINDS:
             return False
-        prefs = {**DEFAULT_SETTINGS["notify"], **(self.db.get_setting("notify") or {})}
+        base: dict = dict(DEFAULT_SETTINGS["notify"])  # type: ignore[call-overload]
+        prefs = {**base, **(self.db.get_setting("notify") or {})}
         return bool(prefs.get("push")) and bool(prefs.get(KIND_TO_SETTING.get(kind, ""), False))
 
     def on_notify(self, n: dict) -> None:

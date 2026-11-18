@@ -138,8 +138,10 @@ class TelegramNotifier:
                     payload["reply_markup"] = msg["reply_markup"]
                 self._call("sendMessage", payload)
                 self.sent += 1
+                _status(self.db, True)
             except net.HTTPError as exc:
                 log.warning("Telegram: не удалось отправить: %s", exc)
+                _status(self.db, False, str(exc))
             finally:
                 self.q.task_done()
 
@@ -242,6 +244,13 @@ class TelegramNotifier:
             svc.resume()
             return "Работа продолжена."
         return None
+
+
+def _status(db: DB, ok: bool, error: str = "") -> None:
+    """Состояние плагина «telegram» для экрана «Плагины»."""
+    from .plugins.registry import record
+
+    record(db, "telegram", ok=ok, error=error)
 
 
 def wait_until(pred, timeout: float = 2.0) -> bool:
