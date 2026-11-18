@@ -52,14 +52,14 @@ def test_legacy_database_is_stamped_and_keeps_data(tmp_path):
     _legacy_db(p)
     db = DB(f"sqlite:///{p}")
     assert db.schema_version() is None
-    assert db.init_schema() == migrations.head() == "0001"
-    assert db.schema_version() == "0001"
+    assert db.init_schema() == migrations.head()
+    assert db.schema_version() == migrations.head()
     assert {"fee_rate", "url"} <= db._columns("markets") and "source" in db._columns("trades")
     assert {"detected_ts", "info"} <= db._columns("signals")
     assert db.one("SELECT question FROM markets WHERE market_id='m1'")["question"] == "Will it rain?"
     assert db.scalar("SELECT COUNT(*) AS n FROM trades") == 1 and db.get_setting("bankroll_usd") == 1234
     assert db.one("SELECT name FROM sqlite_master WHERE name='ix_trades_source'")
-    assert db.init_schema() == "0001"  # повторный запуск — ничего не меняет
+    assert db.init_schema() == migrations.head()  # повторный запуск — ничего не меняет
 
 
 def test_new_database_is_on_head(db):
@@ -68,11 +68,11 @@ def test_new_database_is_on_head(db):
 
 
 def test_next_migration_is_applied(tmp_path):
-    """Следующие изменения схемы приходят миграциями: новая версия применяется к базе на 0001."""
+    """Следующие изменения схемы приходят миграциями: новая версия применяется к базе на последней версии."""
     loc = tmp_path / "mig"
     shutil.copytree(migrations.HERE, loc, ignore=shutil.ignore_patterns("__pycache__", "__init__.py"))
-    (loc / "versions" / "0002_demo.py").write_text(
-        'revision = "0002"\ndown_revision = "0001"\nbranch_labels = None\ndepends_on = None\n'
+    (loc / "versions" / "0099_demo.py").write_text(
+        f'revision = "0099"\ndown_revision = "{migrations.head()}"\nbranch_labels = None\ndepends_on = None\n'
         "from alembic import op\nimport sqlalchemy as sa\n\n"
         "def upgrade():\n    with op.batch_alter_table('markets') as b:\n"
         "        b.add_column(sa.Column('demo_note', sa.Text()))\n\n"
@@ -83,7 +83,7 @@ def test_next_migration_is_applied(tmp_path):
     db = DB(f"sqlite:///{p}")
     db.init_schema()
     db.execute("INSERT INTO markets (market_id, question) VALUES ('m1', 'q')")
-    assert migrations.upgrade(db, location=str(loc)) == "0002"
+    assert migrations.upgrade(db, location=str(loc)) == "0099"
     assert "demo_note" in db._columns("markets") and db.scalar("SELECT COUNT(*) AS n FROM markets") == 1
 
 

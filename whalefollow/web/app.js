@@ -976,6 +976,14 @@ async function viewDiagnostics(live = false) {
       ${st.agent_books.request_median_ms ? `<div class="bet"><span>Запрос стакана (медиана)</span><b class="tnum">${st.agent_books.request_median_ms} мс</b></div>` : ""}
       ${(!st.trades.live && st.trades.error) || (!st.books.live && st.books.error) ? `<div class="sub" style="color:var(--warn-ink)">Поток недоступен — агент работает опросом. ${esc((st.trades.error || st.books.error || "").slice(0, 120))}</div>` : ""}
     </div>` : "";
+  const svcs = d.services || [];
+  const upFor = (sec) => sec < 3600 ? `${Math.max(1, Math.round(sec / 60))} мин` : sec < 172800 ? `${Math.round(sec / 3600)} ч` : `${Math.round(sec / 86400)} дн`;
+  const servicesCard = svcs.length ? `<div class="card col" style="gap:6px"><h2>Процессы</h2>
+      ${svcs.map((x) => `<div class="bet"><span class="row" style="gap:8px"><span class="dot ${x.alive ? "ok" : "bad"}" aria-hidden="true"></span>${esc(x.label)}</span>
+        <span class="sub">${x.alive ? `работает ${upFor(x.uptime_s)}, пульс ${ago(Math.round(x.last_seen_s))}` : `<span class="down">остановлен — последний пульс ${ago(Math.round(x.last_seen_s))}</span>`}</span></div>`).join("")}
+      ${svcs.some((x) => !x.alive && x.name === "worker") ? `<div class="sub" style="color:var(--warn-ink)">Фоновые задачи стоят: сигналы приходят, но рынки, цены и пересчёт китов не обновляются. Перезапустите: docker compose up -d</div>` : ""}
+      ${svcs.some((x) => !x.alive && x.name === "realtime") ? `<div class="sub" style="color:var(--warn-ink)">Сигналы не приходят: процесс realtime остановлен. Перезапустите: docker compose up -d</div>` : ""}
+    </div>` : "";
   main().innerHTML = `
     <a class="back" href="#/settings">← Настройки</a>
     <div class="page-head"><div><h1>Диагностика</h1>
@@ -991,6 +999,7 @@ async function viewDiagnostics(live = false) {
         <div class="fact"><div class="label">Версия</div><div class="v" style="font-size:20px">${esc(d.version)}</div></div>
       </div></section>
     <div class="ledger">${checks}</div>
+    ${servicesCard}
     ${streamsCard ? `<div class="grid2">${streamsCard}<div class="card col" style="gap:8px"><h2>Как устроена скорость</h2>
       <div class="sub">Сделки китов и стаканы приходят по постоянному соединению (WebSocket) сами — без ожидания следующего опроса. Экраны приложения читают локальную базу и открываются за миллисекунды.</div>
       <div class="sub">Время запроса к Polymarket — это в основном дорога до его серверов и обратно; её сокращают открытые соединения (без новой установки связи) и потоки, но не код приложения.</div></div></div>` : ""}

@@ -185,18 +185,122 @@ def resolve_db_url(url: str | None, in_docker: bool | None = None, data_dir: str
     return fixed
 
 
-def _serve(
-    db, params, agent, data, gamma, port, clock=None, with_loop: bool = False, host: str = "127.0.0.1", telegram=None
+def _streams_on() -> bool:
+    return os.environ.get("WF_STREAMS", "on").strip().lower() not in ("0", "off", "false", "no")
+
+
+def _make_scheduler(db, params, gamma, data, clob, agent, role: str, clock=None):
+    from .estimator.external import KalshiClient, OddsClient
+    from .ingest.chain import ExplorerClient
+    from .scheduler import Scheduler
+
+    groups = {"realtime": ("fast", "books"), "worker": ("slow", "heavy")}.get(role)
+    chain = odds = None
+    if role in ("worker", "all"):
+        chain = ExplorerClient.from_env()
+        print(
+            "Блокчейн (антисибил):",
+            f"{chain.provider}" if chain else "выключен (нет WF_ETHERSCAN_API_KEY или WF_CHAIN_PROVIDER=blockscout)",
+        )
+        odds = OddsClient.from_env()
+        print("Букмекеры:", "включены" if odds else "выключены (нет WF_ODDS_API_KEY)")
+    return Scheduler(
+        db,
+        params,
+        gamma,
+        data,
+        clob,
+        agent,
+        chain=chain,
+        kalshi=KalshiClient(),
+        odds=odds,
+        groups=groups,
+        role=None if role == "all" else role,
+        clock=clock,
+    )
+
+
+def run_role(
+    role: str,
+    db,
+    params,
+    gamma,
+    data,
+    clob,
+    port: int = 8787,
+    host: str = "127.0.0.1",
+    llm: bool = False,
+    block: bool = True,
+    clock=None,
 ):
-    from .api.server import serve
-    from .auth import Auth
+    """Запуск процесса по роли: api | realtime | worker | all (см. whalefollow/runtime.py)."""
+    from .agent import Agent
+    from .notifier import TelegramNotifier
+    from .runtime import CheckRunner, Heartbeat, QuotePublisher
+    from .scheduler import wait_forever
     from .services import Services
 
+    agent = None
+    if role in ("api", "realtime", "all"):  # api: агент без цикла — подтверждение ставки и продажа с экрана
+        agent = Agent(db, params, data, clob, gamma, estimator=_estimator(llm), sources="settings", clock=clock)
+        if role != "api":
+            print("ИИ:", "доступен (Claude)" if agent.estimator.name != "none" else "недоступен — режим без ИИ")
     svc = Services(db, params, agent=agent, data=data, gamma=gamma, clock=clock)
-    if telegram is not None:
-        telegram.attach(svc)  # кнопки «Купить/Пропустить» и команды /status /stop /resume
-    if with_loop and agent is not None:
-        threading.Thread(target=agent.run_forever, kwargs={"interval_s": 5}, daemon=True).start()
+    if role == "api":
+        svc.check_mode = "queue"  # проверки игроков выполняет worker
+    sched = None
+    if role in ("realtime", "worker", "all"):
+        sched = _make_scheduler(db, params, gamma, data, clob, agent, role)  # расписание — по настоящим часам
+    if role in ("realtime", "all"):
+        if _streams_on():
+            from .streams import Streams
+            from .tracked import tracked_wallets
+
+            agent.streams = Streams(
+                db, agent, wallets_fn=lambda: tracked_wallets(db), tokens_fn=sched._active_tokens
+            ).start()
+            print("Потоки реального времени: включены (сделки китов и стаканы — через WebSocket, опрос — страховка)")
+            if role == "realtime":
+                QuotePublisher(db, agent.streams.books).start()  # живые цены для процесса api
+        else:
+            print("Потоки реального времени: выключены (WF_STREAMS=off) — только опрос")
+    tg = TelegramNotifier.from_env(db)  # отправка — из любого процесса, где появилось уведомление
+    if role in ("realtime", "all"):
+        print("Telegram:", "включён" if tg else "выключен (нет WF_TELEGRAM_BOT_TOKEN / WF_TELEGRAM_CHAT_ID)")
+        if tg is not None:
+            tg.attach(svc)  # кнопки «Купить/Пропустить» и команды /status /stop /resume — только здесь
+    runner = None
+    if role in ("worker",):
+        runner = CheckRunner(svc).start()
+        print("Проверки игроков: выполняются здесь (очередь в базе)")
+
+    def info() -> dict:
+        out: dict = {}
+        if sched is not None:
+            out["jobs"] = sorted({j.group for j in sched.jobs if j.group in sched.groups})
+        if role in ("realtime", "all"):
+            out["streams"] = svc.streams_status()
+        if runner is not None:
+            out["checks_done"] = runner.ran
+        return out
+
+    Heartbeat(db, role, info_fn=info).start()
+    if sched is not None:
+        if role in ("worker", "all"):
+            print("Первый проход: поиск кандидатов и скоринг займут от нескольких минут до часа.")
+        sched.start()
+    if role in ("api", "all"):
+        _serve_ui(svc, db, port, host)
+    elif block:
+        print(f"Процесс {role} запущен (Ctrl+C — остановить)")
+        wait_forever()
+    return svc, sched, runner
+
+
+def _serve_ui(svc, db, port: int, host: str) -> None:
+    from .api.server import serve
+    from .auth import Auth
+
     auth = Auth(db)
     httpd = serve(svc, host=host, port=port, auth=auth)
     print(
@@ -249,11 +353,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--with-agent", action="store_true")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--llm", action="store_true")
-    p = sub.add_parser("run", help="пробный режим: интерфейс + планировщик + агент")
-    p.add_argument("--port", type=int, default=8787)
-    p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--llm", action="store_true")
+    for name, help_ in (
+        ("run", "всё в одном процессе: интерфейс + агент + потоки + планировщик"),
+        ("api", "процесс api: интерфейс, API, живые события"),
+        ("realtime", "процесс realtime: агент, потоки WebSocket, сигналы, Telegram"),
+        ("worker", "процесс worker: рынки, цены, пересчёт китов, резервные копии, проверки игроков"),
+    ):
+        p = sub.add_parser(name, help=help_)
+        p.add_argument("--port", type=int, default=8787)
+        p.add_argument("--host", default="127.0.0.1")
+        p.add_argument("--llm", action="store_true")
     sub.add_parser("check", help="проверить доступ к API Polymarket")
+    p = sub.add_parser("alive", help="жив ли процесс (для healthcheck): код 0 — пульс свежий")
+    p.add_argument("role", choices=["api", "realtime", "worker", "all"])
     args = ap.parse_args(argv)
     from .logs import setup_logging
 
@@ -262,6 +374,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "check":
         return cmd_check(Endpoints())
+
+    if args.cmd == "alive":
+        from .runtime import services_state
+
+        st = {s["name"]: s for s in services_state(DB(resolve_db_url(args.db)))}
+        ok = bool(st.get(args.role, {}).get("alive"))
+        print(f"{args.role}: {'жив' if ok else 'нет пульса'}")
+        return 0 if ok else 1
 
     db = DB(resolve_db_url(args.db))
     before = db.schema_version()
@@ -332,40 +452,9 @@ def main(argv: list[str] | None = None) -> int:
 
         now = now_ts()
         _print(walk_forward(db, quick_params(params), now - args.months * 30 * DAY, now - 30 * DAY))
-    elif args.cmd == "run":
-        from .agent import Agent
-        from .notifier import TelegramNotifier
-        from .scheduler import Scheduler
-
-        agent = Agent(db, params, data, clob, gamma, estimator=_estimator(args.llm), sources="settings")
-        print("ИИ:", "доступен (Claude)" if agent.estimator.name != "none" else "недоступен — режим без ИИ")
-        from .ingest.chain import ExplorerClient
-
-        chain = ExplorerClient.from_env()
-        print(
-            "Блокчейн (антисибил):",
-            f"{chain.provider}" if chain else "выключен (нет WF_ETHERSCAN_API_KEY или WF_CHAIN_PROVIDER=blockscout)",
-        )
-        from .estimator.external import KalshiClient, OddsClient
-
-        odds = OddsClient.from_env()
-        print("Букмекеры:", "включены" if odds else "выключены (нет WF_ODDS_API_KEY)")
-        sched = Scheduler(db, params, gamma, data, clob, agent, chain=chain, kalshi=KalshiClient(), odds=odds)
-        if os.environ.get("WF_STREAMS", "on").strip().lower() not in ("0", "off", "false", "no"):
-            from .streams import Streams
-            from .tracked import tracked_wallets
-
-            agent.streams = Streams(
-                db, agent, wallets_fn=lambda: tracked_wallets(db), tokens_fn=sched._active_tokens
-            ).start()
-            print("Потоки реального времени: включены (сделки китов и стаканы — через WebSocket, опрос — страховка)")
-        else:
-            print("Потоки реального времени: выключены (WF_STREAMS=off) — только опрос")
-        tg = TelegramNotifier.from_env(db)
-        print("Telegram:", "включён" if tg else "выключен (нет WF_TELEGRAM_BOT_TOKEN / WF_TELEGRAM_CHAT_ID)")
-        print("Первый проход: поиск кандидатов и скоринг займут от нескольких минут до часа.")
-        sched.start()
-        _serve(db, params, agent, data, gamma, args.port, host=args.host, telegram=tg)
+    elif args.cmd in ("run", "api", "realtime", "worker"):
+        role = "all" if args.cmd == "run" else args.cmd
+        run_role(role, db, params, gamma, data, clob, port=args.port, host=args.host, llm=args.llm)
     elif args.cmd in ("run-agent", "serve"):
         from .agent import Agent
 
@@ -378,7 +467,11 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 agent.run_forever(args.interval)
         else:
-            _serve(db, params, agent, data, gamma, args.port, with_loop=args.with_agent, host=args.host)
+            from .services import Services
+
+            if args.with_agent:
+                threading.Thread(target=agent.run_forever, kwargs={"interval_s": 5}, daemon=True).start()
+            _serve_ui(Services(db, params, agent=agent, data=data, gamma=gamma), db, args.port, args.host)
     return 0
 
 

@@ -126,14 +126,23 @@ def plural_ru(n: int, one: str, few: str, many: str) -> str:
     return one if n % 10 == 1 else (few if 2 <= n % 10 <= 4 else many)
 
 
+def scheduler_state(db: DB) -> dict:
+    from .scheduler import scheduler_state as _st
+
+    return _st(db)
+
+
 class Services:
     def __init__(self, db: DB, params: Params, agent=None, data=None, gamma=None, clock=None, clob=None):
         self.db, self.p, self.agent = db, params, agent
         self.data, self.gamma = data, gamma
         self.clob = clob or (getattr(agent, "clob", None) if agent is not None else None)
         self.clock = clock or now_ts
-        self._checks: dict[str, dict] = {}
+        # проверки игроков: состояние — в таблице check_jobs (видно всем процессам);
+        # check_mode="local" — выполняются здесь же в фоне, "queue" — их выполняет процесс worker
+        self.check_mode = "local"
         self._checks_lock = threading.Lock()
+        self._check_threads: dict[str, threading.Thread] = {}
         self.risk = RiskManager(db, params)
         self.pf = Portfolio(db)
         self.players = Players(data, gamma, self.clob) if data is not None else None
@@ -153,7 +162,7 @@ class Services:
     def _freshness(self) -> tuple[int | None, bool]:
         """Свежесть данных: по фактической работе агента (если идёт планировщик), иначе по последним сделкам."""
         now = self.clock()
-        sched = self.db.get_state("scheduler", {}) or {}
+        sched = scheduler_state(self.db) or {}
         ag = sched.get("agent")
         if ag and ag.get("last_run"):
             return max(0, now - int(ag["last_run"])), ag.get("ok") is not False
@@ -161,7 +170,7 @@ class Services:
 
     def bootstrap(self) -> dict:
         """Прогресс первой загрузки на реальных данных."""
-        sched = self.db.get_state("scheduler", {}) or {}
+        sched = scheduler_state(self.db) or {}
         score = sched.get("score") or {}
         disc = sched.get("discover") or {}
         scored = bool(score.get("runs")) and score.get("ok") is not False
@@ -444,6 +453,12 @@ class Services:
             if got is not None:
                 bids, asks = got
                 return {"bid": bids[0][0] if bids else None, "ask": asks[0][0] if asks else None, "live": True}
+        else:  # поток стаканов работает в другом процессе (realtime) — его цены в live_quotes
+            lq = self.db.one(
+                "SELECT bid, ask, ts FROM live_quotes WHERE token_id=? AND ts>?", (token_id, time.time() - 30)
+            )
+            if lq:
+                return {"bid": lq["bid"], "ask": lq["ask"], "live": True}
         row = self.db.one(
             "SELECT bids, asks, ts FROM orderbook_snapshots WHERE token_id=? ORDER BY ts DESC LIMIT 1", (token_id,)
         )
@@ -462,7 +477,7 @@ class Services:
         """Короткий слепок состояния: изменился — открытые страницы обновляются."""
         sig = (
             self.db.one(
-                "SELECT COUNT(*) AS n, MAX(rowid) AS m, "
+                "SELECT COUNT(*) AS n, MAX(ts) AS m, "
                 "SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS p FROM signals"
             )
             or {}
@@ -494,6 +509,7 @@ class Services:
 
         seen = bus.version
         t0 = last_hb = last_q = time.time()
+        last_ev = int(self.db.scalar("SELECT MAX(id) AS m FROM live_events", default=0))
         prev = self.fingerprint()
         quotes: dict = {}
         toks: list = []
@@ -501,9 +517,13 @@ class Services:
         yield "hello", {"pending": len([x for x in prev["signals"][2].split(",") if x])}
         while not should_stop() and time.time() - t0 < max_s:
             seen = bus.wait(seen, tick)
+            # события других процессов (агент в realtime, проверки в worker) — через таблицу live_events
+            evs = self.db.query("SELECT id, kind FROM live_events WHERE id>? ORDER BY id LIMIT 200", (last_ev,))
+            if evs:
+                last_ev = evs[-1]["id"]
             fp = self.fingerprint()
-            if fp != prev:
-                changed = [k for k in fp if fp[k] != prev[k]]
+            if fp != prev or any(e["kind"] == "check" for e in evs):
+                changed = [k for k in fp if fp[k] != prev[k]] + sorted({e["kind"] for e in evs} - {"signal", "bet"})
                 pending = [x for x in fp["signals"][2].split(",") if x]
                 new = [x for x in pending if x not in prev["signals"][2].split(",")]
                 prev = fp
@@ -1214,27 +1234,23 @@ class Services:
                 "state": "error",
                 "error": "Не похоже на адрес кошелька или ссылку на профиль Polymarket",
             }
-        if self.data is None:
+        if self.data is None and self.check_mode == "local":
             return {"ok": False, "state": "error", "error": "Нет подключения к данным Polymarket"}
         now = time.time()
-        with self._checks_lock:
-            for jid, j in list(self._checks.items()):
-                if j["state"] != "running" and now - j["finished"] > 3600:
-                    del self._checks[jid]
-            job = next(
-                (
-                    j
-                    for j in self._checks.values()
-                    if j["address"] == addr
-                    and (j["state"] == "running" or (j["state"] == "done" and now - j["finished"] < CHECK_CACHE_S))
-                ),
-                None,
+        with self._checks_lock, self.db.tx():
+            self.db.execute("DELETE FROM check_jobs WHERE state IN ('done', 'error') AND finished<?", (now - 3600,))
+            row = self.db.one(
+                "SELECT job_id FROM check_jobs WHERE address=? AND (state IN ('queued', 'running') "
+                "OR (state='done' AND finished>?)) ORDER BY started DESC LIMIT 1",
+                (addr, now - CHECK_CACHE_S),
             )
-            if job is None:
+            if row:
+                job = self._load_job(row["job_id"]) or {}
+            else:
                 job = {
                     "job_id": "chk_" + addr[2:10] + str(int(now * 1000) % 100000),
                     "address": addr,
-                    "state": "running",
+                    "state": "queued" if self.check_mode == "queue" else "running",
                     "stage": "profile",
                     "done": 0,
                     "total": 0,
@@ -1244,18 +1260,62 @@ class Services:
                     "error": None,
                     "stages_done": [],
                     "card": None,
+                    "timings": None,
                 }
-                job["thread"] = threading.Thread(
-                    target=self._run_check, args=(job,), daemon=True, name=f"check-{addr[:8]}"
-                )
-                self._checks[job["job_id"]] = job
-                job["thread"].start()
-        job["thread"].join(wait_s)
-        return self._check_view(job)
+                self._save_job(job, force=True)
+        if not row and self.check_mode == "local":
+            self.run_check_job(job, background=True)
+        deadline = time.time() + wait_s
+        th = self._check_threads.get(job["job_id"])
+        if th is not None:
+            th.join(wait_s)
+        else:
+            while time.time() < deadline and job.get("state") in ("queued", "running"):
+                time.sleep(0.1)
+                job = self._load_job(job["job_id"]) or job
+        return self._check_view(self._load_job(job["job_id"]) or job)
 
     def check_status(self, job_id: str) -> dict | None:
-        job = self._checks.get(job_id)
+        job = self._load_job(job_id)
         return self._check_view(job) if job else None
+
+    # ---------- хранение проверок (таблица check_jobs)
+    JSON_FIELDS = ("stages_done", "card", "result", "timings")
+
+    def _save_job(self, job: dict, force: bool = False) -> None:
+        now = time.time()
+        if not force and now - job.get("_saved", 0.0) < 0.3:  # ход проверки — не чаще 3 раз в секунду
+            return
+        job["_saved"] = now
+        row = {
+            k: job.get(k)
+            for k in ("job_id", "address", "state", "stage", "done", "total", "started", "finished", "error", "worker")
+        }
+        row.update({k: json.dumps(job.get(k), ensure_ascii=False, default=str) for k in self.JSON_FIELDS})
+        row["updated_ts"] = now
+        self.db.upsert("check_jobs", row, ["job_id"])
+
+    def _load_job(self, job_id: str) -> dict | None:
+        row = self.db.one("SELECT * FROM check_jobs WHERE job_id=?", (job_id,))
+        if not row:
+            return None
+        for k in self.JSON_FIELDS:
+            row[k] = json.loads(row[k]) if row.get(k) else None
+        row["stages_done"] = row["stages_done"] or []
+        row["finished"] = row["finished"] or 0.0
+        return row
+
+    def running_checks(self) -> list[dict]:
+        return self.db.query("SELECT job_id, address FROM check_jobs WHERE state IN ('queued', 'running')")
+
+    def run_check_job(self, job: dict, background: bool = False) -> None:
+        """Выполняет проверку (здесь или в фоновом потоке этого процесса)."""
+        if not background:
+            return self._run_check(job)
+        th = threading.Thread(target=self._run_check, args=(job,), daemon=True, name=f"check-{job['address'][:8]}")
+        self._check_threads[job["job_id"]] = th
+        th.start()
+        return None
 
     def _run_check(self, job: dict) -> None:
         times = {"_t": time.time()}
@@ -1268,6 +1328,8 @@ class Services:
                 if job["stage"] not in job["stages_done"]:
                     job["stages_done"].append(job["stage"])
             job.update(stage=stage, done=done, total=total)
+            self._save_job(job, force=stage != job.get("_saved_stage"))
+            job["_saved_stage"] = stage
 
         try:
             if self.players is not None:  # готовая статистика — сразу, до долгой загрузки истории
@@ -1275,6 +1337,7 @@ class Services:
                     job["card"] = self.players.card(job["address"])
                 except Exception as exc:
                     log.info("карточка %s: %s", job["address"], exc)
+            self._save_job(job, force=True)
             progress("trades", 0, 0)
             with self._deep:  # тяжёлая часть — не больше DEEP_CHECKS одновременно
                 job["result"] = self.check_wallet(job["address"], progress=progress)
@@ -1288,6 +1351,9 @@ class Services:
         if job["result"]:
             job["result"]["timings"] = job["timings"]
             log.info("проверка %s: %s", job["address"], job["timings"])
+        self._save_job(job, force=True)
+        self._check_threads.pop(job["job_id"], None)
+        self.db.publish("check", job_id=job["job_id"], state=job["state"])
         r = job["result"] or {}
         if job["state"] == "done" and job["finished"] - job["started"] > 20 and r.get("ok"):
             self.db.notify(
@@ -1301,7 +1367,8 @@ class Services:
         out = {
             "ok": job["state"] != "error",
             "job_id": job["job_id"],
-            "state": job["state"],
+            "state": "running" if job["state"] == "queued" else job["state"],  # в очереди — для экрана «идёт»
+            "queued": job["state"] == "queued",
             "stage": job["stage"],
             "stage_text": CHECK_STAGES.get(job["stage"], ""),
             "done": job["done"],
@@ -1671,7 +1738,7 @@ class Services:
             else ai_block["brier_ai"] < ai_block["brier_market"]
         )
         ai_block["trusted"] = bool(ai_block["better_than_market"]) and len(common) >= self.p.calibration_min_n
-        jobs_state = self.db.get_state("scheduler", {}) or {}
+        jobs_state = scheduler_state(self.db) or {}
         jobs = [
             {
                 "name": k,
@@ -1814,7 +1881,7 @@ class Services:
         """Что подключено через .env — для экрана настроек (сами ключи не показываются)."""
         import os
 
-        last_backup = (self.db.get_state("scheduler", {}) or {}).get("backup", {})
+        last_backup = (scheduler_state(self.db) or {}).get("backup", {})
         return {
             "password": bool(os.environ.get("WF_UI_PASSWORD")),
             "telegram": bool(os.environ.get("WF_TELEGRAM_BOT_TOKEN") and os.environ.get("WF_TELEGRAM_CHAT_ID")),
@@ -1882,7 +1949,7 @@ class Services:
         from . import diagnostics as diag
 
         probe = diag.run(self.db) if live else (self.db.get_state("diagnostics") or None)
-        jobs_state = self.db.get_state("scheduler", {}) or {}
+        jobs_state = scheduler_state(self.db) or {}
         now = self.clock()
         jobs = [
             {
@@ -1919,16 +1986,29 @@ class Services:
             "chain": self.chain_status(),
             "streams": self.streams_status(),
             "warm": self.db.get_state("warm") or None,
+            "services": self.services_status(),
         }
         out["report"] = self._diag_report(out)
         return out
+
+    def services_status(self) -> list[dict]:
+        """Процессы (api / realtime / worker или «всё в одном»): жив ли каждый, когда последний раз работал."""
+        from .runtime import services_state
+
+        return [
+            {k: v for k, v in s.items() if k != "info"} | {"jobs": s["info"].get("jobs")}
+            for s in services_state(self.db)
+        ]
 
     def streams_status(self) -> dict | None:
         """Состояние потоков WebSocket и откуда агент берёт стаканы (поток или запрос)."""
         ag = self.agent
         streams = getattr(ag, "streams", None) if ag is not None else None
-        if streams is None:
-            return None
+        if streams is None:  # потоки — в процессе realtime: берём состояние из его пульса
+            from .runtime import service_info
+
+            info = service_info(self.db, "realtime", "all") or {}
+            return info.get("streams")
         st = streams.status()
         bs = getattr(ag, "book_stats", None) or {}
         ms = sorted(bs.get("http_ms") or [])
@@ -1962,6 +2042,11 @@ class Services:
                     f"{'OK ' if x['live'] or not x['started'] else 'ERR'} {name}: {state}"
                     + (f", ошибка: {x['error']}" if x.get("error") and not x["live"] else "")
                 )
+        for sv in d.get("services") or []:
+            lines.append(
+                f"{'OK ' if sv['alive'] else 'ERR'} процесс {sv['label']}: "
+                + (f"работает {sv['uptime_s'] // 60} мин" if sv["alive"] else f"нет пульса {int(sv['last_seen_s'])} с")
+            )
         for j in d["jobs"]:
             if j["ok"] is False:
                 lines.append(f"ERR задача {j['label']}: {j['error']}")
@@ -2102,7 +2187,7 @@ class Services:
         e = self.db.scalar("SELECT entity_id FROM entity_wallets WHERE wallet=?", (wallet,), wallet)
         wl = self.db.one("SELECT mode FROM watchlist WHERE entity_id=?", (e,))
         sc = self.db.one("SELECT status FROM wallet_scores WHERE entity_id=? ORDER BY computed_at DESC LIMIT 1", (e,))
-        job = next((j for j in self._checks.values() if j["address"] == wallet and j["state"] == "running"), None)
+        job = next((j for j in self.running_checks() if j["address"] == wallet), None)
         return {
             "entity_id": e,
             "in_list": bool(wl and wl["mode"] != "off"),
@@ -2257,7 +2342,7 @@ class Services:
 
     def purge_untracked(self) -> dict:
         """Удаляет данные по кошелькам, которых нет в списке китов. Идущие проверки не трогает."""
-        keep = [j["address"] for j in self._checks.values() if j["state"] == "running"]
+        keep = [j["address"] for j in self.running_checks()]
         removed = tracked.purge_untracked(self.db, keep)
         if self.db.kind == "sqlite" and self.db.path != ":memory:":
 

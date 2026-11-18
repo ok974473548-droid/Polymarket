@@ -24,7 +24,6 @@ from .decision.risk import RiskManager
 from .estimator.base import Estimate, MarketContext, NoEstimator
 from .estimator.calibration import load_calibrator, record_outcomes
 from .estimator.sources import build_sources, gather, gather_forecasts, manipulation_flags, materials_for_prompt
-from .events import bus
 from .execution.paper import LiveTradingDisabled, PaperBroker, Portfolio
 from .ingest import pipeline
 from .scoring.scorer import latest_category_scores, short
@@ -554,7 +553,7 @@ class Agent:
                 },
                 ["signal_id"],
             )
-        bus.publish("signal", signal_id=sig["signal_id"], status=status)
+        self.db.publish("signal", signal_id=sig["signal_id"], status=status)
         return {
             "signal_id": sig["signal_id"],
             "status": status,
@@ -602,13 +601,13 @@ class Agent:
         self.db.execute(
             "UPDATE decisions SET user_action=? WHERE signal_id=?", ("auto" if auto else "confirmed", signal_id)
         )
-        bus.publish("bet", signal_id=signal_id)
+        self.db.publish("bet", signal_id=signal_id)
         return {"signal_id": signal_id, "status": "executed", **res}
 
     def reject(self, signal_id: str) -> dict:
         self.db.execute("UPDATE signals SET status='rejected' WHERE signal_id=? AND status='pending'", (signal_id,))
         self.db.execute("UPDATE decisions SET user_action='skipped' WHERE signal_id=?", (signal_id,))
-        bus.publish("signal", signal_id=signal_id, status="rejected")
+        self.db.publish("signal", signal_id=signal_id, status="rejected")
         return {"signal_id": signal_id, "status": "rejected"}
 
     def resolve_exit(self, signal_id: str, action: str) -> dict:

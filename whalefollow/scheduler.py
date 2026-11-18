@@ -75,6 +75,8 @@ class Scheduler:
         discover_pages: int = 5,
         books_max_tokens: int = 150,
         prices_backfill_per_run: int = 300,
+        groups: tuple[str, ...] | None = None,
+        role: str | None = None,
     ):
         self.db, self.p = db, params
         self.gamma, self.data, self.clob, self.agent = gamma, data, clob, agent
@@ -85,6 +87,9 @@ class Scheduler:
         self.discover_pages = discover_pages
         self.books_max_tokens = books_max_tokens
         self.prices_backfill = prices_backfill_per_run
+        # процесс realtime ведёт группы fast и books, worker — slow и heavy; «всё в одном» — все четыре
+        self.groups = tuple(groups or self.GROUPS)
+        self.state_key = f"scheduler:{role}" if role else "scheduler"
         self._stop = threading.Event()
         self._slow_ready = threading.Event()  # первый проход сбора данных завершён — можно считать
         self._state_lock = threading.Lock()
@@ -500,7 +505,7 @@ class Scheduler:
         if ran:
             with self._state_lock:
                 self.db.set_state(
-                    "scheduler",
+                    self.state_key,
                     {
                         j.name: {
                             "last_run": int(j.last_run),
@@ -510,6 +515,7 @@ class Scheduler:
                             "interval_s": j.interval_s,
                         }
                         for j in self.jobs
+                        if j.group in self.groups
                     },
                 )
         return ran
@@ -533,13 +539,29 @@ class Scheduler:
             self._stop.wait(1.0)
 
     def start(self) -> None:
-        for g in self.GROUPS:
+        if "slow" not in self.groups:
+            self._slow_ready.set()
+        for g in self.groups:
             threading.Thread(target=self._loop, args=(g,), name=f"wf-{g}", daemon=True).start()
         log.info("планировщик запущен")
 
     def stop(self) -> None:
         self._stop.set()
         self._slow_ready.set()
+
+
+STATE_KEYS = ("scheduler", "scheduler:realtime", "scheduler:worker")
+
+
+def scheduler_state(db: DB) -> dict:
+    """Состояние задач всех процессов: по каждой задаче — запись с самым свежим запуском
+    (после перехода с «всё в одном» на три процесса старая запись не мешает)."""
+    out: dict = {}
+    for key in STATE_KEYS:
+        for name, rec in (db.get_state(key, {}) or {}).items():
+            if name not in out or (rec.get("last_run") or 0) >= (out[name].get("last_run") or 0):
+                out[name] = rec
+    return out
 
 
 def wait_forever() -> None:

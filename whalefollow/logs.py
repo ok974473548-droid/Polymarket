@@ -80,6 +80,7 @@ def setup_logging(level: int | str = logging.INFO, fmt: str | None = None, strea
 
 def _drop_color_message(_: Any, __: str, event: Any) -> Any:
     event.pop("color_message", None)  # uvicorn дублирует сообщение с цветовыми кодами
+    event.pop("message", None)  # то же сообщение, уже отформатированное другим обработчиком
     return event
 
 

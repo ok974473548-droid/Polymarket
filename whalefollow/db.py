@@ -45,7 +45,8 @@ class DB:
         self._local = threading.local()
         self._shared = None
         self._shared_depth = 0
-        self.listeners: list = []  # подписчики на уведомления (Telegram и т.п.)
+        self.listeners: list = []
+        self._published = 0  # подписчики на уведомления (Telegram и т.п.)
         if self.url.startswith("postgres"):
             import psycopg  # type: ignore  # устанавливается extras [postgres]
             from psycopg.rows import dict_row  # type: ignore
@@ -116,6 +117,18 @@ class DB:
         self.conn.execute(self._sql(sql), tuple(params))
         if self.kind == "sqlite" and self._tx_depth == 0:
             self.conn.commit()
+
+    def execute_count(self, sql: str, params: Sequence[Any] = ()) -> int:
+        """Выполняет запрос и возвращает число затронутых строк (атомарный «захват» задачи и т.п.)."""
+        with self._lock:
+            if self.kind == "pg":
+                with self.conn.cursor() as cur:
+                    cur.execute(self._sql(sql), tuple(params))
+                    return max(cur.rowcount, 0)
+            cur = self.conn.execute(sql, tuple(params))
+            if self._tx_depth == 0:
+                self.conn.commit()
+            return max(cur.rowcount, 0)
 
     def executemany(self, sql: str, rows: Iterable[Sequence[Any]]) -> int:
         with self._lock:
@@ -297,6 +310,23 @@ class DB:
         finally:
             self.upsert("job_runs", run, ["run_id"])
 
+    def publish(self, kind: str, **data: Any) -> None:
+        """Событие для живого интерфейса: сразу — страницам этого процесса (шина в памяти),
+        и в таблицу live_events — страницам, которые обслуживает другой процесс (api)."""
+        from .events import bus
+
+        bus.publish(kind, **data)
+        try:
+            self.execute(
+                "INSERT INTO live_events (ts, kind, data) VALUES (?, ?, ?)",
+                (time.time(), kind, json.dumps(data, ensure_ascii=False, default=str)),
+            )
+            self._published += 1
+            if self._published % 500 == 0:  # события нужны страницам лишь несколько секунд — храним час
+                self.execute("DELETE FROM live_events WHERE ts<?", (time.time() - 3600,))
+        except Exception:
+            pass
+
     def notify(self, kind: str, title: str, body: str = "", ref: str = "", ts: int | None = None) -> None:
         row = {
             "notif_id": new_id("n_"),
@@ -308,9 +338,7 @@ class DB:
             "is_read": 0,
         }
         self.upsert("notifications", row, ["notif_id"])
-        from .events import bus
-
-        bus.publish("notification", about=kind)
+        self.publish("notification", about=kind)
         for fn in self.listeners:
             try:
                 fn(row)
