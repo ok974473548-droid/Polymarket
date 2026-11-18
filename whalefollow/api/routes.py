@@ -34,6 +34,10 @@ GET  /api/journal?limit=100           журнал всех решений
 GET  /api/trial                       прогресс пробного режима и работа сбора данных
 GET  /api/rotation?window_weeks&min_bets&min_result_usd&max_drawdown_share  ротация китов по форме
 PUT  /api/rotation/rule               сохранить правило «в форме»
+GET  /api/push/key                    открытый ключ VAPID для подписки и число подписанных устройств
+POST /api/push/subscribe              {subscription, label} — подписать это устройство на push
+POST /api/push/unsubscribe            {endpoint} — отписать
+POST /api/push/test                   пробное push-уведомление на все устройства
 
 Обработчики синхронные: FastAPI выполняет их в пуле потоков, долгий запрос не держит остальные.
 Ответ собирается сразу в JSON (без промежуточного обхода jsonable_encoder) — см. `json_response`.
@@ -303,6 +307,24 @@ def build_router(svc: Services) -> APIRouter:
     @r.get("/diagnostics", responses=_doc(S.DiagnosticsOut), tags=["Диагностика"])
     def diagnostics(request: Request, live: str | None = None) -> Response:
         return J(request, svc.diagnostics(live=live == "1"))
+
+    # ---------------------------------------------------------------- push-уведомления
+    @r.get("/push/key", tags=["Уведомления"])
+    def push_key(request: Request) -> Response:
+        return J(request, svc.push_key())
+
+    @r.post("/push/subscribe", tags=["Уведомления"])
+    def push_subscribe(request: Request, body: S.PushSubscribeIn | None = None) -> Response:
+        b = body or S.PushSubscribeIn()
+        return J(request, svc.push_subscribe(b.subscription or {}, b.label))
+
+    @r.post("/push/unsubscribe", tags=["Уведомления"])
+    def push_unsubscribe(request: Request, body: S.PushUnsubscribeIn | None = None) -> Response:
+        return J(request, svc.push_unsubscribe(body.endpoint if body else ""))
+
+    @r.post("/push/test", tags=["Уведомления"])
+    def push_test(request: Request) -> Response:
+        return J(request, svc.push_test())
 
     @r.get("/journal", responses=_doc(S.ItemsOut), tags=["Итоги"])
     def journal(request: Request, limit: str | None = None) -> Response:

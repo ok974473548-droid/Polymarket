@@ -29,7 +29,7 @@ from ..execution.paper import LiveTradingDisabled
 from ..logs import get_logger
 from . import schemas as S
 from .routes import HttpError, build_router, json_response
-from .static import static_entry
+from .static import cache_control, static_entry
 
 log = get_logger(__name__)
 
@@ -219,7 +219,7 @@ def create_app(
             # файл не менялся — браузер берёт свою копию, по сети уходит только заголовок
             return Response(status_code=304, headers={"ETag": e["etag"]})
         zipped = e["gz"] is not None and "gzip" in request.headers.get("accept-encoding", "").lower()
-        headers = {"Cache-Control": "no-cache", "ETag": e["etag"], "Vary": "Accept-Encoding"}
+        headers = {"Cache-Control": cache_control(path), "ETag": e["etag"], "Vary": "Accept-Encoding"}
         if zipped:
             headers["Content-Encoding"] = "gzip"
         return Response(e["gz"] if zipped else e["data"], media_type=e["ctype"], headers=headers)

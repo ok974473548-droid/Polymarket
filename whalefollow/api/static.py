@@ -1,4 +1,7 @@
-"""Файлы интерфейса (папка web/): чтение из памяти, сжатая копия и метка версии (ETag)."""
+"""Файлы интерфейса (папка web/ — сборка frontend/): чтение из памяти, сжатая копия и метка версии (ETag).
+
+Файлы из web/assets/ названы по хэшу содержимого (сборка Vite) — их можно кэшировать навсегда.
+"""
 
 from __future__ import annotations
 
@@ -19,6 +22,9 @@ CTYPES = {
     ".ico": "image/x-icon",
     ".json": "application/json; charset=utf-8",
     ".webmanifest": "application/manifest+json",
+    ".woff2": "font/woff2",
+    ".woff": "font/woff",
+    ".map": "application/json; charset=utf-8",
 }
 GZIP_MIN = 1024
 COMPRESSIBLE = ("text/", "application/json", "application/manifest+json", "image/svg+xml")
@@ -36,6 +42,13 @@ def _target(path: str) -> Path | None:
             return None
         target = WEB_DIR / "index.html"  # путь без расширения — роутинг на клиенте
     return target
+
+
+def cache_control(path: str) -> str:
+    """Хэшированные файлы сборки не меняются — браузер не перепроверяет их; остальное — по ETag."""
+    if path.lstrip("/").startswith("assets/"):
+        return "public, max-age=31536000, immutable"
+    return "no-cache"
 
 
 def static_entry(path: str) -> dict[str, Any] | None:

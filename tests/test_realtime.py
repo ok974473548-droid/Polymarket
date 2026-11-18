@@ -493,13 +493,16 @@ def test_ui_server_keepalive_gzip_etag(db):
     port = httpd.server_address[1]
     try:
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-        conn.request("GET", "/app.js", headers={"Accept-Encoding": "gzip"})
+        conn.request("GET", "/")
+        index = conn.getresponse().read().decode()
+        js = re.search(r'src="(/assets/index-[^"]+\.js)"', index).group(1)  # главный скрипт сборки
+        conn.request("GET", js, headers={"Accept-Encoding": "gzip"})
         r = conn.getresponse()
         body = r.read()
         etag = r.getheader("ETag")
         assert r.status == 200 and r.getheader("Content-Encoding") == "gzip" and etag
-        assert b"viewDiagnostics" in gzip.decompress(body)
-        conn.request("GET", "/app.js", headers={"If-None-Match": etag})  # то же соединение
+        assert b"#\\/diagnostics" in gzip.decompress(body)
+        conn.request("GET", js, headers={"If-None-Match": etag})  # то же соединение
         r2 = conn.getresponse()
         assert r2.status == 304 and r2.read() == b""
         # отклонённый POST с телом не портит следующий запрос на том же соединении

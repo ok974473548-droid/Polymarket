@@ -236,6 +236,7 @@ def run_role(
     """Запуск процесса по роли: api | realtime | worker | all (см. whalefollow/runtime.py)."""
     from .agent import Agent
     from .notifier import TelegramNotifier
+    from .push import PushNotifier
     from .runtime import CheckRunner, Heartbeat, QuotePublisher
     from .scheduler import wait_forever
     from .services import Services
@@ -265,6 +266,7 @@ def run_role(
         else:
             print("Потоки реального времени: выключены (WF_STREAMS=off) — только опрос")
     tg = TelegramNotifier.from_env(db)  # отправка — из любого процесса, где появилось уведомление
+    svc.push_sender = PushNotifier.attach_to(db)  # push на подписанные устройства — так же
     if role in ("realtime", "all"):
         print("Telegram:", "включён" if tg else "выключен (нет WF_TELEGRAM_BOT_TOKEN / WF_TELEGRAM_CHAT_ID)")
         if tg is not None:

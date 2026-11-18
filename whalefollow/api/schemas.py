@@ -65,6 +65,15 @@ class TuneIn(_In):
     edge_threshold: float = 0
 
 
+class PushSubscribeIn(_In):
+    subscription: dict[str, Any] | None = Field(None, description="PushSubscription.toJSON() браузера: endpoint и keys")
+    label: str = Field("", description="Браузер/устройство — для списка")
+
+
+class PushUnsubscribeIn(_In):
+    endpoint: str = ""
+
+
 class RotationRuleIn(_In):
     window_weeks: int | None = Field(None, description="Окно для оценки формы, недель (2–52)")
     min_bets: int | None = Field(None, description="Минимум ставок (разных рынков) в окне")

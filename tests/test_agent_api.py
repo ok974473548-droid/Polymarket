@@ -1,6 +1,7 @@
 """Сквозной сценарий агента и HTTP API на синтетическом рынке."""
 
 import json
+import re
 import threading
 import urllib.request
 
@@ -215,14 +216,25 @@ def test_web_ui_served(env):
     port = httpd.server_address[1]
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=10) as r:
+            index = r.read().decode()
+        # сборка Vite: главный скрипт и стили — в /assets/ с хэшем в имени
+        js = re.search(r'src="(/assets/index-[^"]+\.js)"', index).group(1)
+        css = re.search(r'href="(/assets/index-[^"]+\.css)"', index).group(1)
         for path, needle in (
             ("/", b"WhaleFollow"),
-            ("/app.js", b"viewDashboard"),
-            ("/app.css", b"--accent"),
+            (js, b"#\\/diagnostics"),
+            (css, b"--accent"),
+            ("/manifest.webmanifest", b'"display": "standalone"'),
+            ("/sw.js", b"showNotification"),
             ("/whales/anything", b"<!doctype html>"),
         ):
             with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=10) as r:
-                assert r.status == 200 and needle in r.read()
+                assert r.status == 200 and needle in r.read(), path
+                if path.startswith("/assets/"):
+                    assert "immutable" in r.headers["Cache-Control"]  # хэшированные файлы — навсегда в кэше
+                else:
+                    assert r.headers["Cache-Control"] == "no-cache"
         for bad in ("/../pyproject.toml", "/%2e%2e/schema.sql", "/nope.js"):
             try:
                 urllib.request.urlopen(f"http://127.0.0.1:{port}{bad}", timeout=10)

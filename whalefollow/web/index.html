@@ -1,35 +1,28 @@
 <!doctype html>
 <html lang="ru">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WhaleFollow</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%230E1F26%22/%3E%3Ctext x=%2216%22 y=%2222%22 font-size=%2216%22 text-anchor=%22middle%22 fill=%22white%22 font-family=%22Arial%22 font-weight=%22700%22%3EW%3C/text%3E%3C/svg%3E">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Golos+Text:wght@400;500;600;700&display=swap" rel="stylesheet">
-<meta name="theme-color" content="#0A171C">
-<link rel="stylesheet" href="/app.css">
-</head>
-<body>
-<div class="app" id="app">
-  <nav class="side" id="side" aria-label="Разделы">
-    <p class="logo"><span class="seal" aria-hidden="true">W</span>WhaleFollow</p>
-    <a href="#/" data-nav="signals">Сигналы</a>
-    <a href="#/positions" data-nav="positions">Мои ставки<span class="badge" id="badge-decide" hidden></span></a>
-    <a href="#/whales" data-nav="whales">Киты</a>
-    <a href="#/results" data-nav="results">Итоги</a>
-    <a href="#/settings" data-nav="settings">Настройки</a>
-    <a class="sys" id="sys" href="#/diagnostics" aria-live="polite" title="Открыть диагностику">
-      <div class="sys-row"><span class="dot" id="sys-dot" aria-hidden="true"></span><span id="sys-title">Подключаемся…</span></div>
-      <div class="sys-sub" id="sys-sub"></div>
-    </a>
-  </nav>
-  <main class="main" id="main" tabindex="-1"></main>
-</div>
-<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
-<dialog id="dialog"></dialog>
-<script src="/panels.js"></script>
-<script src="/app.js"></script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>WhaleFollow</title>
+    <meta name="description" content="WhaleFollow: сигналы по ставкам сильных игроков Polymarket. Ставки виртуальные." />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icon-maskable-512.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#0A171C" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="WhaleFollow" />
+    <script type="module" crossorigin src="/assets/index-BFhiLXqD.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/api-BdZxfZIH.js">
+    <link rel="modulepreload" crossorigin href="/assets/format-DfLiOG5N.js">
+    <link rel="modulepreload" crossorigin href="/assets/Seal-BCiKOLDC.js">
+    <link rel="modulepreload" crossorigin href="/assets/preload-helper-BLdHbfdN.js">
+    <link rel="modulepreload" crossorigin href="/assets/rolldown-runtime-DK3Fl9T5.js">
+    <link rel="modulepreload" crossorigin href="/assets/uplot-BsS-1fQ6.js">
+    <link rel="stylesheet" crossorigin href="/assets/uplot-CnsZ1jie.css">
+    <link rel="stylesheet" crossorigin href="/assets/index-rhnl_cgj.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
 </html>

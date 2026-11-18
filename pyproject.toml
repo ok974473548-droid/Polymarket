@@ -1,6 +1,6 @@
 [project]
 name = "whalefollow"
-version = "0.16.0"
+version = "0.17.0.dev0"
 description = "WhaleFollow: отбор сильных игроков Polymarket и агент копирования ставок (v1: данные, скоринг, бэктест, бумажная торговля)"
 requires-python = ">=3.11"
 # Существующие зависимости — диапазонами (как в 0.13), новые пакеты — точными версиями; pandas заменён polars (0.16)
@@ -20,6 +20,7 @@ dependencies = [
   "polars==2.1.0",
   "duckdb==2.0.0",
   "pyarrow==26.0.1",
+  "cryptography==50.0.1",  # push-уведомления: шифрование сообщений и подпись VAPID
 ]
 
 [project.optional-dependencies]
@@ -39,7 +40,7 @@ build-backend = "setuptools.build_meta"
 include = ["whalefollow*"]
 
 [tool.setuptools.package-data]
-whalefollow = ["schema.sql", "web/*", "migrations/*.py", "migrations/*.mako", "migrations/versions/*.py"]
+whalefollow = ["schema.sql", "web/*", "web/assets/*", "migrations/*.py", "migrations/*.mako", "migrations/versions/*.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

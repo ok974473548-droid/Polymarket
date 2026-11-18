@@ -1860,6 +1860,46 @@ class Services:
         self.db.notify("settings", f"Порог выгоды изменён на {t * 100:.0f}%", "Подстройка по итогам пробного режима")
         return {"ok": True, "tuning": self.tuning()}
 
+    # ------------------------------------------------------------ push-уведомления (Web Push)
+    push_sender = None  # PushNotifier процесса (подключает cli); без него — создаётся при первой отправке
+
+    def _push(self):
+        from .push import PushNotifier
+
+        if self.push_sender is None:
+            self.push_sender = PushNotifier(self.db)
+        return self.push_sender
+
+    def push_key(self) -> dict:
+        from . import push
+
+        try:
+            return {"ok": True, "key": self._push().vapid.public, "devices": push.devices(self.db)}
+        except Exception as e:
+            return {"ok": False, "error": f"Push недоступен: {e}"}
+
+    def push_subscribe(self, sub: dict, label: str = "") -> dict:
+        from . import push
+
+        return push.subscribe(self.db, sub, label)
+
+    def push_unsubscribe(self, endpoint: str) -> dict:
+        from . import push
+
+        return push.unsubscribe(self.db, endpoint)
+
+    def push_test(self) -> dict:
+        from . import push
+
+        if not push.devices(self.db):
+            return {"ok": False, "error": "Нет подписанных устройств — включите push на этом устройстве"}
+        r = self._push().send_all(
+            {"title": "WhaleFollow: проверка", "body": "Push работает — сюда придут новые сигналы и выход кита.", "url": "/#/", "tag": "test"}
+        )
+        if r["sent"]:
+            return {"ok": True, **r}
+        return {"ok": False, "error": "Не доставлено: " + ("; ".join(r["errors"][:2]) or "подписка устарела"), **r}
+
     # ------------------------------------------------------------ «Настройки», «Первый запуск», уведомления
     def get_settings(self) -> dict:
         s = self.risk.settings()
