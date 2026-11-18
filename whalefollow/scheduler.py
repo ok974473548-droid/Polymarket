@@ -36,7 +36,7 @@ from .db import DB, now_ts
 from .execution.paper import Portfolio
 from .ingest import pipeline
 from .positions import assign_entities, build_positions
-from .scoring.scorer import run_scoring
+from .scoring.incremental import run_incremental
 from .scoring.sybil import run_antisybil
 from .tracked import auto_discover, migrate_watchlist, tracked_entities, tracked_wallets
 
@@ -108,6 +108,7 @@ class Scheduler:
             Job("kalshi", 1800, self.job_kalshi, "slow"),
             Job("odds", 3600 * float(os.environ.get("WF_ODDS_INTERVAL_H") or 12), self.job_odds, "slow"),
             Job("score", DAY, self.job_score, "heavy"),
+            Job("score_changes", 3600, self.job_score_changes, "heavy"),
             Job("housekeeping", DAY, self.job_housekeeping, "heavy"),
             Job("weekly", 7 * DAY, self.job_weekly, "heavy"),
             Job("backup", DAY, self.job_backup, "heavy"),
@@ -388,29 +389,48 @@ class Scheduler:
 
         return sync_odds(self.db, self.odds)
 
-    def job_score(self):
+    def _prepare_scoring(self) -> tuple[bool, list[str] | None]:
+        """Позиции → антисибил → игроки (быстрые шаги). (есть ли кого считать, игроки или None — все)."""
         scope = self._scope()
         if scope is not None and not scope:
-            return None  # никого не отслеживаем — считать нечего
+            return False, None  # никого не отслеживаем — считать нечего
         build_positions(self.db, scope)
         sy = run_antisybil(self.db, self.p, wallets=scope)
         assign_entities(self.db)
         migrate_watchlist(self.db)  # объединённые кошельки — один кит в списке
-        ents = None
-        if scope is not None:
-            ph = ",".join("?" for _ in scope)
-            ents = sorted(
-                {
-                    r["entity_id"]
-                    for r in self.db.query(f"SELECT DISTINCT entity_id FROM positions WHERE wallet IN ({ph})", scope)
-                }
-            )
-            if not ents:
-                return None
-        df = run_scoring(self.db, self.p, now=self.clock(), entities=ents, add_new=scope is None)
-        status = dict(df["status"].value_counts().iter_rows()) if df.height else {}
-        log.info("скоринг: %s, антисибил: %s", status, sy)
-        return status
+        log.info("антисибил: %s", sy)
+        if scope is None:
+            return True, None
+        ph = ",".join("?" for _ in scope)
+        ents = sorted(
+            {
+                r["entity_id"]
+                for r in self.db.query(f"SELECT DISTINCT entity_id FROM positions WHERE wallet IN ({ph})", scope)
+            }
+        )
+        return bool(ents), ents
+
+    def job_score(self):
+        """Полный пересчёт раз в сутки: все показатели, зависящие от даты (окно 90 дней, активность), свежие."""
+        ok, ents = self._prepare_scoring()
+        if not ok:
+            return None
+        res = run_incremental(self.db, self.p, now=self.clock(), entities=ents, full=True, add_new=ents is None)
+        log.info("скоринг (полный): %s", res)
+        return res["status"]
+
+    def job_score_changes(self):
+        """Частый быстрый пересчёт: только киты, у которых появились сделки, исходы рынков или изменился состав
+        кошельков. Остальные не трогаются (их оценки обновит суточный полный пересчёт)."""
+        if not self.db.scalar("SELECT COUNT(*) AS n FROM score_inputs", default=0):
+            return None  # первый полный пересчёт ещё не прошёл
+        ok, ents = self._prepare_scoring()
+        if not ok:
+            return None
+        res = run_incremental(self.db, self.p, now=self.clock(), entities=ents, full=False, add_new=False)
+        if res["scored"]:
+            log.info("скоринг (изменившиеся): %s", res)
+        return {"scored": res["scored"], "skipped": res["skipped"]}
 
     def job_housekeeping(self):
         now = self.clock()

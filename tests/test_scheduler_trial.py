@@ -58,6 +58,7 @@ def test_bootstrap_from_empty_db(live):
         "kalshi",
         "odds",
         "score",
+        "score_changes",
         "housekeeping",
         "weekly",
         "backup",

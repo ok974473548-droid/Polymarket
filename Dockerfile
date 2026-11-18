@@ -5,6 +5,8 @@ COPY pyproject.toml README.md alembic.ini ./
 COPY whalefollow ./whalefollow
 COPY tests ./tests
 RUN pip install --no-cache-dir -e ".[dev]"
+# расширение DuckDB для чтения истории прямо из файла SQLite — ставится при сборке, а не при первом запуске
+RUN python -c "import duckdb; duckdb.connect().execute('INSTALL sqlite')"
 VOLUME ["/data"]
 EXPOSE 8787
 # Живо ли приложение: /api/auth отвечает и без пароля
