@@ -27,7 +27,7 @@
 
   const CATS: [string, string][] = [...TOPICS, ["other", "Разное (тема не указана)"]];
   const WHERE: [string, string][] = [["telegram", "Telegram"], ["push", "Push"], ["discord", "Discord"], ["email", "Email"]];
-  const WHAT: [string, string][] = [["signals", "Новые сигналы"], ["whale_exit", "Кит вышел из позиции"], ["limits", "Лимиты и паузы"], ["weekly", "Итоги недели"], ["system", "Сбои сбора данных"]];
+  const WHAT: [string, string][] = [["signals", "Новые сигналы"], ["whale_exit", "Кит вышел из позиции"], ["limits", "Лимиты и паузы"], ["weekly", "Итоги недели"], ["system", "Сбои сбора данных"], ["events", "Выгода в событиях («Следить»)"]];
   const MONEY: [string, string, string][] = [
     ["bankroll_usd", "Сумма для торговли", "$"],
     ["max_bet_usd", "Максимум на одну ставку", "$"],

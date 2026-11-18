@@ -58,6 +58,9 @@ class DemoData(FakeData):
         return rows[offset : offset + limit]
 
 
+DEMO_FC = {"Анна Смирнова": 0.33, "Борис Ким": 0.17, "Вера Ли": 0.47, "Глеб Орлов": 0.03}
+
+
 def _demo_source():
     from whalefollow.estimator.sources import Forecast, NewsItem
     from whalefollow.plugins import Evidence, SourcePlugin
@@ -81,7 +84,13 @@ def _demo_source():
             ]
 
         def forecasts(self, ctx, question, market=None):
-            return [Forecast("Демо-площадка", question, "https://example.org/f", 0.33)]
+            # две площадки согласны: у «Веры Ли» шанс 47% при цене 18% — советник предложит ставку;
+            # у остальных чуть ниже цены (сумма по площадкам = 100%)
+            p = next((v for k, v in DEMO_FC.items() if k in question), 0.33)
+            return [
+                Forecast("Демо-площадка", question, "https://example.org/f", p),
+                Forecast("Демо-биржа", question, "https://example.org/g", p),
+            ]
 
         def dossier(self, ctx, ev):
             out = self.news_and_forecasts(ctx, ev)

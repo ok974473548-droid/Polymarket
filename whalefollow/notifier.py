@@ -37,6 +37,7 @@ KIND_TO_SETTING = {
     "pause": "limits",
     "stopped": "limits",
     "weekly": "weekly",
+    "event_edge": "events",
 }
 
 HELP = (

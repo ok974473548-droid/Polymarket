@@ -55,6 +55,7 @@ def test_bootstrap_from_empty_db(live):
         "transfers",
         "activity",
         "recategorize",
+        "event_watch",  # «Следить» в «Событиях»: список пуст — сразу выходит
         "kalshi",
         "odds",
         "score",

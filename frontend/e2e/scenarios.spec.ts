@@ -202,3 +202,39 @@ test("модель события: оценка по исходам, лестн�
   await expect(panel.locator("[data-mode=manual]")).toHaveAttribute("aria-pressed", "true");
   await expect(panel.locator("[data-mode=ai]")).toBeDisabled(); // в демо нет ключа ИИ
 });
+
+test("советник: найти событие → совет → поставить по совету → продать", async ({ page }) => {
+  await page.goto("/");
+  await page.locator('[data-nav="events"]').click();
+  await page.locator('[data-topic="politics"]').click();
+  await page.locator('[data-event="9001"]').click();
+  const card = page.locator("[data-advice]");
+  // досье собирается само, модель и совет обновляются: две площадки дают «Вере Ли» 45% при цене 18%
+  await expect(card).toContainText("Купить «Да» в «Вера Ли»", { timeout: 20000 });
+  await expect(card).toContainText("Если сбудется");
+  await expect(card).toContainText("Если нет");
+  // «Следить»: уведомление, когда появится выгода
+  await card.locator("[data-act=watch]").click();
+  await toast(page, /Слежу/);
+  await expect(card.locator("[data-act=watch]")).toHaveAttribute("aria-pressed", "true");
+  // поставить по совету: сумма и предельная цена подставлены
+  await card.locator("[data-act=advice-buy]").click();
+  const dlg = page.locator("dialog[open]");
+  await expect(dlg).toContainText("По совету модели");
+  await expect(dlg).toContainText("Вера Ли");
+  await dlg.locator("[data-act=buy-confirm]").click();
+  await toast(page, /Куплено .* акций/);
+  // в «Моих ставках» — отдельно от ставок за китами
+  await page.goto("/#/positions/open");
+  const row = page.locator("a.ledger-row.bets-grid", { hasText: "по совету модели" });
+  await expect(row).toHaveCount(1);
+  await row.click();
+  await page.locator("[data-act=sell-bet]").click();
+  await page.locator("dialog[open]").getByRole("button", { name: "Продать" }).click();
+  await toast(page, /Продано за \$/);
+  await page.goto("/#/results");
+  await expect(page.locator("[data-results-events]")).toContainText("По совету модели");
+  // в списке событий — «Слежу»
+  await page.goto("/#/events");
+  await expect(page.locator("[data-watched]")).toContainText("Кто победит на выборах мэра?");
+});

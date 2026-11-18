@@ -86,7 +86,19 @@
         <b class={tone(w.pnl_usd)}>{money(w.pnl_usd, { sign: true })}</b>
       </div>
     {:else}
-      <div class="sub">Ставок за период нет</div>
+      <div class="sub">Ставок за китами за период нет</div>
     {/each}
   </div>
+  {#if r.events?.length}
+    <div class="card col" style="gap:10px" data-results-events>
+      <h2 style="margin:0">Ставки по событиям</h2>
+      {#each r.events as g (g.kind)}
+        <div class="top">
+          <span><b>{g.title}</b> · {g.bets} {plural(g.bets, "ставка", "ставки", "ставок")} на {money(g.stake_usd)} · выиграно {g.won}, проиграно {g.lost}, ждут {g.waiting}</span>
+          <b class={tone(g.pnl_usd)}>{money(g.pnl_usd, { sign: true })}</b>
+        </div>
+      {/each}
+      <div class="sub">Учитываются отдельно от ставок за китами; итог периода выше — общий по банку.</div>
+    </div>
+  {/if}
 {/if}

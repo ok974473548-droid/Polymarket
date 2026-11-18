@@ -64,6 +64,23 @@
   }, 30000);
   onDestroy(() => clearInterval(live));
 
+  // события, за которыми следим («Следить» на странице события)
+  let watched = $state<Json[]>([]);
+  async function loadWatched() {
+    try {
+      const r = await api("/watched");
+      if (r.ok) watched = r.items;
+    } catch {
+      /* список — подсказка, без него страница работает */
+    }
+  }
+  void loadWatched();
+  const ago = (ts: number | null) => {
+    if (!ts) return "ещё не проверяли";
+    const m = Math.round((Date.now() / 1000 - ts) / 60);
+    return m < 1 ? "проверено только что" : `проверено ${m} мин назад`;
+  };
+
   const SORTS: [string, string][] = [
     ["volume24", "Объём за сутки"],
     ["volume", "Объём за всё время"],
@@ -79,6 +96,17 @@
     <div class="lede">Все события Polymarket по темам. Откройте событие — увидите вероятности исходов во времени, стакан и правила; ставки — виртуальные.</div>
   </div>
 </div>
+{#if watched.length}
+  <section class="card col ev-watched" style="gap:6px" aria-label="Слежу" data-watched>
+    <div class="label">Слежу — уведомление, когда у модели появится выгода</div>
+    {#each watched as w (w.event_id)}
+      <a class="top" href="#/events/{encodeURIComponent(w.event_id)}" style="text-decoration:none;color:inherit">
+        <span class="ell">★ {w.title || w.event_id}</span>
+        <span class="sub">{w.last_error ? "ошибка проверки" : ago(w.checked_ts)}{w.notified_ts ? " · была выгода" : ""}</span>
+      </a>
+    {/each}
+  </section>
+{/if}
 <div class="ev-filters">
   <div class="ev-topics" role="group" aria-label="Темы">
     <button class="chip-btn" aria-pressed={topic === ""} onclick={() => (topic = "")}>Все</button>

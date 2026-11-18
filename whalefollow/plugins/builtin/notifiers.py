@@ -49,7 +49,7 @@ class Push(NotifierPlugin):
     title = "Push на телефон и компьютер"
     description = "Уведомления браузера даже при закрытой вкладке; устройства подписываются в настройках"
     setting = ("notify", "push")
-    kinds = ("signal", "whale_exit", "whale_check", "pause", "stopped", "system", "weekly")
+    kinds = ("signal", "whale_exit", "whale_check", "pause", "stopped", "system", "weekly", "event_edge")
 
     def __init__(self) -> None:
         self._sender: Any = None
@@ -98,7 +98,7 @@ class Email(NotifierPlugin):
     setting = ("notify", "email")
     default_enabled = False
     requires_env = ("WF_SMTP_HOST", "WF_EMAIL_TO")
-    kinds = ("signal", "whale_exit", "pause", "stopped", "system", "weekly")
+    kinds = ("signal", "whale_exit", "pause", "stopped", "system", "weekly", "event_edge")
 
     def send(self, ctx: PluginContext, notice: Notice) -> None:
         host = ctx.env("WF_SMTP_HOST")

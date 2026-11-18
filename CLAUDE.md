@@ -41,7 +41,7 @@
 | `web/` | Готовая сборка интерфейса (не править руками — собирается из `frontend/`), PWA: `sw.js`, `manifest.webmanifest`, иконки |
 | `frontend/` | Интерфейс: Svelte 5 + TypeScript + Vite. `src/views/` — экраны, `src/components/` — блоки (графики: `PriceChart` — lightweight-charts, `Plot` — uPlot), `src/lib/` — API, состояние, роутер, живые события, горячие клавиши, push; `public/` — sw.js, манифест, иконки; `e2e/` — сценарии Playwright |
 | `plugins/` | Плагины: `base` (виды: SourcePlugin, EstimatorPlugin, NotifierPlugin, StrategyPlugin; Candidate, Verdict, Notice), `registry` (встроенные → entry points `whalefollow.plugins` → файлы из `WF_PLUGINS_DIR`/`/data/plugins`; включение; состояние в `risk_state` «plugin:имя»), `notify` (диспетчер уведомлений), `strategy` (фильтр в `agent.evaluate` и бэктест на `whale_sim`), `builtin/` (источники, `event_sources`, оценщики `estimators`, 4 канала, 3 стратегии) |
-| `eventhub/` | Модуль «События»: `model` (оценка: цена → оценщики-плагины `EstimatorPlugin` → итог со сжатием λ; анализы в `event_analyses`), `ai` (Claude вслепую, фон, дневной лимит), `calibration` (кривые «цена → частота», `scripts/fit_event_calibration.py`); `catalog` (Gamma `/events`, поиск, разбор исходов, история цен по периодам, живые цены, сохранение открытого события); `dossier` (досье: факты из плагинов-источников, `SourcePlugin.dossier/applies`, таблицы `evidence`, `event_dossiers`); API `/api/catalog*`; ставки с `orders.signal_id = "ev:<id>"`, лимиты `events_*` |
+| `eventhub/` | Модуль «События»: `advisor` (совет: что/по какой цене/сколько; `evaluate` — досье → ИИ → модель → стаканы), `watch` («Следить», уведомление `event_edge`); `model` (оценка: цена → оценщики-плагины `EstimatorPlugin` → итог со сжатием λ; анализы в `event_analyses`), `ai` (Claude вслепую, фон, дневной лимит), `calibration` (кривые «цена → частота», `scripts/fit_event_calibration.py`); `catalog` (Gamma `/events`, поиск, разбор исходов, история цен по периодам, живые цены, сохранение открытого события); `dossier` (досье: факты из плагинов-источников, `SourcePlugin.dossier/applies`, таблицы `evidence`, `event_dossiers`); API `/api/catalog*`; ставки с `orders.signal_id = "ev:<id>"`, лимиты `events_*` |
 | `push.py` | Push-уведомления (Web Push: шифрование RFC 8291, подпись VAPID), подписки устройств, отправка в фоне |
 | `fees.py`, `categories.py` | Комиссии Polymarket по темам; единый список тем |
 | `diagnostics.py` | Экран «Диагностика»: проверки всех API и потоков |
@@ -221,7 +221,10 @@ Polymarket, в нашем дизайне: график вероятностей 
 режимы с ИИ и без ИИ. Тесты на синтетике; trading-math-audit. Лестница оценок на странице события, линия оценки
 модели на графике. Готово: поправка цены и консенсус проверены на истории закрытых рынков (Brier против цены).
 
-### [ ] Этап D. Советник (1.4)
+### [x] Этап D. Советник (1.4)
+> Выполнен в v1.4.0: `eventhub/advisor.py` (выгода с комиссией, порог по неопределённости и сроку, ¼ Келли, стакан,
+> предельная цена; `evaluate` — общий анализ для страницы и фона), `eventhub/watch.py` + задача `event_watch` (worker),
+> таблица `event_watch` (миграция 0008); ставки по совету — `signal_id = "ev:<id>:adv"`.
 Совет «что/по какой цене/сколько», сценарии, виртуальная ставка, «Следить» (push/Telegram, когда появилась выгода),
 отдельный лимит модуля; ставки модели отдельно от ставок за китами в «Моих ставках» и «Итогах».
 Готово: сценарий «найти событие → получить совет → поставить → продать» зелёный.

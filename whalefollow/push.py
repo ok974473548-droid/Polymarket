@@ -38,7 +38,7 @@ from .notifier import KIND_TO_SETTING
 log = logging.getLogger(__name__)
 
 # какие уведомления уходят в push: сигналы и выход кита — главное; остальное — по настройкам «О чём»
-PUSH_KINDS = {"signal", "whale_exit", "whale_check", "pause", "stopped", "system", "weekly"}
+PUSH_KINDS = {"signal", "whale_exit", "whale_check", "pause", "stopped", "system", "weekly", "event_edge"}
 RECORD_SIZE = 4096
 TTL_S = 6 * 3600  # сигнал старше нескольких часов уже не нужен
 # контакт в подписи VAPID нужен службам push для связи с отправителем; адрес пользователя не используем
@@ -128,6 +128,8 @@ def link(kind: str, ref: str) -> str:
         return "/#/positions/open"
     if kind in ("whale_check", "whale_status") and ref:
         return f"/#/whales/{ref}"
+    if kind == "event_edge" and ref:
+        return f"/#/events/{ref}"
     return "/#/"
 
 

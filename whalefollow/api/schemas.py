@@ -72,12 +72,17 @@ class PushSubscribeIn(_In):
     label: str = Field(default="", description="Браузер/устройство — для списка")
 
 
+class EventWatchIn(_In):
+    on: bool = Field(default=True, description="Следить (true) или перестать (false)")
+
+
 class EventBuyIn(_In):
     token_id: str = Field(default="", description="Исход (токен), который покупаем")
     usd: float = Field(default=0, description="Сумма, $ (урезается лимитами модуля «События»)")
     max_price: float | None = Field(
         default=None, description="Не дороже этой цены (0–1); по умолчанию лучшая цена + 2¢"
     )
+    advice: bool = Field(default=False, description="Покупка по совету модели (учитывается отдельно)")
 
 
 class PluginPatchIn(_In):

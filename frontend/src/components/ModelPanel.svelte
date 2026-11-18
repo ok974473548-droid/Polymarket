@@ -5,7 +5,15 @@
   import { pctOf } from "../lib/events";
   import { ago } from "../lib/format";
 
-  let { a, err = "", mode, onMode }: { a: Json; err?: string; mode: string; onMode: (m: string) => void } = $props();
+  let {
+    a,
+    err = "",
+    mode,
+    onMode,
+  }: { a: Json; err?: string; mode: string; onMode: (m: string) => void } = $props();
+  const sides = (key: string) => ((a?.advice?.items || []) as Json[]).filter((x) => x.key === key);
+  const cents1 = (x: number) => (Math.round(x * 1000) / 10).toString().replace(".", ",") + "¢";
+  const VERDICT: Record<string, string> = { buy: "выгодно", no: "не выгодно", small: "мала выгода", limit: "лимит", no_book: "нет заявок", no_info: "нет оценок" };
 
   const CONF: Record<string, string> = {
     высокая: "уверенность высокая",
@@ -83,6 +91,12 @@
               <span>Итог: цена + {Math.round((r.lam || 0) * 100)}% разницы<span class="sub" style="display:block">80% интервал {pctOf(r.lo)}–{pctOf(r.hi)} · {CONF[r.confidence] || r.confidence}</span></span>
               <b class="tnum">{pctOf(r.final)}</b>
             </div>
+            {#each sides(r.key) as x (x.side)}
+              <div class="md-step md-side" data-side={x.side}>
+                <span>Купить «{x.label}»: оценка {pctOf(x.p)}{x.cost ? `, цена с комиссией ${cents1(x.cost)}` : ""}<span class="sub" style="display:block">{x.verdict === "buy" ? `до ${cents1(x.limit_price)} на $${x.size_usd}` : x.reason}</span></span>
+                <b class="tnum {x.verdict === 'buy' ? 'up' : ''}">{VERDICT[x.verdict] || x.verdict}</b>
+              </div>
+            {/each}
           </div>
         </details>
       {/each}
@@ -108,6 +122,8 @@
   .md-step b{font-weight:500;white-space:nowrap}
   .md-total{border-bottom:0;color:var(--brass-2)}
   .md-total b{font:500 20px/1 var(--serif)}
+  .md-side{font-size:13.5px}
+  .md-side b{font:500 13.5px/1.2 inherit}
   @media (max-width:600px){
     .md-sum{gap:6px 12px}
     .md-sum > b{flex-basis:100%}

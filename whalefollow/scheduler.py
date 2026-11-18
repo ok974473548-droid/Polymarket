@@ -111,6 +111,7 @@ class Scheduler:
             Job("weekly", 7 * DAY, self.job_weekly, "heavy"),
             Job("backup", DAY, self.job_backup, "heavy"),
             Job("rotation", DAY, self.job_rotation, "heavy"),
+            Job("event_watch", 300, self.job_event_watch, "slow"),
         ]
         # фоновые задачи плагинов-источников (кэш Kalshi, коэффициенты букмекеров, свои плагины)
         from . import plugins
@@ -499,6 +500,20 @@ class Scheduler:
         if sched:
             self.db.set_state("rotation_schedule", {"computed_ts": now, "items": sched})
         return len(sched)
+
+    def job_event_watch(self):
+        """«Следить» в модуле «События»: каждое событие из списка — раз в 15 мин (досье, модель, совет, уведомление)."""
+        from .decision.risk import RiskManager
+        from .eventhub import advisor, watch
+        from .eventhub.catalog import EventsCatalog
+        from .plugins import user_settings
+
+        if not self.db.scalar("SELECT COUNT(*) AS n FROM event_watch WHERE active=1", (), 0):
+            return
+        cat = EventsCatalog(self.gamma, self.clob, self.db)
+        risk = RiskManager(self.db, self.p)
+        clients = {k: v for k, v in (("data", self.data), ("gamma", self.gamma), ("clob", self.clob)) if v is not None}
+        watch.check(self.db, cat, clients, lambda now: advisor.caps(self.db, risk, now), user_settings(self.db))
 
     def job_weekly(self):
         if next(j for j in self.jobs if j.name == "weekly").runs == 0:

@@ -186,6 +186,7 @@ def detail(raw: dict) -> dict:
         "resolution_source": raw.get("resolutionSource") or "",
         "neg_risk": bool(raw.get("negRisk") or raw.get("enableNegRisk")),
         "tags": [t.get("label") for t in raw.get("tags") or [] if isinstance(t, dict) and t.get("label")][:8],
+        "tag_slugs": [str(t.get("slug")) for t in raw.get("tags") or [] if isinstance(t, dict) and t.get("slug")],
         "outcomes": rows,
         "chart_keys": chart,
         "start_ts": _ts(raw.get("startDate")),

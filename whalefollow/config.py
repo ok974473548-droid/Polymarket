@@ -191,6 +191,7 @@ DEFAULT_SETTINGS = {
         "limits": True,
         "weekly": True,
         "system": True,
+        "events": True,  # «Следить» в модуле «События»: появилась выгода
     },
     "plugins": {},  # включение плагинов без своей прежней настройки: {имя: true/false} (экран «Плагины»)
     "paper_started_ts": None,

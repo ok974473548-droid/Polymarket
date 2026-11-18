@@ -2,6 +2,7 @@
   // Страница события: график вероятностей исходов (живой), исходы с «Купить Да / Нет», стакан, правила,
   // наши ставки в этом событии. Всё обновляется само: цены — раз в 3 с (или сразу из потока), событие — раз в 15 с.
   import { onDestroy, untrack } from "svelte";
+  import AdviceCard from "../components/AdviceCard.svelte";
   import BuyDialog from "../components/BuyDialog.svelte";
   import Dossier from "../components/Dossier.svelte";
   import EventChart from "../components/EventChart.svelte";
@@ -23,7 +24,16 @@
   let quotes = $state<Record<string, Quote>>({});
   let open = $state<string | null>(null); // раскрытый исход (стакан)
   let showAll = $state(false);
-  let order = $state<{ token: string; title: string; side: string; ask: number | null } | null>(null);
+  let order = $state<{
+    token: string;
+    title: string;
+    side: string;
+    ask: number | null;
+    usd?: number;
+    maxPrice?: number;
+    p?: number;
+    advice?: boolean;
+  } | null>(null);
   let tab = $state("model");
   let an = $state<Json>(null); // оценка модели (этап C)
   let anErr = $state("");
@@ -42,6 +52,19 @@
       anErr = (e as Error).message;
     }
     scheduleAn();
+  }
+  function buyAdvice(x: Json) {
+    order = { token: x.token_id, title: rows.length && rows[0].single ? ev.title : x.title, side: x.label, ask: x.ask, usd: x.size_usd, maxPrice: x.limit_price, p: x.p, advice: true };
+  }
+  async function setWatch(on: boolean) {
+    try {
+      const r = await api(`/catalog/${encodeURIComponent(id)}/watch`, { method: "PUT", body: { on } });
+      if (!r.ok) return toast(r.error);
+      toast(on ? "Слежу: проверка раз в 15 минут, уведомление — когда появится выгода" : "Больше не слежу за событием");
+      void loadAnalysis();
+    } catch (e) {
+      toast((e as Error).message);
+    }
   }
   function setMode(m: string) {
     anMode = m;
@@ -270,6 +293,8 @@
     </div>
   </section>
 
+  <AdviceCard a={an} single={rows.length > 0 && rows[0].single} onBuy={buyAdvice} onWatch={setWatch} />
+
   {#if ev.mine.length}
     <section class="card col" style="gap:8px" aria-label="Наши ставки в событии">
       <h2>Ваши ставки в этом событии</h2>
@@ -359,7 +384,7 @@
     {:else}
       <div class="sub">
         Ставки здесь виртуальные, из общего банка, с отдельным лимитом: до {money(ev.limits.max_bet_usd)} на одну, {money(ev.limits.daily_limit_usd)} в день (осталось сегодня {money(ev.limits.left_today_usd)}).
-        Покупка проходит по стакану с комиссией Polymarket; продать можно в «Моих ставках». Совет «что и сколько покупать» появится на следующем этапе модуля; пока — оценка модели во вкладке «Модель».
+        Покупка проходит по стакану с комиссией Polymarket; продать можно в «Моих ставках». Совет модели — карточка над исходами: что купить, по какой цене и сколько (¼ Келли с комиссией), с учётом этих лимитов; «Следить» пришлёт уведомление, когда появится выгода.
       </div>
     {/if}
   </section>

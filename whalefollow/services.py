@@ -742,7 +742,11 @@ class Services:
             "result": None if is_open else result,
             "is_open": is_open,
             # откуда ставка: повтор за китом или своя — со страницы события (модуль «События»)
-            "origin": "event" if str(p.get("signal_id") or "").startswith("ev:") else "whale",
+            "origin": (
+                ("event_model" if str(p.get("signal_id")).endswith(":adv") else "event")
+                if str(p.get("signal_id") or "").startswith("ev:")
+                else "whale"
+            ),
             "event_id": str(p["signal_id"])[3:] if str(p.get("signal_id") or "").startswith("ev:") else None,
         }
 
@@ -1587,6 +1591,29 @@ class Services:
             w = by_whale.setdefault(x["entity_id"], {"whale": scorer.short(x["entity_id"]), "bets": 0, "pnl_usd": 0.0})
             w["bets"] += 1
             w["pnl_usd"] += pnl_now
+        # ставки модуля «События» — отдельно от ставок за китами: по совету модели и свои
+        ev_groups = {
+            k: {"title": t, "bets": 0, "won": 0, "lost": 0, "waiting": 0, "stake_usd": 0.0, "pnl_usd": 0.0}
+            for k, t in (("event_model", "По совету модели"), ("event", "Свои ставки по событиям"))
+        }
+        for tok, p in allpos.items():
+            sid = str(p.get("signal_id") or "")
+            if not sid.startswith("ev:") or (p.get("opened_ts") or 0) < start:
+                continue
+            g = ev_groups["event_model" if sid.endswith(":adv") else "event"]
+            fees_paid = p.get("fees", 0.0)
+            spent = p["cost"] + p.get("cost_removed", 0.0)
+            px = self.pf.mark_price(tok) or 0
+            pnl_now = p["proceeds"] + p["shares"] * px - spent - fees_paid
+            g["bets"] += 1
+            g["stake_usd"] += spent
+            g["pnl_usd"] += pnl_now
+            if p["shares"] > 1e-9:
+                g["waiting"] += 1
+            elif pnl_now > 0:
+                g["won"] += 1
+            else:
+                g["lost"] += 1
         cal = load_calibrator(self.db)
         if cal.n < 30:
             accuracy = {"label": "Мало данных", "text": "Нужно больше закрытых рынков, чтобы оценить точность"}
@@ -1614,6 +1641,11 @@ class Services:
             "by_whale": sorted(
                 ({**v, "pnl_usd": round(v["pnl_usd"], 2)} for v in by_whale.values()), key=lambda v: -v["pnl_usd"]
             ),
+            "events": [
+                {"kind": k, **v, "stake_usd": round(v["stake_usd"], 2), "pnl_usd": round(v["pnl_usd"], 2)}
+                for k, v in ev_groups.items()
+                if v["bets"]
+            ],
             "mode": s["mode"],
         }
 
@@ -1638,6 +1670,7 @@ class Services:
         "housekeeping": "Чистка",
         "weekly": "Итоги недели",
         "rotation": "Форма китов (стратегия «Ротация»)",
+        "event_watch": "«Следить» за событиями",
     }
 
     def trial(self, target_signals: int = 200, min_weeks: int = 4, max_drawdown: float = 0.15) -> dict:
@@ -1904,18 +1937,6 @@ class Services:
         except Exception as exc:
             return {"ok": False, "error": f"Polymarket не ответил: {exc}"[:200], "items": []}
 
-    def _event_spent_today(self, now: int) -> float:
-        day0 = now - now % DAY
-        return float(
-            self.db.scalar(
-                "SELECT SUM(f.size_shares*f.price) AS s FROM fills f JOIN orders o ON o.order_id=f.order_id "
-                "WHERE f.side='BUY' AND f.ts>=? AND o.signal_id LIKE 'ev:%'",
-                (day0,),
-                0.0,
-            )
-            or 0.0
-        )
-
     def event_detail(self, event_id: str) -> dict | None:
         cat = self._events()
         if cat is None:
@@ -1947,11 +1968,13 @@ class Services:
                     }
                 )
         s = self.risk.settings()
-        spent = self._event_spent_today(now)
-        fee_rate = None
-        if ev["outcomes"]:
-            m = self.db.one("SELECT * FROM markets WHERE market_id=?", (ev["outcomes"][0]["market_id"],))
-            fee_rate = fees.market_rate(m) if m else None
+        from .eventhub import advisor as _adv
+
+        spent = _adv.spent_today(self.db, now)
+        from .eventhub import advisor
+
+        # ставка комиссии: из таблицы рынков, иначе по теме и тегам события (раньше — общая 5% для всех тем)
+        fee_rate = advisor.event_fee_rate(self.db, ev)
         return {
             "ok": True,
             **ev,
@@ -2023,89 +2046,97 @@ class Services:
             job = dossier.start(self.db, ev, self._dossier_clients())
         return {"ok": True, **cur, "job": job, "stale": stale}
 
+    def _event_caps(self, now: float) -> dict:
+        from .eventhub import advisor
+
+        c = advisor.caps(self.db, self.risk, now)
+        c["paused"] = [REASONS_RU.get(r, r) for r in c["paused"]]
+        return c
+
+    def _event_mode(self, mode: str) -> tuple[str, str | None]:
+        from .eventhub import ai
+
+        s = self.risk.settings()
+        want = mode or str(s.get("ai_mode") or "manual")
+        if want not in ("ai", "manual"):
+            want = "manual"
+        if want == "ai" and not ai.available():
+            return "manual", "ИИ не подключён (нет ANTHROPIC_API_KEY) — оценка без ИИ"
+        return want, None
+
     def event_analysis(self, event_id: str, mode: str = "") -> dict:
-        """Оценка модели по исходам события (этап C): цена рынка → независимые оценки → итог со сжатием к цене.
+        """Оценка модели по исходам (этап C) и совет «что, по какой цене, сколько» (этап D).
         mode: ai | manual (пусто — как в настройках). В режиме «с ИИ» ответ Claude готовится в фоне (дневной лимит)."""
-        from .eventhub import ai, model
-        from .eventhub import dossier as dz
+        from .eventhub import advisor, ai, model, watch
 
         cat = self._events()
         if cat is None:
             return {"ok": False, "error": "Нет подключения к Polymarket"}
         s = self.risk.settings()
-        want = mode or str(s.get("ai_mode") or "manual")
-        if want not in ("ai", "manual"):
-            want = "manual"
-        ai_note = None
-        if want == "ai" and not ai.available():
-            want, ai_note = "manual", "ИИ не подключён (нет ANTHROPIC_API_KEY) — оценка без ИИ"
+        want, ai_note = self._event_mode(mode)
         try:
             ev = cat.get(event_id)
         except Exception as exc:
             return {"ok": False, "error": f"Polymarket не ответил: {exc}"[:200]}
         if ev is None:
             return {"ok": False, "error": "Событие не найдено"}
-        open_rows = [r for r in ev["outcomes"] if not r["closed"]]
+        limit = int(s.get("events_ai_daily_limit") or 0)
         try:
-            qs = cat.quotes([r["yes_token"] for r in open_rows])
-        except Exception:
-            qs = {}
-        market: dict[str, float] = {}
-        for r in open_rows:
-            q = qs.get(r["yes_token"]) or {}
-            bid, ask = q.get("bid"), q.get("ask")
-            # как на Polymarket: середина спроса и предложения, при широком спреде — последняя цена
-            if bid is not None and ask is not None and ask - bid <= 0.10:
-                market[r["key"]] = (bid + ask) / 2
-            elif r.get("price") is not None:
-                market[r["key"]] = float(r["price"])
-        ev_open = {**ev, "outcomes": open_rows}
-        # модель живёт на досье: если его нет или оно старое — собрать в фоне (как при открытии вкладки «Досье»)
-        dj = dz.job_state(event_id)
-        cur_ts = dz.load(self.db, event_id)["collected_ts"]
-        if not (dj and dj["state"] == "running") and (cur_ts is None or time.time() - cur_ts > dz.STALE_S):
-            dj = dz.start(self.db, ev, self._dossier_clients())
-        job = None
-        if want == "ai":
-            d = dz.load(self.db, event_id)
-            if d["collected_ts"] is not None and ai.cached(self.db, event_id, d["collected_ts"]) is None:
-                job = ai.job_state(event_id)
-                retry = bool(job and job["state"] == "error" and time.time() - float(job.get("finished") or 0) > 600)
-                if not job or job["state"] == "done" or retry:
-                    job = ai.start(
-                        self.db,
-                        dz.event_info(ev_open),
-                        d["items"],
-                        d["collected_ts"],
-                        int(s.get("events_ai_daily_limit") or 0),
-                    )
-            elif d["collected_ts"] is None:
-                job = {"state": "wait_dossier"}
-        try:
-            res = model.analyze(self.db, ev_open, want, market)
+            ex = advisor.evaluate(self.db, cat, ev, want, self._dossier_clients(), limit)
         except Exception as exc:
             return {"ok": False, "error": f"Модель не посчиталась: {exc}"[:200]}
+        res = ex["analysis"]
+        now = time.time()
+        caps = self._event_caps(now)
+        adv = advisor.advise(res, ev, ex["quotes"], advisor.event_fee_rate(self.db, ev), caps["bank"], caps["cap"], now)
+        adv["caps"] = caps
         cached = ai.cached(self.db, event_id) if want == "ai" else None
         return {
             "ok": True,
             **res,
+            "advice": adv,
+            "watch": watch.get(self.db, event_id),
             "ai": {
                 "available": ai.available(),
                 "note": ai_note,
-                "job": job,
+                "job": ex["ai_job"],
                 "used_today": ai.used_today(self.db),
-                "limit": int(s.get("events_ai_daily_limit") or 0),
+                "limit": limit,
                 "key_factors": (cached or {}).get("key_factors") or [],
                 "what_would_change": (cached or {}).get("what_would_change") or [],
                 "base_rate": (cached or {}).get("base_rate"),
                 "ts": (cached or {}).get("ts"),
             },
-            "dossier_job": (dj or {}).get("state"),
-            "line": model.history(self.db, event_id, want, int(time.time()) - 30 * DAY),
+            "dossier_job": ex["dossier_job"],
+            "line": model.history(self.db, event_id, want, int(now) - 30 * DAY),
         }
 
-    def event_buy(self, event_id: str, token_id: str, usd: float, max_price: float | None = None) -> dict:
-        """Виртуальная покупка исхода со страницы события: лимиты модуля «События» и общие стопы."""
+    def event_watch(self, event_id: str, on: bool) -> dict:
+        """«Следить»: фоновая проверка раз в 15 мин и уведомление, когда у модели появилась выгода."""
+        from .eventhub import watch
+
+        title = ""
+        if on:
+            cat = self._events()
+            try:
+                ev = cat.get(event_id) if cat else None
+            except Exception as exc:
+                return {"ok": False, "error": f"Polymarket не ответил: {exc}"[:200]}
+            if ev is None:
+                return {"ok": False, "error": "Событие не найдено"}
+            title = ev["title"]
+        return {"ok": True, "watch": watch.set_watch(self.db, event_id, on, title)}
+
+    def events_watched(self) -> dict:
+        from .eventhub import watch
+
+        return {"ok": True, "items": watch.listing(self.db)}
+
+    def event_buy(
+        self, event_id: str, token_id: str, usd: float, max_price: float | None = None, advice: bool = False
+    ) -> dict:
+        """Виртуальная покупка исхода со страницы события: лимиты модуля «События» и общие стопы.
+        advice — покупка по совету модели (помечается отдельно в «Моих ставках» и «Итогах»)."""
         now = int(self.clock())
         s = self.risk.settings()
         if s.get("mode", "paper") != "paper":
@@ -2142,7 +2173,13 @@ class Services:
 
         limit = float(max_price) if max_price else min(asks[0][0] + 0.02, 0.99)  # защита от проскальзывания
         res = PaperBroker(self.db).buy(
-            f"ev:{event_id}", token_id, rr.size_usd, asks, ts=now, fee_rate=fees.market_rate(market), limit_price=limit
+            f"ev:{event_id}:adv" if advice else f"ev:{event_id}",
+            token_id,
+            rr.size_usd,
+            asks,
+            ts=now,
+            fee_rate=ev["fee_rate"],
+            limit_price=limit,
         )
         if not res:
             return {"ok": False, "error": "По этой цене купить не получилось — цена ушла"}
