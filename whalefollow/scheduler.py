@@ -14,7 +14,7 @@ slow (сбор данных):
   transfers      каждые 30 мин  переводы USDC из блокчейна Polygon (антисибил), если подключён обозреватель
 heavy (расчёты; стартует после первого прохода slow):
   score          раз в сутки    позиции → антисибил → скоринг → живой список китов
-  housekeeping   раз в сутки    чистка старых служебных записей и истории оценок
+  housekeeping   раз в сутки    чистка базы по срокам хранения (retention.py) и сжатие файла
   weekly         раз в неделю   итоги недели в уведомления
 
 При первом запуске очередь slow сразу проходит все задачи, затем heavy строит
@@ -448,7 +448,14 @@ class Scheduler:
                 (cut,),
             )
         self.db.execute("DELETE FROM notifications WHERE ts<? AND is_read=1", (now - 180 * DAY,))
-        return True
+        # сроки хранения (настройка «retention»): игроки не из списка, стаканы, новости, кэш площадок, старые рынки…
+        from . import retention
+
+        removed = retention.cleanup(self.db, now=now)
+        space = retention.compact(self.db)
+        log.info("чистка базы: удалено %s, место %s", removed, space)
+        self.db.set_state("retention_last", {"ts": int(now), "removed": removed, "space": space})
+        return {"removed": sum(v for v in removed.values() if isinstance(v, int)), **space}
 
     def job_backup(self, keep: int = 7):
         """Резервная копия SQLite раз в сутки (без остановки работы), хранится keep последних."""

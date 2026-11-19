@@ -115,9 +115,10 @@ def usage(db: DB) -> dict:
     }
 
 
-def purge_untracked(db: DB, keep: list[str] | None = None) -> dict:
+def purge_untracked(db: DB, keep: list[str] | None = None, prices_before: int | None = None) -> dict:
     """Удаляет данные по кошелькам, которых нет в списке китов (и по их рынкам, где нет наших ставок).
-    keep — кошельки, которые сейчас проверяются и ещё не добавлены."""
+    keep — кошельки, которые сейчас проверяются и ещё не добавлены. prices_before — историю цен и стаканы
+    чужих рынков удалять только старше этого момента (ежедневная чистка не трогает свежие страницы событий)."""
     wallets = set(tracked_wallets(db)) | {w.lower() for w in (keep or [])}
     db.execute("CREATE TEMP TABLE IF NOT EXISTS keep_wallets (wallet TEXT PRIMARY KEY)")
     db.execute("DELETE FROM keep_wallets")
@@ -144,17 +145,24 @@ def purge_untracked(db: DB, keep: list[str] | None = None) -> dict:
             "DELETE FROM wallet_links WHERE wallet_a NOT IN (SELECT wallet FROM keep_wallets) "
             "OR wallet_b NOT IN (SELECT wallet FROM keep_wallets)"
         )
-        ents = "SELECT entity_id FROM watchlist"
-        for t in ("wallet_scores", "wallet_category_scores", "wallet_flags", "wallet_reconcile"):
+        # «Перестать следить» (режим off) — кит больше не в списке, его оценки тоже не нужны
+        ents = "SELECT entity_id FROM watchlist WHERE mode IN ('copy','watch')"
+        db.execute("DELETE FROM entity_wallets WHERE wallet NOT IN (SELECT wallet FROM keep_wallets)")
+        for t in ("wallet_scores", "wallet_category_scores", "wallet_flags", "wallet_reconcile", "score_inputs"):
             db.execute(
                 f"DELETE FROM {t} WHERE entity_id NOT IN ({ents}) AND entity_id NOT IN "
                 "(SELECT wallet FROM keep_wallets)"
             )
         # цены и стаканы — только по рынкам китов из списка и нашим ставкам
-        live_tokens = "SELECT token_id FROM trades UNION SELECT token_id FROM fills UNION SELECT token_id FROM signals"
+        live_tokens = (
+            "SELECT token_id FROM trades UNION SELECT token_id FROM fills UNION SELECT token_id FROM signals "
+            "UNION SELECT token_id FROM orders UNION SELECT token_id FROM positions"
+        )
+        old = " AND ts<?" if prices_before is not None else ""
+        args = (prices_before,) if prices_before is not None else ()
         before = db.scalar("SELECT COUNT(*) AS n FROM price_history", default=0) or 0
-        db.execute(f"DELETE FROM price_history WHERE token_id NOT IN ({live_tokens})")
+        db.execute(f"DELETE FROM price_history WHERE token_id NOT IN ({live_tokens}){old}", args)
         out["price_history"] = int(before - (db.scalar("SELECT COUNT(*) AS n FROM price_history", default=0) or 0))
-        db.execute(f"DELETE FROM orderbook_snapshots WHERE token_id NOT IN ({live_tokens})")
+        db.execute(f"DELETE FROM orderbook_snapshots WHERE token_id NOT IN ({live_tokens}){old}", args)
     db.execute("DROP TABLE IF EXISTS keep_wallets")
     return out

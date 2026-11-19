@@ -39,6 +39,7 @@ def test_docker_and_railway_config():
     assert cfg["build"]["builder"] == "DOCKERFILE" and cfg["deploy"]["healthcheckPath"] == "/api/auth"
 
 
+@pytest.mark.sqlite_only
 def test_sqlite_folder_created(tmp_path):
     from whalefollow.db import DB
 

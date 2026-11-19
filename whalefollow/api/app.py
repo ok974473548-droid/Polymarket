@@ -66,7 +66,7 @@ class GuardMiddleware:
         if self.cors_origin:  # по умолчанию чужим сайтам доступ к API не даётся
             extra += [
                 (b"access-control-allow-origin", self.cors_origin.encode()),
-                (b"access-control-allow-methods", b"GET, POST, PUT, PATCH, OPTIONS"),
+                (b"access-control-allow-methods", b"GET, POST, PUT, PATCH, DELETE, OPTIONS"),
                 (b"access-control-allow-headers", b"Content-Type"),
             ]
 

@@ -59,7 +59,10 @@ def test_legacy_database_is_stamped_and_keeps_data(tmp_path):
     assert {"detected_ts", "info"} <= db._columns("signals")
     assert db.one("SELECT question FROM markets WHERE market_id='m1'")["question"] == "Will it rain?"
     assert db.scalar("SELECT COUNT(*) AS n FROM trades") == 1 and db.get_setting("bankroll_usd") == 1234
-    assert db.one("SELECT name FROM sqlite_master WHERE name='ix_trades_source'")
+    assert db.one("SELECT name FROM sqlite_master WHERE name='ix_trades_tx'")
+    # 0010: неиспользуемый индекс убран, история цен — компактная таблица без rowid
+    assert db.one("SELECT name FROM sqlite_master WHERE name='ix_trades_source'") is None
+    assert "WITHOUT ROWID" in db.scalar("SELECT sql FROM sqlite_master WHERE name='price_history'").upper()
     assert db.init_schema() == migrations.head()  # повторный запуск — ничего не меняет
 
 

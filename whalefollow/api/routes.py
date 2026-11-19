@@ -25,6 +25,7 @@ POST /api/whales/check                проверить кошелёк {address
 GET  /api/whales/check/{job_id}       ход проверки: этап, счётчики, результат
 POST /api/whales                      добавить {entity_id, mode: copy|watch}
 PATCH /api/whales/{id}                {mode?} или {category, enabled}
+DELETE /api/whales/{id}               удалить кита и все его данные (ставки остаются)
 GET  /api/results?period=month        «Итоги» (week|month|all)
 GET  /api/settings, PUT /api/settings «Настройки»
 POST /api/onboarding                  первый запуск {jurisdiction_ok, risk_ack}
@@ -213,6 +214,13 @@ def build_router(svc: Services) -> APIRouter:
     def patch_whale(request: Request, entity_id: str, body: S.PatchWhaleIn | None = None) -> Response:
         b = body or S.PatchWhaleIn()
         return J(request, svc.set_whale(entity_id, mode=b.mode, category=b.category, enabled=b.enabled))
+
+    @r.delete("/whales/{entity_id}", tags=["Киты"])
+    def delete_whale(request: Request, entity_id: str) -> Response:
+        res = svc.delete_whale(entity_id)
+        if not res.get("ok"):
+            raise HttpError(409, res.get("error") or "Не удалось удалить")
+        return J(request, res)
 
     @r.get("/players/resolve", tags=["Игроки"])
     def resolve_players(request: Request, q: str = "") -> Response:

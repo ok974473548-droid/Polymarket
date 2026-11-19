@@ -1065,7 +1065,8 @@ class Services:
             else {}
         )
         wl = {r["entity_id"]: r for r in self.db.query("SELECT * FROM watchlist")}
-        rows = [self._whale_row(e, scores.get(e, {}), wl[e]) for e in wl]
+        # «Перестать следить» оставляет строку с режимом off (чтобы кит не попал в кандидаты) — в списке её нет
+        rows = [self._whale_row(e, scores.get(e, {}), wl[e]) for e in wl if wl[e]["mode"] in tracked.ACTIVE_MODES]
         rows.sort(key=lambda r: (not r["copy"], -(r["return_90d_pct"] or -999)))
         cand = [(e, s) for e, s in scores.items() if s["status"] == "approved" and e not in wl]
         cand.sort(key=lambda es: -(es[1].get("score") or 0))
@@ -1257,6 +1258,19 @@ class Services:
             wl["categories_off"] = json.dumps(sorted(off))
         self.db.upsert("watchlist", wl, ["entity_id"])
         return {"entity_id": entity_id, "mode": wl["mode"], "message": msg}
+
+    def delete_whale(self, entity_id: str) -> dict:
+        """Кит и все его данные (сделки, позиции, оценки, сигналы без ставок, цены его рынков).
+        Наши виртуальные ставки остаются."""
+        from . import retention
+
+        ent, wallets = retention.whale_ids(self.db, entity_id)
+        if any(j["address"].lower() in wallets for j in self.running_checks()):
+            return {"ok": False, "error": "Сейчас идёт проверка этого игрока — удалите после её окончания"}
+        removed = retention.delete_whale(self.db, entity_id)
+        n = sum(removed.values())
+        self.db.notify("settings", "Кит удалён", f"Удалено записей: {n}. Ваши ставки по нему остались.")
+        return {"ok": True, "entity_id": ent, "removed": removed, "rows": n}
 
     # ------------------------------------------------------------ экран «Добавить кита»
     def start_check(self, address: str, wait_s: float = 1.5) -> dict:
@@ -2463,6 +2477,19 @@ class Services:
                 except (TypeError, ValueError):
                     errors[k] = "per_topic и every_h — целые числа"
                     continue
+            if k == "retention":
+                from . import retention
+
+                if not isinstance(v, dict) or set(v) - set(retention.DEFAULTS):
+                    errors[k] = "ожидается {enabled, …сроки в днях}"
+                    continue
+                cur = self.db.get_setting("retention") or {}
+                try:
+                    days = {x: max(1, int(y)) for x, y in v.items() if x not in ("enabled",)}
+                except (TypeError, ValueError):
+                    errors[k] = "сроки — целые числа дней"
+                    continue
+                v = {**cur, **days, "enabled": bool(v.get("enabled", cur.get("enabled", True)))}
             if k == "ai_mode" and v not in ("ai", "manual"):
                 errors[k] = "ai | manual"
                 continue
@@ -2934,10 +2961,20 @@ class Services:
         size = None
         if self.db.kind == "sqlite" and self.db.path != ":memory:":
             size = sum(os.path.getsize(self.db.path + x) for x in ("", "-wal") if os.path.exists(self.db.path + x))
+        from . import retention
+
+        last = self.db.get_state("retention_last") or {}
         return {
             **u,
             "db_size_mb": round(size / 1e6, 1) if size else None,
             "auto_discover": tracked.auto_discover(self.db),
+            "retention": {
+                "enabled": bool(retention.settings(self.db).get("enabled", True)),
+                "last_ts": last.get("ts"),
+                "last_removed": sum(
+                    int(x) for x in (last.get("removed") or {}).values() if isinstance(x, (int, float))
+                ),
+            },
         }
 
     def purge_untracked(self) -> dict:

@@ -174,6 +174,8 @@ DEFAULT_SETTINGS = {
         "per_topic": 10,
         "every_h": 6,
     },  # модуль «События»: сколько анализов с ИИ в день (каждый — несколько запросов к Claude)
+    # чистка базы по срокам хранения каждую ночь (сроки в днях — whalefollow/retention.py, DEFAULTS)
+    "retention": {"enabled": True},
     "daily_loss_stop_frac": 0.05,
     "monthly_loss_stop_frac": 0.10,
     "categories": ["politics", "sports", "esports", "finance", "economics", "tech", "other"],  # см. categories.py

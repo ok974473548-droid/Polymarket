@@ -7,6 +7,7 @@
   import { api, type Json } from "../lib/api";
   import { compactMoney, FORM_TEXT, money, pctText, plural, signedPct, statusChip, tone } from "../lib/format";
   import { loader } from "../lib/load.svelte";
+  import { confirmDialog } from "../lib/dialog.svelte";
   import { softRefresh, toast } from "../lib/state.svelte";
 
   const d = loader(() => "/whales");
@@ -48,6 +49,22 @@
     try {
       const x = await api("/whales/" + encodeURIComponent(r.entity_id), { method: "PATCH", body: { mode: on ? "copy" : "watch" } });
       toast(x.message || (x.mode === "copy" ? "Копирование включено" : "Копирование выключено — только следим"));
+    } catch (e) {
+      toast((e as Error).message);
+    }
+    softRefresh();
+  }
+  async function removeAll(r: Json) {
+    const ok = await confirmDialog({
+      title: "Удалить кита и все его данные?",
+      ok: "Удалить",
+      danger: true,
+      text: "Кит уйдёт из списка, а его сделки, позиции, оценки и сигналы без ставок будут удалены из базы. Ваши ставки по нему останутся. Отменить нельзя.",
+    });
+    if (!ok) return;
+    try {
+      const x = await api("/whales/" + encodeURIComponent(r.entity_id), { method: "DELETE" });
+      toast(`Кит удалён: записей — ${x.rows}`);
     } catch (e) {
       toast((e as Error).message);
     }
@@ -131,6 +148,7 @@
           {:else}
             <span class="sub">{r.note || "Только следить"}</span>
           {/if}
+          <button class="del" data-act="delete-whale" title="Удалить кита и все его данные" aria-label="Удалить кита {v.name || r.name} и все его данные" onclick={() => removeAll(r)}>Удалить</button>
         </div>
       </div>
     {:else}
@@ -142,3 +160,23 @@
     {/each}
   </div>
 {/if}
+
+<style>
+  .del {
+    display: block;
+    margin-top: 2px;
+    padding: 0;
+    min-height: 28px;
+    background: none;
+    border: 0;
+    color: var(--muted);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .del:hover,
+  .del:focus-visible {
+    color: var(--bad-ink);
+    text-decoration: underline;
+  }
+</style>

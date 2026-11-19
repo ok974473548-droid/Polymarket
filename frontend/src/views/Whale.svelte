@@ -61,11 +61,27 @@
       title: "Перестать следить?",
       ok: "Перестать",
       danger: true,
-      text: "Сигналы по этому киту приходить не будут. Открытые ставки останутся.",
+      text: "Кит уйдёт из списка, сигналы по нему приходить не будут. Его данные удалятся при ночной чистке базы. Открытые ставки останутся.",
     });
     if (!ok) return;
     try {
       await api("/whales/" + encodeURIComponent(w.entity_id), { method: "PATCH", body: { mode: "off" } });
+      location.hash = "#/whales";
+    } catch (e) {
+      toast((e as Error).message);
+    }
+  }
+  async function removeAll() {
+    const ok = await confirmDialog({
+      title: "Удалить кита и все его данные?",
+      ok: "Удалить",
+      danger: true,
+      text: "Кит уйдёт из списка, а его сделки, позиции, оценки и сигналы без ставок будут удалены из базы. Ваши ставки по нему останутся. Отменить нельзя.",
+    });
+    if (!ok) return;
+    try {
+      const r = await api("/whales/" + encodeURIComponent(w.entity_id), { method: "DELETE" });
+      toast(`Кит удалён: записей — ${r.rows}`);
       location.hash = "#/whales";
     } catch (e) {
       toast((e as Error).message);
@@ -215,5 +231,11 @@
     style="color:var(--bad-ink);background:none;border:0;text-align:left;padding:0;min-height:44px;cursor:pointer;align-self:flex-start"
     data-act="unfollow"
     onclick={unfollow}>Перестать следить за китом</button
+  >
+  <button
+    class="link"
+    style="color:var(--bad-ink);background:none;border:0;text-align:left;padding:0;min-height:44px;cursor:pointer;align-self:flex-start;margin-top:-8px"
+    data-act="delete-whale"
+    onclick={removeAll}>Удалить кита и все его данные</button
   >
 {/if}

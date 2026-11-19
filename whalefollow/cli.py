@@ -415,6 +415,12 @@ def main(argv: list[str] | None = None) -> int:
                 else ""
             )
         )
+        # SQLite: режим «освобождённое место возвращается файлу» (один полный VACUUM, пока процессы не запущены)
+        from . import retention
+
+        space = retention.compact(db, full_ok=True)
+        if space.get("vacuum") == "full":
+            print(f"База сжата: {space.get('size_mb')} МБ")
         return 0
     from .ingest import pipeline
 

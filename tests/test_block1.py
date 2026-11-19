@@ -298,7 +298,7 @@ def test_old_database_gets_new_columns(tmp_path):
     p = tmp_path / "old.db"
     DB(f"sqlite:///{p}").init_schema()
     c = sqlite3.connect(p)  # «база v0.7»: без новых колонок
-    c.execute("DROP INDEX ix_trades_source")
+    c.execute("DROP INDEX IF EXISTS ix_trades_source")  # с 1.9 индекса нет (миграция 0010)
     c.execute("DROP TABLE alembic_version")  # тогда ещё не было Alembic
     for t, col in (("signals", "detected_ts"), ("signals", "info"), ("markets", "fee_rate"), ("trades", "source")):
         c.execute(f"ALTER TABLE {t} DROP COLUMN {col}")

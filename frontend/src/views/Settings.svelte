@@ -77,6 +77,7 @@
         .filter(Boolean),
       auto_discover: f.has("auto_discover"),
       shadow: { enabled: f.has("shadow_enabled"), per_topic: v("shadow_per_topic"), every_h: v("shadow_every_h") },
+      retention: { enabled: f.has("retention_enabled") },
     };
     saving = true;
     try {
@@ -223,12 +224,22 @@
                 <input id="shadow_every_h" class="inp" type="number" min="1" max="48" step="1" value={s.shadow?.every_h ?? 6} />
               </div>
             </div>
+            <label class="opt">
+              <input type="checkbox" name="retention_enabled" checked={s.retention?.enabled !== false} />
+              <span>
+                <b>Чистить базу каждую ночь</b>
+                <span class="sub" style="display:block">Удаляются данные игроков, за которыми вы перестали следить, старые снимки стаканов, новости и кэш площадок, старые закрытые рынки; освобождённое место возвращается диску. Ваши ставки и киты из списка не трогаются.</span>
+              </span>
+            </label>
             <div id="data-usage" class="sub">
               {#if usageErr}{usageErr}{:else if !usage}Считаем объём данных…{:else}
                 <div>
                   Китов в списке: {usage.tracked_wallets ? fmtNum(usage.tracked_wallets) + " " + plural(usage.tracked_wallets, "кошелёк", "кошелька", "кошельков") : "нет"}; сделок по ним
                   {fmtNum(usage.trades_tracked)}.{usage.db_size_mb ? ` База занимает ${String(usage.db_size_mb).replace(".", ",")} МБ.` : ""}
                 </div>
+                {#if usage.retention?.last_ts}
+                  <div style="margin-top:6px">Последняя чистка: {new Date(usage.retention.last_ts * 1000).toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })}, удалено записей: {fmtNum(usage.retention.last_removed)}.</div>
+                {/if}
                 {#if usage.trades_other}
                   <div class="row" style="margin-top:10px">
                     <span>Данные по другим кошелькам: {fmtNum(usage.trades_other)} сделок ({fmtNum(usage.other_wallets)} {plural(usage.other_wallets, "кошелёк", "кошелька", "кошельков")}).</span>
