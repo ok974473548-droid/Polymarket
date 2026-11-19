@@ -1,5 +1,6 @@
 <script lang="ts">
   // Профиль кита: наш итог, готовые данные Polymarket, «что было бы», темы, сигналы
+  import Bars from "../components/Bars.svelte";
   import Avatar from "../components/Avatar.svelte";
   import Form from "../components/Form.svelte";
   import Kpi from "../components/Kpi.svelte";
@@ -199,6 +200,20 @@
     <div class="card">
       <fieldset>
         <legend>Темы</legend>
+        {#if w.topics.some((t: Json) => t.events)}
+          <Bars
+            items={w.topics.filter((t: Json) => t.events).map((t: Json) => ({
+              key: t.category,
+              label: cap(t.label),
+              value: t.events,
+              text: String(t.events),
+              sub: t.edge_pct !== null && t.edge_pct !== undefined ? `преимущество ${t.edge_pct > 0 ? "+" : ""}${String(t.edge_pct).replace(".", ",")}%` : "",
+              color: t.proven ? "linear-gradient(90deg,#2EE59D,#5EE1FF)" : "linear-gradient(90deg,#5A6375,#8A93A6)",
+              dim: !t.proven,
+            }))}
+          />
+          <div class="sub" style="margin:2px 0 6px">Полоса — число независимых событий в теме; зелёная — тема проверена.</div>
+        {/if}
         {#each w.topics as t (t.category)}
           <label class="ck">
             <input type="checkbox" data-act="topic" checked={t.enabled} disabled={!t.proven} onchange={(e) => setTopic(t.category, e.currentTarget.checked)} />

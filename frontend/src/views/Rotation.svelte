@@ -94,7 +94,7 @@
   <section class="statement" aria-label="Держится ли форма" style:opacity={loading ? 0.6 : 1}>
     <div>
       <div class="label">Держится ли форма</div>
-      <div class="figure {v.holds === true ? 'up' : v.holds === false ? 'down' : ''}" style="font-size:34px">{v.title}</div>
+      <div class="figure txt {v.holds === true ? 'up' : v.holds === false ? 'down' : ''}">{v.title}</div>
       <div class="sub" style="margin-top:10px;max-width:60ch">{v.text}</div>
     </div>
     <div class="facts">

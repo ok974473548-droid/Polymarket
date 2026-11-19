@@ -1,8 +1,11 @@
 <script lang="ts">
-  // График вероятностей исходов события (lightweight-charts): несколько линий, легенда с текущими %,
-  // перекрестие показывает значения всех исходов в эту минуту; живые цены дописываются в конец линий.
-  import { onMount } from "svelte";
+  // График вероятностей исходов события в стиле рынков прогнозов: ступенчатые линии, проценты справа,
+  // пульсирующие точки «сейчас» (живые цены дописываются в конец), курсор со значениями всех исходов.
+  // Шапка: у одного исхода — крупно «N% шанс» и изменение за период; у нескольких — легенда с текущими %.
+  // «Подробно» — прежний график TradingView: масштаб колёсиком и перетаскивание.
   import { type ChartLine, pctOf } from "../lib/events";
+  import Chart, { type ChartHover, type ChartSeries } from "./Chart.svelte";
+  import EventChartPro from "./EventChartPro.svelte";
 
   let {
     lines,
@@ -11,12 +14,18 @@
     label = "Вероятности исходов",
   }: { lines: ChartLine[]; live?: Record<string, number | null | undefined>; height?: number; label?: string } = $props();
 
-  let box: HTMLDivElement | undefined = $state();
-  let hover = $state<Record<string, number> | null>(null);
-  let hoverTs = $state<number | null>(null);
-  type Api = { chart: any; series: Map<string, any>; last: Map<string, number> }; // eslint-disable-line
-  let api: Api | null = null;
+  let hover = $state<ChartHover | null>(null);
+  let pro = $state(false);
+  const now = $derived(Math.floor(Date.now() / 1000));
 
+  const series = $derived<ChartSeries[]>(
+    lines.map((l) => {
+      const pts = l.points.map((p) => ({ t: p.ts, v: p.p * 100 }));
+      const lv = live[l.key];
+      if (!l.dashed && lv !== null && lv !== undefined && pts.length) pts.push({ t: Math.max(now, pts[pts.length - 1].t), v: lv * 100 });
+      return { key: l.key, label: l.title, color: l.color, dashed: l.dashed, step: l.dashed, points: pts, width: l.dashed ? 1.4 : 2.2 };
+    }),
+  );
   const current = $derived.by(() => {
     const out: Record<string, number | null> = {};
     for (const l of lines) {
@@ -25,121 +34,75 @@
     }
     return out;
   });
-
-  onMount(() => {
-    let alive = true;
-    (async () => {
-      const lc = await import("lightweight-charts");
-      if (!alive || !box) return;
-      const css = getComputedStyle(document.documentElement);
-      const ink = css.getPropertyValue("--ink-3").trim() || "#8A93A6";
-      const chart = lc.createChart(box, {
-        height,
-        autoSize: true,
-        layout: {
-          background: { type: lc.ColorType.Solid, color: "transparent" },
-          textColor: ink,
-          fontFamily: "JetBrains Mono, ui-monospace, monospace",
-          fontSize: 12,
-          attributionLogo: true, // лицензия Apache-2.0: ссылка на TradingView
-        },
-        grid: { vertLines: { visible: false }, horzLines: { color: "rgba(226,232,240,.07)", style: lc.LineStyle.Dotted } },
-        rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.08, bottom: 0.04 } },
-        timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
-        crosshair: { mode: lc.CrosshairMode.Magnet },
-        localization: { locale: "ru-RU", priceFormatter: (v: number) => `${Math.round(v)}%` },
-        handleScale: { axisPressedMouseMove: false },
-      });
-      api = { chart, series: new Map(), last: new Map() };
-      chart.subscribeCrosshairMove((param: { time?: unknown; seriesData?: Map<unknown, unknown> }) => {
-        if (!param.time || !api) {
-          hover = null;
-          hoverTs = null;
-          return;
-        }
-        const vals: Record<string, number> = {};
-        for (const [key, s] of api.series) {
-          const d = param.seriesData?.get(s) as { value?: number } | undefined;
-          if (d && typeof d.value === "number") vals[key] = d.value / 100;
-        }
-        hover = vals;
-        hoverTs = param.time as number;
-      });
-      draw(lc);
-    })();
-    // перерисовка при смене линий (период, выбор исходов)
-    return () => {
-      alive = false;
-      api?.chart.remove();
-      api = null;
-    };
+  const shown = $derived.by(() => {
+    if (!hover) return current;
+    const out: Record<string, number | null> = {};
+    for (const [k, v] of Object.entries(hover.values)) out[k] = v === null ? null : v / 100;
+    return out;
   });
-
-  let lcRef: typeof import("lightweight-charts") | null = null;
-  function draw(lc?: typeof import("lightweight-charts")) {
-    if (lc) lcRef = lc;
-    if (!api || !lcRef) return;
-    for (const s of api.series.values()) api.chart.removeSeries(s);
-    api.series.clear();
-    api.last.clear();
-    for (const l of lines) {
-      const s = api.chart.addSeries(lcRef.LineSeries, {
-        color: l.color,
-        lineWidth: l.dashed ? 1 : 2,
-        lineStyle: l.dashed ? lcRef.LineStyle.Dashed : lcRef.LineStyle.Solid,
-        priceLineVisible: false,
-        lastValueVisible: true,
-        crosshairMarkerRadius: 4,
-        title: "",
-      });
-      const byTs = new Map<number, number>();
-      for (const p of l.points) byTs.set(Math.floor(p.ts), p.p * 100);
-      const data = [...byTs.entries()].sort((a, b) => a[0] - b[0]).map(([t, v]) => ({ time: t as never, value: v }));
-      s.setData(data);
-      api.series.set(l.key, s);
-      api.last.set(l.key, data.length ? (data[data.length - 1].time as unknown as number) : 0);
-    }
-    // масштаб сбрасываем только при смене набора линий (а не при обновлении оценки модели раз в минуту)
-    const sig = lines.map((l) => l.key).join();
-    if (sig !== lastSig) api.chart.timeScale().fitContent();
-    lastSig = sig;
-  }
-  let lastSig = "";
-
-  // новые линии (период/выбор) — перерисовать
-  $effect(() => {
-    void lines;
-    draw();
+  const solid = $derived(lines.filter((x) => !x.dashed));
+  const single = $derived(solid.length === 1 ? solid[0] : null);
+  const delta = $derived.by(() => {
+    if (!single || !single.points.length) return null;
+    const v = shown[single.key];
+    return v === null || v === undefined ? null : (v - single.points[0].p) * 100;
   });
-
-  // живые цены — точка «сейчас» в конце каждой линии
-  $effect(() => {
-    const lv = live;
-    if (!api) return;
-    const now = Math.floor(Date.now() / 1000);
-    for (const [key, s] of api.series) {
-      const v = lv[key];
-      if (v === null || v === undefined) continue;
-      const last = api.last.get(key) || 0;
-      const t = Math.max(now, last);
-      try {
-        s.update({ time: t as never, value: v * 100 });
-        api.last.set(key, t);
-      } catch {
-        /* точка раньше последней — пропускаем */
-      }
-    }
-  });
-
-  const shown = $derived(hover || current);
 </script>
 
 <div class="ev-chart">
-  <div class="ev-legend" aria-live="off">
-    {#each lines.filter((x) => !x.dashed) as l (l.key)}
+  {#if single}
+    <div class="ev-big">
+      <b class="tnum" style="color:{single.color}">{pctOf(shown[single.key])}</b><span class="sub">шанс</span>
+      {#if delta !== null && Math.abs(delta) >= 0.05}
+        <span class="ev-d" class:dn={delta < 0}>{delta >= 0 ? "▲" : "▼"} {Math.abs(delta).toFixed(1).replace(".", ",")} п.п.</span>
+      {/if}
+      <button class="link inline pro-btn" onclick={() => (pro = !pro)} aria-pressed={pro}>{pro ? "Обычный вид" : "Подробно"}</button>
+    </div>
+  {/if}
+  <div class="ev-legend" aria-live="off" hidden={!!single}>
+    {#each solid as l (l.key)}
       <span class="ev-leg"><i style="background:{l.color}"></i><b class="tnum">{pctOf(shown[l.key])}</b> {l.title}</span>
     {/each}
-    {#if hoverTs}<span class="sub ev-leg-time">{new Date(hoverTs * 1000).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>{/if}
+    {#if hover}<span class="sub ev-leg-time">{new Date(hover.t * 1000).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+    {:else if !single}<button class="link inline pro-btn ev-leg-time" onclick={() => (pro = !pro)} aria-pressed={pro}>{pro ? "Обычный вид" : "Подробно"}</button>{/if}
   </div>
-  <div class="lwc" bind:this={box} style="height:{height}px" role="img" aria-label={label}></div>
+  {#if pro}
+    <EventChartPro {lines} {live} {height} {label} legend={false} />
+  {:else}
+    <Chart
+      bind:hover
+      {series}
+      {height}
+      {label}
+      curve="auto"
+      clamp={[0, 100]}
+      minSpan={6}
+      yFormat={(v) => `${Math.round(v)}%`}
+      tooltip={solid.length > 1}
+    />
+  {/if}
 </div>
+
+<style>
+  .ev-big {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .ev-big b {
+    font: 600 34px/1 var(--mono);
+    letter-spacing: -0.04em;
+  }
+  .ev-d {
+    font: 600 13px var(--mono);
+    color: var(--good-ink);
+  }
+  .ev-d.dn {
+    color: var(--bad-ink);
+  }
+  .pro-btn {
+    margin-left: auto;
+    font-size: 13px;
+  }
+</style>

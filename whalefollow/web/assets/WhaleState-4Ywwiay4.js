@@ -1,0 +1,1 @@
+import{C as e,D as t,O as n,W as r,k as i}from"./disclose-version-CY8cgkbx.js";var a=i(`<span class="chip g">кит держит</span>`),o=i(`<span class="chip a">кит вышел</span>`);function s(i,s){var c=n(),l=r(c),u=e=>{var n=a();t(e,n)},d=e=>{var n=o();t(e,n)};e(l,e=>{s.st===`держит`?e(u):s.st===`вышел`&&e(d,1)}),t(i,c)}export{s as t};

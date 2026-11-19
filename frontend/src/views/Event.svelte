@@ -286,7 +286,7 @@
       <div class="skeleton" style="height:320px"></div>
     {/if}
     <div class="row" style="justify-content:space-between">
-      <span class="sub hint">{ev.neg_risk ? "Исходы взаимоисключающие: сбудется только один." : ""} Колёсиком — масштаб; линии — флажками у исходов; пунктир — оценка модели.</span>
+      <span class="sub hint">{ev.neg_risk ? "Исходы взаимоисключающие: сбудется только один." : ""} Наведите или проведите пальцем — значения в любой момент; пунктир — оценка модели; «Подробно» — масштаб колёсиком.</span>
       <div class="seg" role="group" aria-label="Период графика">
         {#each PERIODS as [k, l] (k)}<button aria-pressed={period === k} data-period={k} onclick={() => (period = k)}>{l}</button>{/each}
       </div>

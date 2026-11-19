@@ -605,9 +605,6 @@ body.drawer-open{overflow:hidden}
 .rot-name { min-width: 0; max-width: 48%; flex-shrink: 1; }
 .rot-name .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* uPlot: служебные ряды полосы разброса (низ/верх) в подписи не показываем */
-.uplot-box.has-band .u-legend .u-series:nth-child(2),.uplot-box.has-band .u-legend .u-series:nth-child(3){display:none}
-.uplot-box .u-legend{font:12.5px/1.4 var(--sans);color:var(--ink-2)}
 
 /* экран «Плагины» */
 .plugin-row{display:flex;gap:16px;align-items:flex-start;padding:16px 20px;border-top:1px solid var(--line)}
@@ -754,7 +751,6 @@ body.drawer-open{overflow:hidden}
   box-shadow:0 12px 30px -10px rgba(139,124,255,.8)}
 /* кривая баланса в главной карточке */
 .st-curve{grid-column:1/-1;height:84px;margin:4px -6px -6px;opacity:.95}
-.st-curve .uplot-box,.st-curve .u-wrap{height:84px}
 /* потянуть вниз — обновить (телефон и приложение Android) */
 .ptr{position:fixed;left:50%;top:calc(var(--top-h) + 6px);z-index:28;width:38px;height:38px;margin-left:-19px;border-radius:99px;display:flex;align-items:center;justify-content:center;
   background:#171B25;border:1px solid var(--line-strong);color:var(--brass-2);box-shadow:var(--shadow);opacity:0;transform:translateY(-30px) scale(.8);pointer-events:none;transition:opacity .15s}
@@ -770,3 +766,6 @@ body.drawer-open{overflow:hidden}
   .toolbar .search{max-width:none;flex-basis:100%}
 }
 @media (min-width:861px){ .savebar{display:none} }
+/* крупный текст (а не число) в главной карточке — обычным шрифтом */
+.figure.txt{font-family:var(--sans)!important;font-weight:700;font-size:30px;letter-spacing:-.025em;line-height:1.15}
+.figure.up{-webkit-text-fill-color:var(--good-ink)} .figure.down{-webkit-text-fill-color:var(--bad-ink)} .figure.warn-t{-webkit-text-fill-color:var(--warn-ink)}

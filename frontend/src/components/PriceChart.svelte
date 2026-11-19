@@ -1,8 +1,8 @@
 <script lang="ts">
-  // График цены исхода (lightweight-charts от TradingView): масштаб колёсиком/жестом, перекрестие,
-  // отметки входа кита и нашей покупки. Цена — в центах.
-  import { onMount } from "svelte";
+  // График цены исхода: ступенчатая линия (цена держится до следующей сделки), отметки входа кита и нашей
+  // покупки, шапка — текущая цена и изменение; при наведении (или пальцем) — цена в выбранный момент. Цена — в центах.
   import type { Mark } from "../lib/chart";
+  import Chart, { type ChartHover } from "./Chart.svelte";
 
   let {
     points,
@@ -11,71 +11,57 @@
     label = "Цена исхода",
   }: { points: { ts: number; price: number }[]; marks?: Mark[]; height?: number; label?: string } = $props();
 
-  let box: HTMLDivElement | undefined = $state();
-  let failed = $state(false);
-
-  onMount(() => {
-    let dispose = () => {};
-    let alive = true;
-    (async () => {
-      try {
-        const lc = await import("lightweight-charts");
-        if (!alive || !box) return;
-        const css = getComputedStyle(document.documentElement);
-        const ink = css.getPropertyValue("--ink-3").trim() || "#8A93A6";
-        const chart = lc.createChart(box, {
-          height,
-          autoSize: true,
-          layout: {
-            background: { type: lc.ColorType.Solid, color: "transparent" },
-            textColor: ink,
-            fontFamily: "JetBrains Mono, ui-monospace, monospace",
-            fontSize: 12,
-            attributionLogo: true, // лицензия Apache-2.0 библиотеки: ссылка на TradingView
-          },
-          grid: { vertLines: { color: "rgba(226,232,240,.05)" }, horzLines: { color: "rgba(226,232,240,.07)" } },
-          rightPriceScale: { borderVisible: false },
-          timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
-          crosshair: { mode: lc.CrosshairMode.Normal },
-          localization: {
-            locale: "ru-RU",
-            priceFormatter: (v: number) => `${String(Math.round(v * 10) / 10).replace(".", ",")}¢`,
-          },
-        });
-        const series = chart.addSeries(lc.AreaSeries, {
-          lineColor: "#8B7CFF",
-          topColor: "rgba(139,124,255,.22)",
-          bottomColor: "rgba(139,124,255,0)",
-          lineWidth: 2,
-          priceLineVisible: false,
-        });
-        // точки с одинаковым временем lightweight-charts не принимает — оставляем последнюю
-        const byTs = new Map<number, number>();
-        for (const p of points) byTs.set(Math.floor(p.ts), p.price * 100);
-        const data = [...byTs.entries()].sort((a, b) => a[0] - b[0]).map(([t, v]) => ({ time: t as never, value: v }));
-        series.setData(data);
-        const ms = marks
-          .filter((m) => m.ts && m.price !== null && m.price !== undefined && data.length)
-          .map((m) => {
-            // отметка — на ближайшей точке ряда не позже момента сделки
-            let t = data[0].time as unknown as number;
-            for (const d of data) if ((d.time as unknown as number) <= m.ts) t = d.time as unknown as number;
-            return { time: t as never, position: "belowBar" as const, color: m.color, shape: "arrowUp" as const, text: m.label };
-          })
-          .sort((a, b) => (a.time as number) - (b.time as number));
-        if (ms.length) lc.createSeriesMarkers(series, ms);
-        chart.timeScale().fitContent();
-        dispose = () => chart.remove();
-      } catch {
-        failed = true;
-      }
-    })();
-    return () => {
-      alive = false;
-      dispose();
-    };
-  });
+  let hover = $state<ChartHover | null>(null);
+  const pts = $derived(points.filter((p) => p && p.price !== null && p.price !== undefined).map((p) => ({ t: p.ts, v: p.price * 100 })));
+  const last = $derived(pts.length ? (pts[pts.length - 1].v as number) : null);
+  const first = $derived(pts.length ? (pts[0].v as number) : null);
+  const shown = $derived(hover?.values.p ?? last);
+  const delta = $derived(shown !== null && first !== null ? shown - first : null);
+  const c = (v: number) => `${String(Math.round(v * 10) / 10).replace(".", ",")}¢`;
+  const up = $derived((delta ?? 0) >= 0);
+  const color = $derived(up ? "#2EE59D" : "#FF5C7A");
 </script>
 
-<div class="lwc" bind:this={box} style="height:{height}px" role="img" aria-label={label}></div>
-{#if failed}<div class="sub">График не загрузился</div>{/if}
+{#if pts.length > 1}
+  <div class="pc-head">
+    <b class="pc-now">{shown !== null ? c(shown) : "—"}</b>
+    {#if delta !== null}<span class="pc-d" class:dn={!up}>{up ? "▲" : "▼"} {c(Math.abs(delta))}</span>{/if}
+    <span class="sub">{hover ? new Date(hover.t * 1000).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "за период"}</span>
+  </div>
+  <Chart
+    bind:hover
+    {height}
+    {label}
+    curve="auto"
+      clamp={[0, 100]}
+    minSpan={4}
+    series={[{ key: "p", label: "Цена", color, area: true, points: pts }]}
+    marks={marks.filter((m) => m.ts && m.price !== null && m.price !== undefined).map((m) => ({ t: m.ts, v: (m.price as number) * 100, label: m.label, color: m.color }))}
+    yFormat={(v) => `${Math.round(v)}¢`}
+    tooltip={false}
+  />
+{:else}
+  <div class="sub">Истории цены пока нет</div>
+{/if}
+
+<style>
+  .pc-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .pc-now {
+    font: 600 26px/1 var(--mono);
+    letter-spacing: -0.04em;
+    color: var(--pearl);
+  }
+  .pc-d {
+    font: 600 13px var(--mono);
+    color: var(--good-ink);
+  }
+  .pc-d.dn {
+    color: var(--bad-ink);
+  }
+</style>

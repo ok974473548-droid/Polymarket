@@ -31,7 +31,7 @@
 </div>
 {#if pts.length > 1}
   {#key period}
-    <Plot {height} xs={pts.map((p) => p.ts)} lines={[{ label: "Прибыль", values: pts.map((p) => p.pnl - base), color: "#8B7CFF", fill: true }]}
+    <Plot {height} xs={pts.map((p) => p.ts)} lines={[{ label: "Прибыль", values: pts.map((p) => p.pnl - base), color: (delta ?? 0) >= 0 ? "#2EE59D" : "#FF5C7A", fill: true }]} zeroLine
       fmtY={(v) => compactMoney(v)} label="Прибыль игрока по данным Polymarket" />
   {/key}
 {:else}

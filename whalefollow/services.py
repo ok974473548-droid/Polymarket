@@ -1170,6 +1170,9 @@ class Services:
                     "text": "Сильная сторона · копируем"
                     if proven and cat not in off
                     else ("Выключено вами" if proven else "Мало данных — включится сама, когда наберётся история"),
+                    # для полос на экране: сколько независимых событий и преимущество (сжатое к нулю)
+                    "events": int(c.get("n_clusters") or 0),
+                    "edge_pct": round(float(c["edge_shrunk"]) * 100, 1) if c.get("edge_shrunk") is not None else None,
                 }
             )
         row = self._whale_row(entity_id, s, wl)

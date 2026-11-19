@@ -1,6 +1,6 @@
 <script lang="ts">
-  // Мини-график (uPlot) — динамика за последние недели; цвет по итогу.
-  import Plot from "./Plot.svelte";
+  // Мини-график — динамика за последние недели: линия без осей, точка на конце, пунктир нуля; цвет по итогу.
+  import Chart from "./Chart.svelte";
 
   let { values, w = 110, h = 30 }: { values: number[] | null | undefined; w?: number; h?: number } = $props();
   const flat = $derived(!values || values.length < 2 || values.every((v) => v === values[0]));
@@ -12,6 +12,6 @@
   {#if flat}
     <svg viewBox="0 0 {w} {h}" width={w} height={h}><line x1="0" y1={h / 2} x2={w} y2={h / 2} stroke="rgba(226,232,240,.18)" stroke-dasharray="2 4" /></svg>
   {:else if values}
-    <Plot mini height={h} xs={values.map((_, i) => i)} lines={[{ label: "", values, color }, { label: "", values: values.map(() => 0), color: "rgba(226,232,240,.14)", width: 1 }]} />
+    <Chart mini zeroLine height={h} curve="smooth" series={[{ key: "v", label: "", color, area: true, points: values.map((v, i) => ({ t: i * 86400 * 7, v })) }]} />
   {/if}
 </div>
