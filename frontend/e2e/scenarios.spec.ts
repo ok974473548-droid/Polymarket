@@ -254,3 +254,26 @@ test("точность модели событий: модель против р
   await expect(p.locator("[data-est=platforms]")).toBeVisible();
   await expect(page.locator("[data-acc-shadow]")).toContainText("Теневые анализы");
 });
+
+test("внутри Android-приложения: мост WFAndroid — уведомления, смена сервера, отчёт", async ({ page }) => {
+  await page.addInitScript(() => {
+    const calls: string[] = [];
+    (window as unknown as { __calls: string[] }).__calls = calls;
+    (window as unknown as { WFAndroid: object }).WFAndroid = {
+      info: () => JSON.stringify({ version: "1.8.1", notifications: "background" }),
+      changeServer: () => calls.push("server"),
+      saveFile: (name: string, mime: string, text: string) => {
+        calls.push(`${name}|${mime}|${text.length > 10}`);
+        return "Отчёт сохранён в «Загрузки»: " + name;
+      },
+    };
+  });
+  await page.goto("/#/settings");
+  await expect(page.locator("[data-android]")).toContainText("Android-приложение 1.8.1");
+  await page.locator("[data-act=android-server]").click();
+  await page.goto("/#/results");
+  await page.locator("[data-act=csv]").click();
+  await toast(page, /Отчёт сохранён в «Загрузки»: whalefollow-report-/);
+  const calls = await page.evaluate(() => (window as unknown as { __calls: string[] }).__calls);
+  expect(calls.some((c) => c.endsWith("|text/csv|true"))).toBeTruthy();
+});

@@ -1,6 +1,7 @@
 <script lang="ts">
   // Итоги за период: прибыль, баланс, ставки, точность, откуда прибыль; отчёт CSV
   import Plot from "../components/Plot.svelte";
+  import { android } from "../lib/android";
   import { api, type Json } from "../lib/api";
   import { money, plural, signedPct, tone } from "../lib/format";
   import { loader } from "../lib/load.svelte";
@@ -18,9 +19,16 @@
       const cols = ["signal_id", "ts", "whale", "question", "kind", "status", "decision", "size_usd", "q_whale", "q_llm", "q_final", "edge_net", "reason", "params_version", "user_action"];
       const q = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
       const csv = [cols.join(","), ...j.items.map((r: Json) => cols.map((c) => q(c === "ts" ? new Date(r.ts * 1000).toISOString() : r[c])).join(","))].join("\n");
+      const name = `whalefollow-report-${new Date().toISOString().slice(0, 10)}.csv`;
+      // Android-приложение: WebView не скачивает blob-ссылки — сохраняем через мост приложения в «Загрузки»
+      const bridge = android();
+      if (bridge) {
+        toast(bridge.saveFile(name, "text/csv", "\ufeff" + csv));
+        return;
+      }
       const a = document.createElement("a");
       a.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }));
-      a.download = `whalefollow-report-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.download = name;
       a.click();
       URL.revokeObjectURL(a.href);
     } catch (e) {

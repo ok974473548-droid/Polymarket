@@ -23,9 +23,9 @@ services:
   api:
     <<: *app
     command: ["whalefollow", "api", "--host", "0.0.0.0"]
-    # Только с этого компьютера. Чтобы открыть с телефона или другого устройства в сети —
-    # задайте WF_UI_PASSWORD в .env и замените на "8787:8787" (в интернет — только через HTTPS).
-    ports: ["127.0.0.1:8787:8787"]
+    # По умолчанию — только с этого компьютера. Чтобы открыть с телефона (Android-приложение, браузер) —
+    # задайте в .env WF_UI_PASSWORD и WF_BIND=0.0.0.0 (в интернет — только через HTTPS или VPN).
+    ports: ["${WF_BIND:-127.0.0.1}:8787:8787"]
     depends_on:
       migrate: {condition: service_completed_successfully}
 

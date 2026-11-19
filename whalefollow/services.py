@@ -2973,9 +2973,16 @@ class Services:
             self.db.set_setting("paper_started_ts", self.clock())
         return {"ok": True, "next_step": 2}
 
-    def notifications(self, limit: int = 20) -> dict:
+    def notifications(self, limit: int = 20, channel: str = "") -> dict:
+        """Колокольчик. channel="push" — только то, что разрешено для push-уведомлений (флажки «Куда» → Push и
+        «О чём»): так их забирает Android-приложение."""
+        from .push import PushNotifier, link
+
         now = self.clock()
-        rows = self.db.query("SELECT * FROM notifications ORDER BY ts DESC LIMIT ?", (limit,))
+        rows = self.db.query("SELECT * FROM notifications ORDER BY ts DESC LIMIT ?", (max(1, min(limit, 200)),))
+        if channel == "push":
+            pn = PushNotifier(self.db)
+            rows = [r for r in rows if pn.wanted(r["kind"])]
         return {
             "items": [
                 {
@@ -2984,6 +2991,8 @@ class Services:
                     "title": r["title"],
                     "body": r["body"],
                     "ref": r["ref"],
+                    "ts": int(r["ts"]),
+                    "link": link(r["kind"], r["ref"] or ""),
                     "when": _fmt_age(r["ts"], now),
                     "unread": not r["is_read"],
                 }

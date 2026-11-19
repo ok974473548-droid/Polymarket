@@ -28,7 +28,7 @@ PATCH /api/whales/{id}                {mode?} или {category, enabled}
 GET  /api/results?period=month        «Итоги» (week|month|all)
 GET  /api/settings, PUT /api/settings «Настройки»
 POST /api/onboarding                  первый запуск {jurisdiction_ok, risk_ack}
-GET  /api/notifications, POST /api/notifications/read
+GET  /api/notifications?channel=push&limit=50, POST /api/notifications/read  (channel=push — для Android-приложения)
 POST /api/stop, POST /api/resume      «Остановить всё» / возобновить
 GET  /api/journal?limit=100           журнал всех решений
 GET  /api/trial                       прогресс пробного режима и работа сбора данных
@@ -287,8 +287,8 @@ def build_router(svc: Services) -> APIRouter:
         return J(request, svc.onboarding(b.jurisdiction_ok, b.risk_ack, b.paper))
 
     @r.get("/notifications", responses=_doc(S.ItemsOut), tags=["Уведомления"])
-    def notifications(request: Request) -> Response:
-        return J(request, svc.notifications())
+    def notifications(request: Request, channel: str = "", limit: str | None = None) -> Response:
+        return J(request, svc.notifications(_int(limit) or 20, channel if channel == "push" else ""))
 
     @r.post("/notifications/read", tags=["Уведомления"])
     def mark_read(request: Request) -> Response:

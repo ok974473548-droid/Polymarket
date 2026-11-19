@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#0E1F26</color>
+    <color name="surface">#132A32</color>
+    <color name="ink">#ECE6DA</color>
+    <color name="muted">#93A7AA</color>
+    <color name="brass">#C8A464</color>
+    <color name="brass_ink">#1A1408</color>
+</resources>

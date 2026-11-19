@@ -1,6 +1,7 @@
 <script lang="ts">
   // Настройки: режим, ИИ, лимиты, сбор данных, темы, источники, уведомления (в т.ч. push), защита
   import PushToggle from "../components/PushToggle.svelte";
+  import { android } from "../lib/android";
   import { api, type Json } from "../lib/api";
   import { confirmDialog } from "../lib/dialog.svelte";
   import { ago, days, fmtNum, plural, TOPICS } from "../lib/format";
@@ -105,6 +106,15 @@
       toast((e as Error).message);
     }
   }
+  // внутри Android-приложения push браузера не работает — уведомления присылает само приложение
+  const app = (() => {
+    try {
+      const b = android();
+      return b ? (JSON.parse(b.info()) as { version: string }) : null;
+    } catch {
+      return null;
+    }
+  })();
 </script>
 
 {#snippet secRow(ok: boolean, title: string, text: string)}
@@ -289,7 +299,15 @@
               ? "Telegram подключён: под сигналами — кнопки «Купить» и «Пропустить», команды /status, /stop, /resume."
               : "Telegram работает, если в файле .env указан бот (см. README)."} Discord и почта — по ключам в .env (см. «Плагины»); все уведомления видны в колокольчике.
           </div>
-          <PushToggle />
+          {#if app}
+            <div class="sub" data-android>
+              Android-приложение {app.version}: уведомления приходят на телефон сами — приложение проверяет сервер в фоне
+              (Android запускает проверку примерно раз в 15 минут). Что присылать — флажки «Push» и «О чём» выше.
+            </div>
+            <button type="button" class="btn" data-act="android-server" onclick={() => android()?.changeServer()}>Сменить адрес сервера</button>
+          {:else}
+            <PushToggle />
+          {/if}
         </div>
         <div class="card col" style="gap:6px">
           <div style="font-size:16px;font-weight:700;color:var(--ink-2)">Защита и сохранность</div>
