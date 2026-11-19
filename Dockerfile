@@ -16,6 +16,7 @@ COPY tests ./tests
 RUN pip install --no-cache-dir -e ".[dev]"
 # расширение DuckDB для чтения истории прямо из файла SQLite — ставится при сборке, а не при первом запуске
 RUN python -c "import duckdb; duckdb.connect().execute('INSTALL sqlite')"
+RUN mkdir -p /data
 # База — в /data: в docker compose это том wf-data, на Railway — Volume с путём /data
 # (инструкцию VOLUME Railway не принимает, поэтому её здесь нет).
 EXPOSE 8787

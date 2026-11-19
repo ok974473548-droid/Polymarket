@@ -317,6 +317,8 @@ def _serve_ui(svc, db, port: int, host: str) -> None:
     if not auth.required and _public_cloud():
         # Railway и подобные дают адрес в интернете — без пароля интерфейс (и виртуальный банк) открыт всем
         raise SystemExit("Сервер в облаке (Railway): задайте переменную WF_UI_PASSWORD — без пароля запуск запрещён.")
+    if _public_cloud() and not os.environ.get("RAILWAY_VOLUME_MOUNT_PATH") and db.kind == "sqlite":
+        print("ВНИМАНИЕ: на Railway нет тома (Volume /data) — база пропадёт при каждом обновлении.")
     httpd = serve(svc, host=host, port=port, auth=auth)
     print(
         "Вход в интерфейс:",

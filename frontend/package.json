@@ -1,7 +1,7 @@
 {
   "name": "whalefollow-frontend",
   "private": true,
-  "version": "1.8.2",
+  "version": "1.8.3",
   "type": "module",
   "description": "Интерфейс WhaleFollow: Svelte 5 + TypeScript + Vite; сборка кладётся в whalefollow/web",
   "scripts": {

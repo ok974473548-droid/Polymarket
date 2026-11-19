@@ -61,6 +61,9 @@ class DB:
             if self.path == ":memory:":
                 self._shared = self._connect()
             else:
+                # папки базы может не быть (Railway без тома, новый путь в WF_DB_URL) — создаём
+                folder = os.path.dirname(os.path.abspath(self.path))
+                os.makedirs(folder, exist_ok=True)
                 c = self._connect()
                 c.execute("PRAGMA journal_mode=WAL")
                 self._local.conn = c

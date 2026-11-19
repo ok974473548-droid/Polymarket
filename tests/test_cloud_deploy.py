@@ -37,3 +37,11 @@ def test_docker_and_railway_config():
     assert not any(line.strip().startswith("VOLUME") for line in dockerfile.splitlines())
     cfg = json.loads((ROOT / "railway.json").read_text())
     assert cfg["build"]["builder"] == "DOCKERFILE" and cfg["deploy"]["healthcheckPath"] == "/api/auth"
+
+
+def test_sqlite_folder_created(tmp_path):
+    from whalefollow.db import DB
+
+    db = DB(f"sqlite:///{tmp_path}/нет/такой/папки/wf.db")  # как /data на Railway без тома
+    db.init_schema()
+    assert (tmp_path / "нет" / "такой" / "папки" / "wf.db").exists()
