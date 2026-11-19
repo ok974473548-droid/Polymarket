@@ -16,11 +16,13 @@ COPY tests ./tests
 RUN pip install --no-cache-dir -e ".[dev]"
 # расширение DuckDB для чтения истории прямо из файла SQLite — ставится при сборке, а не при первом запуске
 RUN python -c "import duckdb; duckdb.connect().execute('INSTALL sqlite')"
-VOLUME ["/data"]
+# База — в /data: в docker compose это том wf-data, на Railway — Volume с путём /data
+# (инструкцию VOLUME Railway не принимает, поэтому её здесь нет).
 EXPOSE 8787
 # Живо ли приложение: /api/auth отвечает и без пароля
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/api/auth', timeout=4)" || exit 1
+  CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/api/auth' % os.environ.get('PORT', '8787'), timeout=4)" || exit 1
 # Реальные данные Polymarket: интерфейс + сбор данных + агент (ставки виртуальные до приёмки).
 # init-db обновляет схему базы миграциями (старая база помечается как стартовая версия).
-CMD ["sh", "-c", "whalefollow init-db && whalefollow run --host 0.0.0.0"]
+# Порт — из PORT (его задаёт Railway), иначе 8787.
+CMD ["sh", "-c", "whalefollow init-db && exec whalefollow run --host 0.0.0.0 --port ${PORT:-8787}"]

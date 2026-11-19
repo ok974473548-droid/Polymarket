@@ -304,11 +304,19 @@ def run_role(
     return svc, sched, runner
 
 
+def _public_cloud() -> bool:
+    """Запущены на облачной площадке с публичным адресом (Railway задаёт RAILWAY_PROJECT_ID / RAILWAY_ENVIRONMENT)."""
+    return bool(os.environ.get("RAILWAY_PROJECT_ID") or os.environ.get("RAILWAY_ENVIRONMENT"))
+
+
 def _serve_ui(svc, db, port: int, host: str) -> None:
     from .api.server import serve
     from .auth import Auth
 
     auth = Auth(db)
+    if not auth.required and _public_cloud():
+        # Railway и подобные дают адрес в интернете — без пароля интерфейс (и виртуальный банк) открыт всем
+        raise SystemExit("Сервер в облаке (Railway): задайте переменную WF_UI_PASSWORD — без пароля запуск запрещён.")
     httpd = serve(svc, host=host, port=port, auth=auth)
     print(
         "Вход в интерфейс:",
