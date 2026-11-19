@@ -67,7 +67,7 @@
       </div>
       {#if (s.curve || []).length > 1}
         {#key r}
-          <Plot height={150} xs={s.curve.map((c: Json) => c.ts)} lines={[{ label: "Прибыль", values: s.curve.map((c: Json) => c.pnl_usd), color: "#C8A464", fill: true }]}
+          <Plot height={150} xs={s.curve.map((c: Json) => c.ts)} lines={[{ label: "Прибыль", values: s.curve.map((c: Json) => c.pnl_usd), color: "#8B7CFF", fill: true }]}
             fmtY={(v) => money(v)} label="Бэктест стратегии: прибыль закрытых ставок" />
         {/key}
       {/if}

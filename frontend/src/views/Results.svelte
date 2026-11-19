@@ -64,7 +64,7 @@
     </div>
     {#if r.series.length > 1}
       {#key r}
-        <Plot xs={r.series.map((p: Json) => p.ts)} lines={[{ label: "Баланс", values: r.series.map((p: Json) => p.balance_usd), color: "#C8A464", fill: true }]}
+        <Plot xs={r.series.map((p: Json) => p.ts)} lines={[{ label: "Баланс", values: r.series.map((p: Json) => p.balance_usd), color: "#8B7CFF", fill: true }]}
           height={170} fmtY={(v) => money(v)} label="Баланс за период" />
       {/key}
     {:else}

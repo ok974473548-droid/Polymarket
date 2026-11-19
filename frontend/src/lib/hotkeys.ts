@@ -3,6 +3,7 @@ import { route } from "./router.svelte";
 import { app } from "./state.svelte";
 
 export const SHORTCUTS: [string, string][] = [
+  ["Ctrl K  или  /", "поиск и команды: раздел, кит, событие"],
   ["B", "купить по открытому сигналу"],
   ["S", "пропустить сигнал"],
   ["J / K", "следующий / предыдущий сигнал"],

@@ -1,7 +1,7 @@
 // Модуль «События»: общие помощники экранов.
 import { TOPICS } from "./format";
 
-export const LINE_COLORS = ["#C8A464", "#6FB3E0", "#E58C4A", "#86C9A8", "#D98AA6", "#A99BE0", "#E3D27A", "#7FC4C0"];
+export const LINE_COLORS = ["#8B7CFF", "#60A5FA", "#FF8A4C", "#2EE59D", "#FF7AB6", "#C4B5FD", "#FFC24B", "#5EE1FF"];
 
 export const TOPIC_LABEL: Record<string, string> = Object.fromEntries([...TOPICS, ["other", "Разное"]]);
 

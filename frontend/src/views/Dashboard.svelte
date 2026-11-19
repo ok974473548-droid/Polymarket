@@ -3,7 +3,6 @@
   import Countdown from "../components/Countdown.svelte";
   import Flash from "../components/Flash.svelte";
   import LiveBadge from "../components/LiveBadge.svelte";
-  import Notifications from "../components/Notifications.svelte";
   import Seal from "../components/Seal.svelte";
   import { untrack } from "svelte";
   import { api } from "../lib/api";
@@ -29,7 +28,6 @@
 
   const lim = $derived(d.data?.daily_limit || { spent_usd: 0, limit_usd: 0 });
   const used = $derived(lim.limit_usd ? Math.min(100, (lim.spent_usd / lim.limit_usd) * 100) : 0);
-  const ai = $derived(app.status?.ai);
 
   function toggleSound() {
     sound = !sound;
@@ -68,13 +66,6 @@
       <div class="lede">Ставки китов из вашего списка, которые прошли проверку. Решение за вами, пока не включено автоподтверждение.</div>
     </div>
     <div class="row" style="position:relative">
-      {#if data.mode === "paper"}<a class="chip a" style="text-decoration:none" href="#/trial">Пробный режим, деньги виртуальные</a>{/if}
-      {#if ai}
-        <a class="chip {ai.effective === 'ai' ? 'i' : 'n'}" style="text-decoration:none" href="#/settings" title="Режим принятия решений"
-          >{ai.effective === "ai" ? "С ИИ" : "Без ИИ, решаете вы"}</a
-        >
-      {/if}
-      <Notifications unread={data.unread_notifications} />
       <button class="btn icon" aria-pressed={sound} title="Звук при новом сигнале" aria-label="Звук при новом сигнале" onclick={toggleSound} data-act="sound">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M11 5 6 9H3v6h3l5 4z" />

@@ -12,6 +12,7 @@
     if ((i.kind === "whale_check" || i.kind === "whale_status") && i.ref) return "#/whales/" + encodeURIComponent(i.ref);
     if (i.kind === "whale_exit" || i.kind === "settled") return "#/positions";
     if (i.kind === "weekly") return "#/results/week";
+    if (i.link) return String(i.link).replace(/^\//, "");
     return null;
   }
 

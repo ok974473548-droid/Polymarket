@@ -13,7 +13,7 @@
   const marks = $derived.by(() => {
     const out: Mark[] = [];
     if (m?.whale_mark && m.whale_mark.ts && m.whale_mark.price !== null)
-      out.push({ ts: m.whale_mark.ts, price: m.whale_mark.price, color: "#C8A464", label: "кит купил" });
+      out.push({ ts: m.whale_mark.ts, price: m.whale_mark.price, color: "#8B7CFF", label: "кит купил" });
     if (ourMark) out.push(ourMark);
     return out;
   });

@@ -1,8 +1,8 @@
 // Service worker WhaleFollow: push-уведомления и быстрый запуск установленного приложения.
 // Кэш: файлы сборки /assets/* (их имена меняются с каждой версией) и оболочка index.html на случай
 // плохой связи. Данные /api/* никогда не кэшируются — на экране всегда свежие цифры.
-const SHELL = "wf-shell-v1";
-const ASSETS = "wf-assets-v1";
+const SHELL = "wf-shell-v2";
+const ASSETS = "wf-assets-v2";
 
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (e) => {

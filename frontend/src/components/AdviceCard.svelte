@@ -102,9 +102,9 @@
 
 <style>
   .adv-card{gap:10px;border-color:var(--line)}
-  .adv-card.has{border-color:rgba(200,164,100,.45);box-shadow:0 0 0 1px rgba(200,164,100,.15) inset}
+  .adv-card.has{border-color:rgba(139,124,255,.45);box-shadow:0 0 0 1px rgba(139,124,255,.15) inset}
   .adv-what{font-size:24px;margin:0}
-  .adv-arb{display:flex;flex-direction:column;gap:6px;padding:12px 14px;border:1px solid rgba(134,201,168,.45);border-radius:10px;background:rgba(134,201,168,.06)}
+  .adv-arb{display:flex;flex-direction:column;gap:6px;padding:12px 14px;border:1px solid rgba(46,229,157,.45);border-radius:10px;background:rgba(46,229,157,.06)}
   .adv-what .sub{font:400 15px/1.3 var(--sans, inherit)}
   @media (max-width:600px){ .adv-what{font-size:20px} .adv-sc{gap:14px!important} }
 </style>

@@ -126,12 +126,12 @@
         <Plot
           xs={c.ts}
           height={narrow ? 300 : 240}
-          band={{ lo: c.random_p10, hi: c.random_p90, color: "#93A7AA" }}
+          band={{ lo: c.random_p10, hi: c.random_p90, color: "#8A93A6" }}
           lines={[
-            { label: "Идеал задним числом", values: c.ideal, color: "#E58C7A", dash: [5, 5], width: 1.6 },
-            { label: "Случайный выбор", values: c.random_median, color: "#93A7AA", width: 1.6 },
-            { label: "Копировать всех", values: c.all, color: "#86C9A8", width: 1.8 },
-            { label: "Ротация", values: c.rotation, color: "#C8A464", width: 2.6 },
+            { label: "Идеал задним числом", values: c.ideal, color: "#FF5C7A", dash: [5, 5], width: 1.6 },
+            { label: "Случайный выбор", values: c.random_median, color: "#8A93A6", width: 1.6 },
+            { label: "Копировать всех", values: c.all, color: "#2EE59D", width: 1.8 },
+            { label: "Ротация", values: c.rotation, color: "#8B7CFF", width: 2.6 },
           ]}
           fmtY={(x) => signedPct(x)}
           label="Кривые ротации"
@@ -141,7 +141,7 @@
       <div class="sub">Недостаточно данных для графика</div>
     {/if}
     <div class="rot-legend">
-      {#each [["#C8A464", "Ротация по форме", t.rotation], ["#86C9A8", "Копировать всех", t.all], ["#93A7AA", "Случайный выбор (медиана)", t.random_median], ["#E58C7A", "Идеал задним числом — недостижимо", t.ideal]] as [col, name, val] (name)}
+      {#each [["#8B7CFF", "Ротация по форме", t.rotation], ["#2EE59D", "Копировать всех", t.all], ["#8A93A6", "Случайный выбор (медиана)", t.random_median], ["#FF5C7A", "Идеал задним числом — недостижимо", t.ideal]] as [col, name, val] (name)}
         <span><i style="background:{col}"></i>{name} <b class={tone(val as number)}>{signedPct(val as number)}</b></span>
       {/each}
     </div>

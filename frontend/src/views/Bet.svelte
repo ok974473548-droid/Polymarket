@@ -20,8 +20,8 @@
   const marks = $derived.by(() => {
     const out: Mark[] = [];
     if (!b) return out;
-    if (b.marks.whale.ts && b.marks.whale.price !== null) out.push({ ts: b.marks.whale.ts, price: b.marks.whale.price, color: "#C8A464", label: "кит купил" });
-    if (b.marks.ours.ts && b.marks.ours.price !== null) out.push({ ts: b.marks.ours.ts, price: b.marks.ours.price, color: "#A9CFE3", label: "мы купили" });
+    if (b.marks.whale.ts && b.marks.whale.price !== null) out.push({ ts: b.marks.whale.ts, price: b.marks.whale.price, color: "#8B7CFF", label: "кит купил" });
+    if (b.marks.ours.ts && b.marks.ours.price !== null) out.push({ ts: b.marks.ours.ts, price: b.marks.ours.price, color: "#5EE1FF", label: "мы купили" });
     return out;
   });
 

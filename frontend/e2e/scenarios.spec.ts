@@ -19,7 +19,7 @@ test("первый экран: сигналы, меню и живое состо
 test("диагностика: сводка, процессы, данные и отчёт", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto("/#/settings");
-  await page.getByRole("link", { name: /Диагностика/ }).click();
+  await page.locator("#main").getByRole("link", { name: /Диагностика/ }).click();
   await expect(page).toHaveURL(/#\/diagnostics$/);
   await expect(page.getByRole("heading", { name: "Диагностика" })).toBeVisible();
   await expect(page.locator(".statement .figure")).toHaveText("4 из 4");
@@ -123,7 +123,7 @@ test("горячие клавиши и боковая панель игрока"
 
 test("плагины: состояние, переключатель и бэктест стратегии", async ({ page }) => {
   await page.goto("/#/settings");
-  await page.getByRole("link", { name: /Плагины/ }).click();
+  await page.locator("#main").getByRole("link", { name: /Плагины/ }).click();
   await expect(page).toHaveURL(/#\/plugins$/);
   for (const h of ["Источники данных", "Уведомления", "Стратегии"]) await expect(page.getByRole("heading", { name: h })).toBeVisible();
   const cons = page.locator('[data-plugin="consensus"]');

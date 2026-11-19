@@ -32,18 +32,18 @@
       const lc = await import("lightweight-charts");
       if (!alive || !box) return;
       const css = getComputedStyle(document.documentElement);
-      const ink = css.getPropertyValue("--ink-3").trim() || "#93A7AA";
+      const ink = css.getPropertyValue("--ink-3").trim() || "#8A93A6";
       const chart = lc.createChart(box, {
         height,
         autoSize: true,
         layout: {
           background: { type: lc.ColorType.Solid, color: "transparent" },
           textColor: ink,
-          fontFamily: "Golos Text, system-ui, sans-serif",
+          fontFamily: "JetBrains Mono, ui-monospace, monospace",
           fontSize: 12,
           attributionLogo: true, // лицензия Apache-2.0: ссылка на TradingView
         },
-        grid: { vertLines: { visible: false }, horzLines: { color: "rgba(236,230,218,.07)", style: lc.LineStyle.Dotted } },
+        grid: { vertLines: { visible: false }, horzLines: { color: "rgba(226,232,240,.07)", style: lc.LineStyle.Dotted } },
         rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.08, bottom: 0.04 } },
         timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
         crosshair: { mode: lc.CrosshairMode.Magnet },

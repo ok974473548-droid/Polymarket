@@ -41,8 +41,8 @@
     (async () => {
       const { default: uPlot } = await import("uplot");
       if (!alive || !box) return;
-      const ink = "#93A7AA";
-      const grid = { stroke: "rgba(236,230,218,.07)", width: 1 };
+      const ink = "#8A93A6";
+      const grid = { stroke: "rgba(226,232,240,.07)", width: 1 };
       type S = Record<string, unknown>;
       // ось X: в подписи под графиком — дата точки под курсором (без служебного «Value»)
       const series: S[] = [{ label: "Дата", value: (_u: unknown, v: number | null) => (v === null || v === undefined ? "—" : fmtX(v)) }];
@@ -74,8 +74,8 @@
         axes: mini
           ? [{ show: false }, { show: false }]
           : [
-              { stroke: ink, grid, ticks: { show: false }, values: (_u: unknown, vals: number[]) => vals.map((t) => fmtX(t)), font: "12px Golos Text" },
-              { stroke: ink, grid, ticks: { show: false }, values: (_u: unknown, vals: number[]) => vals.map((v) => fmtY(v)), size: 64, font: "12px Golos Text" },
+              { stroke: ink, grid, ticks: { show: false }, values: (_u: unknown, vals: number[]) => vals.map((t) => fmtX(t)), font: "11.5px JetBrains Mono" },
+              { stroke: ink, grid, ticks: { show: false }, values: (_u: unknown, vals: number[]) => vals.map((v) => fmtY(v)), size: 64, font: "11.5px JetBrains Mono" },
             ],
         series,
       };

@@ -15,6 +15,23 @@ export interface SigNav {
   size?: number;
 }
 
+function pref(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+/** Запомнить настройку интерфейса этого устройства (без хранилища — просто не запоминаем). */
+export function savePref(key: string, value: boolean): void {
+  try {
+    localStorage.setItem(key, value ? "1" : "0");
+  } catch {
+    /* приватный режим */
+  }
+}
+
 export const app = $state({
   status: null as Json,
   statusError: false,
@@ -29,6 +46,10 @@ export const app = $state({
   toastSeq: 0,
   panel: null as null | { kind: "player" | "market"; id: string; token?: string },
   shortcuts: false,
+  palette: false, // палитра команд (Ctrl+K)
+  more: false, // телефон: лист «Ещё» со всеми разделами
+  rail: pref("wf.rail") === "1", // компьютер: меню свёрнуто до иконок
+  hints: pref("wf.hints") === "1", // показывать длинные пояснения на экранах
   now: Date.now(), // часы для обратных отсчётов (раз в секунду)
 });
 

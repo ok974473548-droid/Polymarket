@@ -169,7 +169,7 @@
     <div class="top"><h2 style="margin:0">Баланс</h2><span class="sub">Наибольшая просадка: {t.max_drawdown_pct}%</span></div>
     {#if t.series.length > 1}
       {#key t}
-        <Plot xs={t.series.map((p: Json) => p.ts)} lines={[{ label: "Баланс", values: t.series.map((p: Json) => p.balance_usd), color: "#C8A464", fill: true }]}
+        <Plot xs={t.series.map((p: Json) => p.ts)} lines={[{ label: "Баланс", values: t.series.map((p: Json) => p.balance_usd), color: "#8B7CFF", fill: true }]}
           height={150} fmtY={(x) => money(x)} label="Баланс в пробном режиме" />
       {/key}
     {:else}
