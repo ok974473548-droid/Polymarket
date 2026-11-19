@@ -1,0 +1,1 @@
+import{D as e,E as t,O as n,S as r,U as i}from"./disclose-version-CgP-X8-G.js";var a=n(`<span class="chip g">кит держит</span>`),o=n(`<span class="chip a">кит вышел</span>`);function s(n,s){var c=e(),l=i(c),u=e=>{var n=a();t(e,n)},d=e=>{var n=o();t(e,n)};r(l,e=>{s.st===`держит`?e(u):s.st===`вышел`&&e(d,1)}),t(n,c)}export{s as t};

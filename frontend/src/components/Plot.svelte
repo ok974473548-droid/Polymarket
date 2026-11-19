@@ -21,6 +21,7 @@
     fmtY = (v: number) => String(v),
     fmtX = (t: number) => new Date(t * 1000).toLocaleDateString("ru-RU", { day: "numeric", month: "short" }),
     label = "",
+    minSpan = 0,
   }: {
     xs: number[];
     lines: Line[];
@@ -30,6 +31,7 @@
     fmtY?: (v: number) => string;
     fmtX?: (t: number) => string;
     label?: string;
+    minSpan?: number; // минимальный размах шкалы Y: мелкое изменение не выглядит обрывом
   } = $props();
 
   let box: HTMLDivElement | undefined = $state();
@@ -69,7 +71,20 @@
         height,
         legend: { show: !mini && lines.length > 1, live: true }, // одна линия — подпись не нужна
         cursor: mini ? { show: false } : { points: { size: 6 }, drag: { x: true, y: false } },
-        scales: { x: { time: false } },
+        scales: {
+          x: { time: false },
+          ...(minSpan > 0
+            ? {
+                y: {
+                  range: (_u: unknown, lo: number, hi: number): [number, number] => {
+                    const mid = (lo + hi) / 2,
+                      half = Math.max((hi - lo) / 2, minSpan / 2) * 1.1;
+                    return [mid - half, mid + half];
+                  },
+                },
+              }
+            : {}),
+        },
         bands: band ? [{ series: [2, 1], fill: band.color + "22" }] : [],
         axes: mini
           ? [{ show: false }, { show: false }]

@@ -5,7 +5,8 @@
   import LiveBadge from "../components/LiveBadge.svelte";
   import Seal from "../components/Seal.svelte";
   import { untrack } from "svelte";
-  import { api } from "../lib/api";
+  import { api, type Json } from "../lib/api";
+  import CountUp from "../components/CountUp.svelte";
   import { confirmDialog } from "../lib/dialog.svelte";
   import { cents, money, signedPct, tone } from "../lib/format";
   import { refreshStatus } from "../lib/live";
@@ -26,6 +27,15 @@
     app.seenPending = ids;
   });
 
+  // кривая баланса за 30 дней (как на «Итогах») — догружается после главного
+  let curve = $state<Json[] | null>(null);
+  $effect(() => {
+    void app.refresh;
+    api("/results?period=month").then(
+      (r) => (curve = r.series || null),
+      () => {},
+    );
+  });
   const lim = $derived(d.data?.daily_limit || { spent_usd: 0, limit_usd: 0 });
   const used = $derived(lim.limit_usd ? Math.min(100, (lim.spent_usd / lim.limit_usd) * 100) : 0);
 
@@ -78,7 +88,7 @@
   <section class="statement" aria-label="Баланс">
     <div>
       <div class="label">Баланс</div>
-      <div class="figure">{money(data.balance_usd)}</div>
+      <div class="figure"><CountUp value={data.balance_usd} format={(v) => money(v)} /></div>
       <div class="sub" style="margin-top:10px">Лимит на сегодня: потрачено {money(lim.spent_usd)} из {money(lim.limit_usd)}</div>
       <div class="bar" style="margin-top:8px;max-width:320px" role="progressbar" aria-label="Потрачено от дневного лимита"
         aria-valuemin="0" aria-valuemax={lim.limit_usd} aria-valuenow={lim.spent_usd}><span style="width:{used}%"></span></div>
@@ -88,6 +98,13 @@
       <div class="fact"><div class="label">Открытых ставок</div><div class="v">{data.open_bets}</div></div>
       <div class="fact"><div class="label">Ждут решения</div><div class="v">{data.pending.length}</div></div>
     </div>
+    {#if curve && curve.length > 2}
+      <div class="st-curve" aria-label="Баланс за 30 дней">
+        {#await import("../components/Plot.svelte") then m}
+          <m.default mini height={84} minSpan={Math.max(10, Math.abs(data.balance_usd) * 0.1)} xs={curve.map((p: Json) => p.ts)} lines={[{ label: "Баланс", values: curve.map((p: Json) => p.balance_usd), color: "#8B7CFF", fill: true }]} />
+        {/await}
+      </div>
+    {/if}
   </section>
   <div class="top"><h2>Ждут вашего решения</h2><LiveBadge /></div>
   {#if data.pending.length}

@@ -2,6 +2,7 @@
   // Список китов: статус, выигрыши, прибыль, динамика, переключатель копирования
   import Avatar from "../components/Avatar.svelte";
   import Banners from "../components/Banners.svelte";
+  import Icon from "../components/Icon.svelte";
   import Seal from "../components/Seal.svelte";
   import Spark from "../components/Spark.svelte";
   import { api, type Json } from "../lib/api";
@@ -13,6 +14,35 @@
   const d = loader(() => "/whales");
   const items = $derived((d.data?.items || []) as Json[]);
   const copying = $derived(items.filter((r) => r.copy).length);
+
+  // поиск, фильтр и сортировка — в браузере, список китов небольшой
+  let q = $state("");
+  let show = $state<"all" | "copy" | "watch">("all");
+  let sortKey = $state<"" | "win" | "bets" | "pnl">("");
+  let sortDir = $state(-1);
+  const SORT: Record<string, (r: Json) => number> = {
+    win: (r) => (r.stats || {}).win_pct ?? -1,
+    bets: (r) => (r.stats || {}).bets ?? 0,
+    pnl: (r) => (r.stats || {}).pnl_usd ?? -1e12,
+  };
+  const shown = $derived.by(() => {
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    let out = items.filter((r) => (show === "all" ? true : show === "copy" ? r.copy : !r.copy));
+    if (words.length) {
+      out = out.filter((r) => {
+        const t = `${view(r).name || ""} ${r.name} ${r.entity_id} ${(r.categories || []).join(" ")}`.toLowerCase();
+        return words.every((w) => t.includes(w));
+      });
+    }
+    if (sortKey) out = [...out].sort((a, b) => sortDir * (SORT[sortKey](a) - SORT[sortKey](b)));
+    return out;
+  });
+  const filtered = $derived(q.trim() !== "" || show !== "all");
+  function sortBy(k: "win" | "bets" | "pnl") {
+    if (sortKey === k) sortDir = -sortDir;
+    else (sortKey = k), (sortDir = -1);
+  }
+  const arr = (k: string) => (sortKey === k ? (sortDir < 0 ? "▼" : "▲") : "");
   const openSum = $derived(items.reduce((a, r) => a + ((r.stats || {}).open || 0), 0));
 
   // имена и аватары из готовых данных Polymarket — догружаются после показа списка, по 4 за раз
@@ -110,13 +140,31 @@
       <a class="btn" href="#/whales/add">Посмотреть</a>
     </div>
   {/if}
+  {#if items.length > 1}
+    <div class="toolbar">
+      <label class="search"><Icon name="search" size={16} /><input class="inp" type="search" placeholder="Имя, код или тема" aria-label="Найти кита" bind:value={q} /></label>
+      <div class="seg sm" role="group" aria-label="Каких китов показать">
+        <button aria-pressed={show === "all"} onclick={() => (show = "all")}>Все {items.length}</button>
+        <button aria-pressed={show === "copy"} onclick={() => (show = "copy")}>Копируем {copying}</button>
+        <button aria-pressed={show === "watch"} onclick={() => (show = "watch")}>Следим {items.length - copying}</button>
+      </div>
+      {#if filtered}<span class="filter-note">Показано {shown.length} из {items.length}<button class="link inline" onclick={() => ((q = ""), (show = "all"))}>сбросить</button></span>{/if}
+    </div>
+  {/if}
   <div class="ledger">
     {#if items.length}
       <div class="ledger-head whales-grid">
-        <span>Кит</span><span>Статус</span><span class="n">Выигрыши</span><span class="n hide-md">Ставок</span><span class="n">Прибыль кита</span><span class="hide-md">Динамика</span><span>Копирование</span>
+        <span>Кит</span><span>Статус</span>
+        <span class="n"><button class="sort-h" class:on={sortKey === "win"} onclick={() => sortBy("win")}>Выигрыши<span class="arr">{arr("win")}</span></button></span>
+        <span class="n hide-md"><button class="sort-h" class:on={sortKey === "bets"} onclick={() => sortBy("bets")}>Ставок<span class="arr">{arr("bets")}</span></button></span>
+        <span class="n"><button class="sort-h" class:on={sortKey === "pnl"} onclick={() => sortBy("pnl")}>Прибыль кита<span class="arr">{arr("pnl")}</span></button></span>
+        <span class="hide-md">Динамика</span><span>Копирование</span>
       </div>
     {/if}
-    {#each items as r (r.entity_id)}
+    {#if items.length && !shown.length}
+      <div class="ledger-empty">Никого не нашлось. <button class="link inline" onclick={() => ((q = ""), (show = "all"))}>Показать всех</button></div>
+    {/if}
+    {#each shown as r (r.entity_id)}
       {@const st = r.stats || {}}
       {@const v = view(r)}
       <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -152,11 +200,14 @@
         </div>
       </div>
     {:else}
+      {#if !items.length}
       <div class="ledger-empty">
-        <div style="font:500 24px/1.2 var(--serif);color:var(--pearl)">Список пуст</div>
+        <div class="empty-ic" style="margin:0 auto 14px;width:56px;height:56px;border-radius:16px;display:flex;align-items:center;justify-content:center;color:#fff;background:var(--grad)"><Icon name="whale" size={26} /></div>
+        <div style="font:700 20px/1.2 var(--sans);color:var(--pearl)">Список пуст</div>
         <div style="margin:8px auto 16px;max-width:50ch">Добавьте кита по адресу кошелька или ссылке на профиль. Данные собираются только по китам из этого списка.</div>
         <a class="btn p" href="#/whales/add">Добавить кита</a>
       </div>
+      {/if}
     {/each}
   </div>
 {/if}

@@ -11,7 +11,7 @@
   --raised:#171B25;       /* выделенное внутри панели */
   --well:#0C0F15;         /* поля ввода */
   --pearl:#EEF1F7;        /* главный текст и цифры */
-  --ink:#E4E8F0; --ink-2:#B3BBCB; --muted:#858FA3; --faint:#5A6375;
+  --ink:#E4E8F0; --ink-2:#B3BBCB; --muted:#8C96AA; --faint:#7A8499; /* мелкий текст ≥ 4,5:1 по WCAG */
   --brass:#8B7CFF; --brass-2:#B4A9FF; --brass-ink:#0B0820;     /* акцент (имена прежние — экраны не меняются) */
   --cyan:#5EE1FF;
   --grad:linear-gradient(135deg,#8B7CFF 0%,#5EE1FF 100%);
@@ -730,3 +730,43 @@ body.drawer-open{overflow:hidden}
 .fact{position:relative}
 .kpis{background:var(--line);border-color:var(--line)}
 .live-badge.on .pulse{background:var(--good)}
+
+/* ---------------- 2.1: таблицы, загрузка, телефон ---------------- */
+/* заголовки таблиц не уезжают при прокрутке (NN/g: freeze headers) */
+@media (min-width:861px){ .ledger{overflow:visible} .ledger>.ledger-head:first-child{position:sticky;top:var(--top-h);z-index:5;border-radius:var(--r-lg) var(--r-lg) 0 0;
+  background:rgba(14,17,24,.94);backdrop-filter:blur(10px)} }
+.ledger>:last-child{border-radius:0 0 var(--r-lg) var(--r-lg)}
+/* скелетон: карточка-заготовка мерцает, текст остаётся для экранного диктора */
+.card.skeleton{position:relative;overflow:hidden;color:var(--faint);min-height:120px}
+.card.skeleton::after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,transparent 20%,rgba(139,124,255,.07) 50%,transparent 80%) 0 0/250% 100%;animation:shimmer 1.4s linear infinite}
+/* панель инструментов списка: поиск, фильтры, сортировка */
+.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.toolbar .search{position:relative;flex:1;min-width:200px;max-width:360px}
+.toolbar .search .ico{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--faint);pointer-events:none}
+.toolbar .search .inp{width:100%;padding-left:38px}
+.sort-h{background:none;border:0;padding:0;font:inherit;color:inherit;text-transform:inherit;letter-spacing:inherit;cursor:pointer;display:inline-flex;gap:4px;align-items:center}
+.sort-h:hover,.sort-h.on{color:var(--brass-2)}
+.sort-h .arr{font-family:var(--mono);font-size:10px;opacity:.8}
+.filter-note{font-size:12.5px;color:var(--muted)}
+.filter-note button{margin-left:6px}
+/* пустое состояние: значок, что это, и прямое действие (NN/g) */
+.empty .empty-ic{width:56px;height:56px;border-radius:16px;display:inline-flex;align-items:center;justify-content:center;color:#fff;background:var(--grad);
+  box-shadow:0 12px 30px -10px rgba(139,124,255,.8)}
+/* кривая баланса в главной карточке */
+.st-curve{grid-column:1/-1;height:84px;margin:4px -6px -6px;opacity:.95}
+.st-curve .uplot-box,.st-curve .u-wrap{height:84px}
+/* потянуть вниз — обновить (телефон и приложение Android) */
+.ptr{position:fixed;left:50%;top:calc(var(--top-h) + 6px);z-index:28;width:38px;height:38px;margin-left:-19px;border-radius:99px;display:flex;align-items:center;justify-content:center;
+  background:#171B25;border:1px solid var(--line-strong);color:var(--brass-2);box-shadow:var(--shadow);opacity:0;transform:translateY(-30px) scale(.8);pointer-events:none;transition:opacity .15s}
+.ptr.go .ico{animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (max-width:860px){
+  .ptr{top:calc(56px + env(safe-area-inset-top,0px) + 6px)}
+  /* главное действие формы — внизу, в зоне большого пальца */
+  .savebar{position:sticky;bottom:calc(var(--nav-h) + 8px + env(safe-area-inset-bottom,0px));z-index:12;margin:0 -4px;padding:10px;border-radius:16px;
+    background:rgba(17,20,27,.92);backdrop-filter:blur(14px);border:1px solid var(--line-strong);box-shadow:0 18px 40px -12px rgba(0,0,0,.8);display:flex;gap:8px}
+  .savebar .btn{flex:1}
+  .top-actions{display:none}
+  .toolbar .search{max-width:none;flex-basis:100%}
+}
+@media (min-width:861px){ .savebar{display:none} }

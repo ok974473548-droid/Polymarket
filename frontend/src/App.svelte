@@ -13,7 +13,7 @@
   import { refreshStatus, startLive, startPolling } from "./lib/live";
   import { ALL_NAV, NAV, crumbs, type NavItem } from "./lib/nav";
   import { match, route } from "./lib/router.svelte";
-  import { app, savePref } from "./lib/state.svelte";
+  import { app, savePref, softRefresh } from "./lib/state.svelte";
   import Dashboard from "./views/Dashboard.svelte";
   import Signal from "./views/Signal.svelte";
 
@@ -129,6 +129,48 @@
     el.style.setProperty("--my", `${e.clientY - r.top}px`);
   }
 
+  // телефон: потянуть экран вниз — обновить (в приложении Android и установленном PWA нет кнопки браузера)
+  let pull = $state(0);
+  let pulling = $state(false);
+  let y0: number | null = null;
+  const PULL = 72;
+  function blocked(): boolean {
+    return app.more || app.palette || !!app.panel || !!document.querySelector("dialog[open]") || app.locked;
+  }
+  function tStart(e: TouchEvent) {
+    y0 = window.scrollY <= 0 && !blocked() && e.touches.length === 1 ? e.touches[0].clientY : null;
+  }
+  function tMove(e: TouchEvent) {
+    if (y0 === null || pulling) return;
+    const dy = e.touches[0].clientY - y0;
+    pull = dy > 0 && window.scrollY <= 0 ? Math.min(110, dy * 0.5) : 0;
+  }
+  async function tEnd() {
+    if (y0 === null) return;
+    y0 = null;
+    if (pull >= PULL * 0.75) {
+      pulling = true;
+      pull = PULL * 0.75;
+      buzz(12);
+      softRefresh();
+      await refreshStatus();
+      await new Promise((r) => setTimeout(r, 500));
+      pulling = false;
+    }
+    pull = 0;
+  }
+  // короткий отклик вибрацией на главных кнопках (если телефон умеет)
+  function buzz(ms: number) {
+    try {
+      if (matchMedia("(pointer: coarse)").matches) navigator.vibrate?.(ms);
+    } catch {
+      /* нет вибрации */
+    }
+  }
+  function tap(e: MouseEvent) {
+    if ((e.target as HTMLElement | null)?.closest(".btn.p,.btn.danger,.nav-a,.sheet-a")) buzz(8);
+  }
+
   onMount(async () => {
     try {
       const a = await (await fetch("/api/auth", { credentials: "same-origin" })).json();
@@ -146,7 +188,13 @@
   });
 </script>
 
-<svelte:window onkeydown={onKey} onpointermove={glow} />
+<svelte:window onkeydown={onKey} onpointermove={glow} ontouchstart={tStart} ontouchmove={tMove} ontouchend={tEnd} onclick={tap} />
+
+{#if pull > 0 || pulling}
+  <div class="ptr" class:go={pulling} aria-hidden="true" style="opacity:{Math.min(1, pull / (PULL * 0.75))};transform:translateY({pull - 30}px) rotate({pull * 4}deg)">
+    <Icon name="refresh" size={18} />
+  </div>
+{/if}
 
 <div class="aura" aria-hidden="true"></div>
 <div class="app" id="app">

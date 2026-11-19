@@ -1,1 +1,0 @@
-import{D as e,J as t,M as n,N as r,j as i}from"./api-BBictJxk.js";var a=r(`<span class="chip g">кит держит</span>`),o=r(`<span class="chip a">кит вышел</span>`);function s(r,s){var c=n(),l=t(c),u=e=>{var t=a();i(e,t)},d=e=>{var t=o();i(e,t)};e(l,e=>{s.st===`держит`?e(u):s.st===`вышел`&&e(d,1)}),i(r,c)}export{s as t};

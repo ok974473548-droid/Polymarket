@@ -132,7 +132,7 @@
   <form id="settings-form" class="col" onsubmit={save}>
     <div class="top">
       <h1>Настройки</h1>
-      <div class="row"><button type="button" class="btn" onclick={() => go("#/settings")}>Отменить</button><button class="btn p" disabled={saving}>Сохранить</button></div>
+      <div class="row top-actions"><button type="button" class="btn" onclick={() => go("#/settings")}>Отменить</button><button class="btn p" disabled={saving}>Сохранить</button></div>
     </div>
     <div class="grid2">
       <div class="col">
@@ -353,5 +353,6 @@
         </div>
       </div>
     </div>
+    <div class="savebar"><button type="button" class="btn" onclick={() => go("#/settings")}>Отменить</button><button class="btn p" disabled={saving}>Сохранить</button></div>
   </form>
 {/if}
