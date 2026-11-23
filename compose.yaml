@@ -1,0 +1,14 @@
+services:
+  terminal:
+    build: .
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - kontur-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/api/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+volumes:
+  kontur-data:

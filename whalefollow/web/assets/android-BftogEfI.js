@@ -1,1 +1,0 @@
-function e(){return window.WFAndroid||null}export{e as t};
