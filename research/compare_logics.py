@@ -18,6 +18,7 @@ Run: PYTHONPATH=. python research/compare_logics.py data/audit.sqlite3 out.json 
 import json
 import math
 import multiprocessing as mp
+import os
 import random
 import statistics
 import sys
@@ -27,7 +28,8 @@ from kontur import db as store
 from kontur import scout
 
 DAY = 86400
-FEE = 0.05
+FEE = float(os.environ.get("CMP_FEE", "0.05"))       # taker fee rate used for copies
+NO_SLIP = os.environ.get("CMP_NO_SLIP") == "1"     # 1 = copies at the leader's own price (gross of costs)
 WINDOWS = [150, 120, 90, 60]  # selection date T = NOW - d days; copies judged on bets opened in [T, T+30d)
 HORIZON = 30 * DAY
 ROSTER = 8
@@ -47,7 +49,8 @@ def load_wallet(db, w, name, metrics):
         if b["state"] == "open" and b["end"] and b["end"] < NOW - 7 * DAY and b["mark"] is not None and (b["mark"] <= 0.01 or b["mark"] >= 0.99):
             b["state"], b["exit"], b["closed"] = "resolved", 1.0 if b["mark"] >= 0.5 else 0.0, b["end"]
     measured = m.get("slip_measured")
-    return {"name": name or w[:10], "bets": bets, "slip": max(scout.DEFAULT_SLIP, measured) if measured is not None else 0.01,
+    slip = 0.0 if NO_SLIP else (max(scout.DEFAULT_SLIP, measured) if measured is not None else 0.01)
+    return {"name": name or w[:10], "bets": bets, "slip": slip,
             "slip_measured": measured}
 
 
@@ -312,6 +315,7 @@ def main():
     elif has_u:
         where = "" if UNIVERSE == "all" else f"WHERE u.source='{'markets' if UNIVERSE == 'markets' else 'leaderboard'}'"
         items = db.execute(f"""SELECT u.wallet, COALESCE(s.name, ''), s.metrics FROM audit_universe u
+                               JOIN audit_done d ON d.wallet=u.wallet AND d.n>0
                                LEFT JOIN scout_wallets s ON s.wallet=u.wallet {where}""").fetchall()
     else:
         items = db.execute("SELECT wallet, name, metrics FROM scout_wallets WHERE metrics IS NOT NULL").fetchall()
