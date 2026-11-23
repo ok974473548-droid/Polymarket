@@ -10,9 +10,9 @@ import re
 import threading
 import time
 from datetime import datetime, timezone
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+from . import net
 
 GAMMA = "https://gamma-api.polymarket.com"
 CLOB = "https://clob.polymarket.com"
@@ -36,11 +36,6 @@ class UpstreamError(RuntimeError):
     """The public source failed or answered in an unexpected format."""
 
 
-class _NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
 _pace_lock = threading.Lock()
 _last_call = {}
 
@@ -61,33 +56,36 @@ def _cool_down(host, seconds):
 
 
 def fetch(url, *, accept="application/json", timeout=15, gap=0.0, raw=False, limit=MAX_READ):
+    """GET a Polymarket (or other public) URL over a pooled keep-alive connection; JSON by default.
+
+    Redirects are not followed. 404 raises LookupError, other failures UpstreamError; HTTP 429 waits
+    (Retry-After) for every paced caller of the host and retries.
+    """
     host = url.split("/")[2]
     if gap:
         _pace(host, gap)
     tries = 3 if gap else 2
     for attempt in range(tries):
-        req = Request(url, headers={"Accept": accept, "User-Agent": USER_AGENT})
         try:
-            with build_opener(_NoRedirect).open(req, timeout=timeout) as response:
-                body = response.read(limit + 1)
-                ctype = response.headers.get("Content-Type", "")
-            break
-        except HTTPError as exc:
-            if exc.code == 429 and attempt < tries - 1:
-                retry = exc.headers.get("Retry-After")
-                wait = min(6.0, float(retry)) if retry and retry.replace(".", "", 1).isdigit() else 2.0 * (attempt + 1)
-                _cool_down(host, wait)
-                time.sleep(wait)
-                continue
-            if exc.code == 404:
-                raise LookupError("Polymarket не нашёл запрошенный объект") from exc
-            raise UpstreamError(f"Источник ответил HTTP {exc.code}") from exc
-        except (URLError, OSError, TimeoutError) as exc:
+            status, headers, body = net.get(url, headers={"Accept": accept, "User-Agent": USER_AGENT},
+                                            timeout=timeout, limit=limit)
+        except net.NetError as exc:
             raise UpstreamError("Источник недоступен: проверьте подключение к интернету") from exc
+        if status == 429 and attempt < tries - 1:
+            retry = headers.get("Retry-After")
+            wait = min(6.0, float(retry)) if retry and retry.replace(".", "", 1).isdigit() else 2.0 * (attempt + 1)
+            _cool_down(host, wait)
+            time.sleep(wait)
+            continue
+        if status == 404:
+            raise LookupError("Polymarket не нашёл запрошенный объект")
+        if status >= 300:
+            raise UpstreamError(f"Источник ответил HTTP {status}")
+        break
     if len(body) > limit:
         raise UpstreamError("Слишком большой ответ источника")
     if raw:
-        return body, ctype
+        return body, headers.get("Content-Type", "")
     try:
         return json.loads(body)
     except ValueError as exc:
@@ -299,6 +297,24 @@ def markets_by_condition(conditions):
     params = [("condition_ids", c) for c in conditions] + [("limit", 50)]
     rows = fetch(GAMMA + "/markets?" + urlencode(params), gap=0.2)
     return {text(r.get("conditionId"), 80).lower(): r for r in rows if isinstance(r, dict)} if isinstance(rows, list) else {}
+
+
+_token_markets = {}
+
+
+def market_by_token(tok):
+    """Gamma market that an outcome token belongs to (kept in memory: a token never changes market)."""
+    tok = token(tok)
+    if tok in _token_markets:
+        return _token_markets[tok]
+    rows = fetch(GAMMA + "/markets?" + urlencode({"clob_token_ids": tok}), gap=0.2)
+    raw = rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], dict) else None
+    if raw is None:
+        raise LookupError("Рынок этого исхода не найден")
+    if len(_token_markets) > 5000:
+        _token_markets.clear()
+    _token_markets[tok] = raw
+    return raw
 
 
 def search(db, phrase, limit=8):

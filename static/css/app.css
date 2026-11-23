@@ -835,3 +835,6 @@ select.input-sm { padding-right: 26px; }
 @media (max-width: 760px) {
   .nav-burger { display: none; }
 }
+
+/* 1.2.0: copy delay summary above the activity table */
+.pad-x { padding: 10px 14px 4px; }

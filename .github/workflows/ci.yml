@@ -8,4 +8,4 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: PYTHONPATH=.:tests python -m unittest tests.test_trading tests.test_autopilot tests.test_data -v
+      - run: PYTHONPATH=.:tests python -m unittest tests.test_trading tests.test_autopilot tests.test_data tests.test_speed -v

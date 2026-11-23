@@ -381,3 +381,20 @@ document.addEventListener("error", (e) => {
   ph.setAttribute("aria-hidden", "true");
   el.replaceWith(ph);
 }, true);
+
+// ------------------------------------------------------------ copy delay (leader's fill -> our copy)
+function secs(v) {
+  return v < 10 ? v.toFixed(1).replace(".", ",") + " с" : v < 120 ? Math.round(v) + " с" : Math.round(v / 60) + " мин";
+}
+export function delayCell(r) {
+  if (r.leader_ts == null) return '<span class="muted">—</span>';
+  const d = Math.max(0, r.at - r.leader_ts);
+  const how = r.source === "stream" ? "живой поток" : "запасной опрос";
+  return `<span title="${how}">${secs(d)}</span>${r.source === "stream" ? "" : '<small class="muted block">опрос</small>'}`;
+}
+export function delaySummary(rows) {
+  const d = rows.filter((r) => r.leader_ts != null).map((r) => Math.max(0, r.at - r.leader_ts)).sort((a, b) => a - b);
+  if (!d.length) return "";
+  const live = rows.filter((r) => r.leader_ts != null && r.source === "stream").length;
+  return `<span class="muted small">Задержка копии: медиана ${secs(d[Math.floor(d.length / 2)])}, 9 из 10 — быстрее ${secs(d[Math.floor(d.length * 0.9)])} · из живого потока ${Math.round((100 * live) / d.length)}%</span>`;
+}

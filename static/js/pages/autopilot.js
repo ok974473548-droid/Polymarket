@@ -1,5 +1,5 @@
 // Autopilot: auto-selected roster copied from one budget, bench with probation, automatic replacement.
-import { $, $$, ago, api, avatar, cents, confirmBox, dateTime, emptyBox, errorBox, esc, go, icon, loadSession, modal, num, route,
+import { $, $$, delayCell, delaySummary, ago, api, avatar, cents, confirmBox, dateTime, emptyBox, errorBox, esc, go, icon, loadSession, modal, num, route,
   short, signedUsd, state, thumb, toast, usd, withQuery, yesNo, shares as fmtShares } from "../core.js";
 import { header, needLogin } from "../layout.js";
 
@@ -367,12 +367,13 @@ async function activityTab(host) {
   try {
     const rows = await api("/api/autopilot/events?status=" + status);
     const label = { filled: ["Скопировано", "badge-green"], skipped: ["Пропущено", "badge-gray"], failed: ["Ошибка", "badge-red"] };
-    $("#act").innerHTML = rows.length ? `<table class="table"><thead><tr><th>Время</th><th>Игрок</th><th>Сделка</th><th>Рынок</th><th class="num">У игрока</th><th class="num">Копия</th><th>Статус</th></tr></thead><tbody>
+    $("#act").innerHTML = rows.length ? `${delaySummary(rows) ? `<div class="pad-x">${delaySummary(rows)}</div>` : ""}<table class="table"><thead><tr><th>Время</th><th>Игрок</th><th>Сделка</th><th>Рынок</th><th class="num">У игрока</th><th class="num">Копия</th><th class="num">Задержка</th><th>Статус</th></tr></thead><tbody>
       ${rows.map((r) => `<tr><td class="nowrap small">${dateTime(r.at)}</td><td><a class="trader-cell" href="/traders/${r.leader}">${avatar(r.leader, "", "", 22)}<span>${short(r.leader)}</span></a></td>
         <td><span class="side ${r.side === "buy" ? "buy" : "sell"}">${r.side === "buy" ? "Покупка" : "Продажа"}</span> ${esc(yesNo(r.outcome))}</td>
         <td><a class="ev-cell" href="/event/${esc(r.event_slug)}">${thumb(r.image, 24)}<span>${esc(r.title)}</span></a></td>
         <td class="num small">${r.leader_size != null ? fmtShares(r.leader_size) + " × " + cents(r.leader_price) : "—"}</td>
         <td class="num small">${r.amount != null ? usd(r.amount) : "—"}${r.price != null ? " · " + cents(r.price) : ""}</td>
+        <td class="num small">${delayCell(r)}</td>
         <td><span class="badge ${label[r.status][1]}">${label[r.status][0]}</span>${r.reason ? `<small class="muted block">${esc(r.reason)}</small>` : ""}</td></tr>`).join("")}</tbody></table>`
       : `<div class="pad">${emptyBox("Событий пока нет", "Здесь появятся сделки игроков из состава.")}</div>`;
   } catch (e) {

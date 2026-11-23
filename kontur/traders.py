@@ -7,6 +7,7 @@ come straight from the leaderboard every 15 minutes.
 """
 
 import json
+import os
 import time
 
 from . import db as store
@@ -16,7 +17,8 @@ TOP = 200
 BOARDS = ["overall", "sports", "crypto", "politics"]
 POSITION_PAGES = {"OPEN": 10, "CLOSED": 25}
 STATS_TTL = 24 * 3600
-GAP = 0.35
+GAP = float(os.environ.get("KONTUR_STATS_GAP", "0.06"))   # shared per-host pace of the statistics threads (was 0.35)
+THREADS = max(1, int(os.environ.get("KONTUR_STATS_THREADS", "4")))
 
 TAGS = {
     "whale": "Кит",
@@ -135,12 +137,14 @@ def compute_wallet(db, wallet):
     return wallet_row(db, wallet)
 
 
-def next_wallet(db):
-    """Wallet that most needs fresh statistics: requested ones first, then the oldest."""
-    row = db.execute("""SELECT wallet FROM wallets WHERE (stats_at IS NULL OR stats_at < ? OR priority > 0)
-                        AND (error = '' OR stats_at IS NULL OR stats_at < ?)
+def next_wallet(db, skip=()):
+    """Wallet that most needs fresh statistics: requested ones first, then the oldest. `skip`: being computed."""
+    skip = list(skip)
+    busy = f" AND wallet NOT IN ({','.join('?' * len(skip))})" if skip else ""
+    row = db.execute(f"""SELECT wallet FROM wallets WHERE (stats_at IS NULL OR stats_at < ? OR priority > 0)
+                        AND (error = '' OR stats_at IS NULL OR stats_at < ?){busy}
                         ORDER BY priority DESC, stats_at IS NOT NULL, stats_at LIMIT 1""",
-                     (time.time() - STATS_TTL, time.time() - 3600)).fetchone()
+                     (time.time() - STATS_TTL, time.time() - 3600, *skip)).fetchone()
     return row[0] if row else None
 
 

@@ -2,6 +2,7 @@
 
 import time
 
+from . import bus
 from . import db as store
 
 
@@ -10,6 +11,7 @@ def add(db, uid, kind, title, body="", link=""):
                (uid, kind, title[:200], body[:500], link[:300], time.time()))
     db.execute("""DELETE FROM notifications WHERE user_id=? AND id NOT IN
                   (SELECT id FROM notifications WHERE user_id=? ORDER BY id DESC LIMIT 300)""", (uid, uid))
+    bus.publish("notify", {"user_id": uid})
 
 
 def listing(db, uid, limit=50):

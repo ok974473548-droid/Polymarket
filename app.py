@@ -2,22 +2,25 @@
 virtual account (orders, portfolio, copy trading, watchlist)."""
 
 import argparse
+import gzip
 import hashlib
 import json
 import logging
 import mimetypes
 import os
+import queue
 import re
+import threading
 import time
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from kontur import VERSION, auth, autopilot, copytrade, news, notify, scout, traders, trading, watchlist
+from kontur import VERSION, auth, autopilot, books, bus, copytrade, net, news, notify, scout, stream, traders, trading, watchlist
 from kontur import db as store
 from kontur import polymarket as pm
-from kontur.worker import FAST, SLOW, ScoutPool, Worker
+from kontur.worker import FAST, SLOW, ScoutPool, WalletPool, Worker
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
@@ -43,6 +46,22 @@ def need(user):
 
 
 # ---------------------------------------------------------------- public views
+
+def copy_delay(db, last=200):
+    """Copy delay over the latest copies: leader's fill -> seen by us -> copy placed (seconds, medians)."""
+    out = {}
+    for source in ("stream", "poll"):
+        rows = db.execute("""SELECT leader_ts, detected, at FROM copy_events WHERE source=? AND leader_ts IS NOT NULL
+                             AND detected IS NOT NULL ORDER BY id DESC LIMIT ?""", (source, last)).fetchall()
+        if not rows:
+            continue
+        seen = sorted(max(0.0, r[1] - r[0]) for r in rows)
+        done = sorted(max(0.0, r[2] - r[1]) for r in rows)
+        total = sorted(max(0.0, r[2] - r[0]) for r in rows)
+        out[source] = {"copies": len(rows), "seen_s": round(seen[len(seen) // 2], 2), "placed_s": round(done[len(done) // 2], 3),
+                       "total_s": round(total[len(total) // 2], 2), "total_p90_s": round(total[int(len(total) * 0.9)], 2)}
+    return out
+
 
 def home(db):
     out = {}
@@ -191,7 +210,9 @@ def get_routes(db, path, query, user):
     if path == "/api/status":
         return {"version": VERSION,
                 "wallets": db.execute("SELECT COUNT(*), SUM(stats_at IS NOT NULL) FROM wallets").fetchone()[:],
-                "jobs": {k: v for w in WORKERS for k, v in w.errors.items()}}
+                "jobs": {k: v for w in WORKERS for k, v in w.errors.items()},
+                "trades_stream": stream.status(), "books_stream": books.status(), "copy_delay": copy_delay(db),
+                "network": dict(net.STATS), "live_clients": bus.listeners()}
     # ------------------------------------------------ personal
     if path == "/api/me":
         user = need(user)
@@ -323,13 +344,74 @@ def post_routes(db, path, body, user, handler):
 
 # ---------------------------------------------------------------- HTTP
 
+COMPRESSIBLE = ("application/json", "text/", "application/javascript", "image/svg+xml")
+_static = {}                 # path -> (mtime, body, gzipped body, etag, content type)
+_static_lock = threading.Lock()
+_db_pools = {}                # database path -> idle connections (one request uses one at a time)
+_db_pools_lock = threading.Lock()
+
+
+def _pool(path):
+    with _db_pools_lock:
+        return _db_pools.setdefault(path, queue.LifoQueue(maxsize=16))
+
+
+def db_take(path):
+    try:
+        return _pool(path).get_nowait()
+    except queue.Empty:
+        return store.connect(path, shared=True)
+
+
+def db_give(path, db):
+    if db.in_transaction:
+        db.execute("ROLLBACK")
+    try:
+        _pool(path).put_nowait(db)
+    except queue.Full:
+        db.close()
+
+
+def static_file(file, transform=None):
+    """File bytes, gzip copy and ETag, kept in memory until the file changes on disk."""
+    mtime = file.stat().st_mtime_ns
+    with _static_lock:
+        hit = _static.get(file)
+        if hit and hit[0] == mtime:
+            return hit
+    body = file.read_bytes()
+    if transform:
+        body = transform(body)
+    ctype = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
+    if ctype.startswith("text/") or ctype == "application/javascript":
+        ctype += "; charset=utf-8"
+    packed = gzip.compress(body, 6) if ctype.startswith(COMPRESSIBLE) and len(body) > 512 else None
+    entry = (mtime, body, packed, '"' + hashlib.sha1(body).hexdigest()[:20] + '"', ctype)
+    with _static_lock:
+        _static[file] = entry
+    return entry
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "Kontur/" + VERSION
+    protocol_version = "HTTP/1.1"     # keep-alive: the browser reuses one connection for many requests
+    timeout = 60                      # idle keep-alive connections are closed after a minute
+    disable_nagle_algorithm = True    # TCP_NODELAY: headers and body go out at once (no 40 ms delayed-ACK stall)
 
     def log_message(self, fmt, *args):
         LOG.debug(fmt, *args)
 
-    def send(self, status, body, ctype, extra=()):
+    def gzip_ok(self):
+        return "gzip" in (self.headers.get("Accept-Encoding") or "")
+
+    def send(self, status, body, ctype, extra=(), packed=None):
+        if packed is None and len(body) > 1024 and ctype.startswith(COMPRESSIBLE) and self.gzip_ok():
+            packed = gzip.compress(body, 5)
+        if packed is not None and self.gzip_ok() and len(packed) < len(body):
+            body = packed
+            extra = [*extra, ("Content-Encoding", "gzip")]
+        if ctype.startswith(COMPRESSIBLE):
+            extra = [*extra, ("Vary", "Accept-Encoding")]
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
@@ -369,6 +451,7 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/"):
             return self.api(path, parse_qs(url.query))
         if self.command == "POST":
+            self.close_connection = True  # the body was not read
             return self.json(405, {"error": "Метод не поддерживается"})
         if path == "/img":
             return self.image(parse_qs(url.query))
@@ -376,15 +459,25 @@ class Handler(BaseHTTPRequestHandler):
             file = (STATIC / path.removeprefix("/static/")).resolve()
             if not file.is_relative_to(STATIC) or not file.is_file():
                 return self.json(404, {"error": "Файл не найден"})
-            ctype = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
-            if ctype.startswith("text/") or ctype in {"application/javascript"}:
-                ctype += "; charset=utf-8"
-            cache = "public, max-age=31536000, immutable" if "/fonts/" in path or "/vendor/" in path else "no-cache"
-            return self.send(200, file.read_bytes(), ctype, [("Cache-Control", cache)])
+            versioned = "/fonts/" in path or "/vendor/" in path or "v=" in url.query
+            cache = "public, max-age=31536000, immutable" if versioned else "no-cache"
+            return self.static(file, cache)
         if path in {"/favicon.ico"}:
-            return self.send(200, (STATIC / "favicon.svg").read_bytes(), "image/svg+xml", [("Cache-Control", "max-age=86400")])
-        page = (STATIC / "index.html").read_bytes().replace(b"{{VERSION}}", VERSION.encode())
-        return self.send(200, page, "text/html; charset=utf-8", [("Cache-Control", "no-cache")])
+            return self.static(STATIC / "favicon.svg", "max-age=86400")
+        return self.static(STATIC / "index.html", "no-cache", lambda b: b.replace(b"{{VERSION}}", VERSION.encode()))
+
+    def static(self, file, cache, transform=None):
+        """Static file from memory; a repeat visit gets 304 Not Modified instead of the whole file."""
+        _, body, packed, etag, ctype = static_file(file, transform)
+        extra = [("Cache-Control", cache), ("ETag", etag)]
+        if etag in (self.headers.get("If-None-Match") or ""):
+            self.send_response(304)
+            for k, v in extra:
+                self.send_header(k, v)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return None
+        return self.send(200, body, ctype, extra, packed=packed)
 
     @property
     def session_token(self):
@@ -392,7 +485,19 @@ class Handler(BaseHTTPRequestHandler):
         return cookie[auth.COOKIE].value if auth.COOKIE in cookie else ""
 
     def api(self, path, query):
-        db = store.connect(self.server.db_path)
+        if path == "/api/stream" and self.command == "GET":
+            return self.events()
+        raw = b""
+        if self.command == "POST":  # read the body first: on keep-alive, unread bytes would spoil the next request
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = -1
+            if not 0 <= length <= 65536:
+                self.close_connection = True
+                return self.json(413, {"error": "Слишком большой запрос"})
+            raw = self.rfile.read(length) if length else b""
+        db = db_take(self.server.db_path)
         try:
             user = auth.user_for(db, self.session_token)
             if self.command == "POST":
@@ -401,10 +506,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise HttpError(403, "Запрос с другого сайта отклонён")
                 if self.headers.get_content_type() != "application/json":
                     raise HttpError(415, "Нужен JSON")
-                length = int(self.headers.get("Content-Length") or 0)
-                if not 0 <= length <= 65536:
-                    raise HttpError(413, "Слишком большой запрос")
-                body = json.loads(self.rfile.read(length) or b"{}")
+                body = json.loads(raw or b"{}")
                 if not isinstance(body, dict):
                     raise HttpError(400, "Ожидается объект JSON")
                 result = post_routes(db, path, body, user, self)
@@ -425,9 +527,47 @@ class Handler(BaseHTTPRequestHandler):
             LOG.exception("request failed: %s", path)
             self.json(500, {"error": "Внутренняя ошибка сервера"})
         finally:
-            if db.in_transaction:
-                db.execute("ROLLBACK")
-            db.close()
+            db_give(self.server.db_path, db)
+
+    def events(self):
+        """Server-sent events: tells the page that its data changed (notifications, copies, fills) — no polling."""
+        db = db_take(self.server.db_path)
+        try:
+            user = auth.user_for(db, self.session_token)
+            accounts = {r[0] for r in db.execute("SELECT id FROM accounts WHERE user_id=?", (user["id"],))} if user else set()
+        finally:
+            db_give(self.server.db_path, db)
+        if not user:
+            return self.json(401, {"error": "Войдите, чтобы продолжить"})
+        q = bus.subscribe()
+        self.close_connection = True
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            self.wfile.write(b"retry: 3000\n\n")
+            self.wfile.flush()
+            until = time.time() + 3600   # the browser reconnects by itself; bounded so threads do not pile up
+            while time.time() < until:
+                try:
+                    kind, data, _ = q.get(timeout=15)
+                except queue.Empty:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+                    continue
+                if kind == "notify" and data.get("user_id") != user["id"]:
+                    continue
+                if kind in ("copy", "fill") and data.get("account_id") not in accounts:
+                    continue
+                self.wfile.write(f"event: {kind}\ndata: {json.dumps(data)}\n\n".encode())
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            bus.unsubscribe(q)
+        return None
 
     def image(self, query):
         """Same-origin proxy and disk cache for Polymarket pictures (event, outcome and avatar images)."""
@@ -474,9 +614,11 @@ def main():
             w = Worker(args.db, jobs, name)
             w.start()
             WORKERS.append(w)
-        pool = ScoutPool(args.db)
-        pool.start()
-        WORKERS.append(pool)
+        for pool in (ScoutPool(args.db), WalletPool(args.db)):
+            pool.start()
+            WORKERS.append(pool)
+        books.start()
+        stream.start(args.db)
     print(f"Контур рынка {VERSION} · http://{args.host}:{args.port}", flush=True)
     try:
         server.serve_forever()

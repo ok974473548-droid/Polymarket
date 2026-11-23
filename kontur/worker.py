@@ -4,14 +4,17 @@ import json
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 from . import autopilot
+from . import books
 from . import copytrade
 from . import db as store
 from . import polymarket as pm
 from . import scout
+from . import stream
 from . import traders
 from . import trading
 
@@ -23,9 +26,11 @@ def _today():
 
 
 def job_copy(db):
+    """Data API polling: the fallback for fills the live stream missed (the API itself lags by minutes)."""
+    every = 120 if stream.connected() else 30
     due = store.rows(db.execute("""SELECT c.* FROM copy_trades c JOIN accounts a ON a.id=c.account_id
                                    WHERE c.paused=0 AND a.paused=0 AND (c.last_check IS NULL OR c.last_check < ?)
-                                   ORDER BY c.last_check LIMIT 20""", (time.time() - 30,)))
+                                   ORDER BY c.last_check LIMIT 20""", (time.time() - every,)))
     for ct in due:
         try:
             copytrade.poll(db, ct)
@@ -33,26 +38,67 @@ def job_copy(db):
             db.execute("UPDATE copy_trades SET last_check=?, last_error=? WHERE id=?", (time.time(), str(exc)[:200], ct["id"]))
 
 
+_BOOK_POOL = ThreadPoolExecutor(8, thread_name_prefix="kontur-books")
+
+
+def _one_book(tok):
+    try:
+        return tok, pm.book(tok)
+    except (pm.UpstreamError, LookupError, ValueError):
+        return tok, None
+
+
 def _books(tokens):
+    """Order books of many tokens: fresh ones from the live stream, the rest fetched 8 at a time."""
     out = {}
+    missing = []
     for tok in tokens:
-        try:
-            out[tok] = pm.book(tok)
-        except (pm.UpstreamError, LookupError, ValueError):
-            continue
+        bk = books.fresh(tok)
+        if bk:
+            out[tok] = bk
+        else:
+            missing.append(tok)
+    for tok, bk in _BOOK_POOL.map(_one_book, missing):
+        if bk:
+            out[tok] = bk
     return out
+
+
+_last_rest = {}
+
+
+def _due_without_stream(name, every):
+    """With the live book stream up, book jobs run on every tick (memory reads); without it, every `every` seconds."""
+    if books.status().get("connected"):
+        return True
+    now = time.time()
+    if now - _last_rest.get(name, 0) < every:
+        return False
+    _last_rest[name] = now
+    return True
+
+
+def job_watch(db):
+    """Keep the live book stream subscribed to every open position and resting order."""
+    tokens = [r[0] for r in db.execute("""SELECT token_id FROM orders WHERE status='open'
+                                          UNION SELECT token_id FROM positions WHERE status='open' AND shares>0.000001""")]
+    books.watch(tokens, ttl=120)
 
 
 def job_orders(db):
     trading.expire_orders(db)
-    tokens = [r[0] for r in db.execute("SELECT DISTINCT token_id FROM orders WHERE status='open' LIMIT 60")]
+    if not _due_without_stream("orders", 20):
+        return
+    tokens = [r[0] for r in db.execute("SELECT DISTINCT token_id FROM orders WHERE status='open' LIMIT 200")]
     if tokens:
         trading.match_resting(db, _books(tokens))
 
 
 def job_marks(db):
+    if not _due_without_stream("marks", 60):
+        return
     tokens = [r[0] for r in db.execute("""SELECT token_id FROM positions WHERE status='open' AND shares>0.000001
-                                          GROUP BY token_id ORDER BY MIN(COALESCE(price_at,0)) LIMIT 40""")]
+                                          GROUP BY token_id ORDER BY MIN(COALESCE(price_at,0)) LIMIT 200""")]
     marks = {}
     for tok, bk in _books(tokens).items():
         bid = bk["bids"][0][0] if bk["bids"] else None
@@ -80,15 +126,20 @@ def job_boards(db):
         traders.sync_board(db, cat)
 
 
-def job_wallet(db):
-    wallet = traders.next_wallet(db)
-    if not wallet:
-        return
+def _wallet_stats(db, wallet):
     try:
         traders.compute_wallet(db, wallet)
     except (pm.UpstreamError, LookupError, ValueError) as exc:
+        if db.in_transaction:
+            db.execute("ROLLBACK")
         db.execute("UPDATE wallets SET error=?, stats_at=COALESCE(stats_at, ?), priority=0 WHERE wallet=?",
                    (str(exc)[:200], time.time(), wallet))
+
+
+def job_wallet(db):
+    wallet = traders.next_wallet(db)
+    if wallet:
+        _wallet_stats(db, wallet)
 
 
 def job_categories(db):
@@ -195,21 +246,24 @@ def _profile(db, wallet):
         db.execute("UPDATE scout_wallets SET error=?, profiled=?, priority=0 WHERE wallet=?", (str(exc)[:200], time.time(), wallet))
 
 
-class ScoutPool:
-    """Several scouting threads of their own, so profiling neither waits for nor slows the other jobs.
+class JobPool:
+    """Several threads of their own for one kind of slow per-wallet work, so it neither waits for nor slows
+    the other jobs. Threads share the per-host request pace in polymarket.fetch: more threads hide network
+    latency without raising the request rate above 1 / gap per host.
 
-    Threads share the per-host request pace in polymarket.fetch, so more threads hide network latency
-    without raising the request rate above 1 / scout.GAP per host.
+    claim(db, busy) -> item or None picks the next item not held by another thread; work(db, item) does it.
     """
 
-    def __init__(self, path, threads=None):
+    def __init__(self, path, name, claim, work, threads):
         self.path = path
-        self.count = threads or scout.THREADS
+        self.name = name
+        self.claim, self.work = claim, work
+        self.count = threads
         self.stop = threading.Event()
         self.errors = {}
         self._busy = set()
         self._lock = threading.Lock()
-        self.threads = [threading.Thread(target=self._run, name=f"kontur-scout-{i}", daemon=True) for i in range(self.count)]
+        self.threads = [threading.Thread(target=self._run, name=f"kontur-{name}-{i}", daemon=True) for i in range(self.count)]
 
     def start(self):
         for t in self.threads:
@@ -217,34 +271,43 @@ class ScoutPool:
 
     def _claim(self, db):
         with self._lock:
-            if not _scouting(db):
-                return None
-            wallet = scout.next_wallet(db, self._busy)
-            if wallet:
-                self._busy.add(wallet)
-            return wallet
+            item = self.claim(db, self._busy)
+            if item:
+                self._busy.add(item)
+            return item
 
     def _run(self):
         db = store.connect(self.path)
         while not self.stop.is_set():
-            wallet = None
+            item = None
             try:
-                wallet = self._claim(db)
-                if wallet:
-                    _profile(db, wallet)
-                    self.errors.pop("scout", None)
+                item = self._claim(db)
+                if item:
+                    self.work(db, item)
+                    self.errors.pop(self.name, None)
             except Exception:  # noqa: BLE001 - a background job must never kill the thread
-                LOG.exception("job scout failed")
-                self.errors["scout"] = "внутренняя ошибка"
+                LOG.exception("job %s failed", self.name)
+                self.errors[self.name] = "внутренняя ошибка"
                 if db.in_transaction:
                     db.execute("ROLLBACK")
             finally:
-                if wallet:
+                if item:
                     with self._lock:
-                        self._busy.discard(wallet)
-            if not wallet:
+                        self._busy.discard(item)
+            if not item:
                 self.stop.wait(2.0)
         db.close()
+
+
+def ScoutPool(path, threads=None):
+    """Player scouting for the autopilot (only once the autopilot page was opened)."""
+    return JobPool(path, "scout", lambda db, busy: scout.next_wallet(db, busy) if _scouting(db) else None,
+                   _profile, threads or scout.THREADS)
+
+
+def WalletPool(path, threads=None):
+    """Statistics of the top-200 traders of every leaderboard tab."""
+    return JobPool(path, "wallet", traders.next_wallet, _wallet_stats, threads or traders.THREADS)
 
 
 def job_backtest(db):
@@ -259,8 +322,9 @@ def job_backtest(db):
 
 FAST = [
     ("copy", job_copy, 10),
-    ("orders", job_orders, 20),
-    ("marks", job_marks, 60),
+    ("watch", job_watch, 15),
+    ("orders", job_orders, 2),
+    ("marks", job_marks, 15),
     ("settle", job_settle, 600),
     ("equity", job_equity, 300),
     ("autopilot", job_autopilot, 30),
@@ -270,7 +334,6 @@ SLOW = [
     ("categories", job_categories, 15),
     ("census", job_census, 4),
     ("tags", job_tags, 8),
-    ("wallet", job_wallet, 1),
     ("discover", job_discover, 300),
     ("backtest", job_backtest, 120),
 ]

@@ -320,14 +320,44 @@ CREATE TABLE IF NOT EXISTS ap_log(
 MIGRATIONS = [
     ("copy_trades", "autopilot", "INTEGER NOT NULL DEFAULT 0"),
     ("copy_trades", "mode", "TEXT NOT NULL DEFAULT 'normal'"),
+    # 1.2.0: one identity per leader fill (stream and Data API), where it came from, and the copy delay
+    ("copy_events", "trade_key", "TEXT NOT NULL DEFAULT ''"),
+    ("copy_events", "source", "TEXT NOT NULL DEFAULT 'poll'"),
+    ("copy_events", "leader_ts", "REAL"),
+    ("copy_events", "detected", "REAL"),
+]
+
+# Indexes for the hot queries (created after the column migrations above).
+INDEXES = [
+    "CREATE INDEX IF NOT EXISTS copy_events_key ON copy_events(copy_trade_id, trade_key)",
+    "CREATE INDEX IF NOT EXISTS copy_events_account ON copy_events(account_id, id)",
+    "CREATE INDEX IF NOT EXISTS copy_events_at ON copy_events(at)",
+    "CREATE INDEX IF NOT EXISTS notifications_user ON notifications(user_id, id)",
+    "CREATE INDEX IF NOT EXISTS positions_account ON positions(account_id, status)",
+    "CREATE INDEX IF NOT EXISTS positions_token_open ON positions(token_id) WHERE status='open'",
+    "CREATE INDEX IF NOT EXISTS orders_account ON orders(account_id, status)",
+    "CREATE INDEX IF NOT EXISTS orders_token_open ON orders(token_id) WHERE status='open'",
+    "CREATE INDEX IF NOT EXISTS fills_order ON fills(order_id)",
+    "CREATE INDEX IF NOT EXISTS ledger_account ON ledger(account_id, id)",
+    "CREATE INDEX IF NOT EXISTS copy_trades_leader ON copy_trades(leader)",
+    "CREATE INDEX IF NOT EXISTS ap_bets_wallet ON ap_bets(user_id, wallet, status)",
+    "CREATE INDEX IF NOT EXISTS cache_stamp ON cache(stamp)",
+    "CREATE INDEX IF NOT EXISTS scout_wallets_profiled ON scout_wallets(profiled)",
 ]
 
 
-def connect(path):
-    db = sqlite3.connect(path, timeout=15, isolation_level=None)
+def connect(path, shared=False):
+    """Autocommit connection. shared=True lets a pool hand it to different threads (one at a time)."""
+    db = sqlite3.connect(path, timeout=15, isolation_level=None, check_same_thread=not shared)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys=ON")
     db.execute("PRAGMA busy_timeout=15000")
+    # WAL + synchronous=NORMAL: a commit no longer waits for the disk flush (safe in WAL: at worst the last
+    # commits before a power cut are lost, the database is never corrupted). Bigger page cache, temp in memory.
+    db.execute("PRAGMA synchronous=NORMAL")
+    db.execute("PRAGMA cache_size=-32000")
+    db.execute("PRAGMA temp_store=MEMORY")
+    db.execute("PRAGMA mmap_size=268435456")
     return db
 
 
@@ -341,6 +371,9 @@ def init(path):
             have = {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
             if column not in have:
                 db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        for sql in INDEXES:
+            db.execute(sql)
+        db.execute("PRAGMA optimize")
     finally:
         db.close()
 

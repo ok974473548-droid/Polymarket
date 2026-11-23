@@ -8,9 +8,11 @@ sells 40% of its own.
 """
 
 import json
+import threading
 import time
 from datetime import datetime, timezone
 
+from . import bus
 from . import db as store
 from . import notify
 from . import polymarket as pm
@@ -235,14 +237,17 @@ def events(db, uid, aid, status="", limit=200):
 
 # ---------------------------------------------------------------- engine
 
-def _record(db, ct, status, reason, trade, **extra):
+def _record(db, ct, status, reason, trade, *, source="poll", detected=None, **extra):
     db.execute("""INSERT INTO copy_events(copy_trade_id, account_id, leader, status, reason, side, title, outcome, event_slug,
-                  image, leader_price, leader_size, amount, shares, price, order_id, leader_tx, at)
-                  VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                  image, leader_price, leader_size, amount, shares, price, order_id, leader_tx, at, trade_key, source,
+                  leader_ts, detected)
+                  VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                (ct["id"], ct["account_id"], ct["leader"], status, reason, (trade.get("side") or "").lower(),
                 trade.get("title") or "", trade.get("outcome") or "", trade.get("event_slug") or "", trade.get("icon") or "",
                 trade.get("price"), trade.get("size"), extra.get("amount"), extra.get("shares"), extra.get("price"),
-                extra.get("order_id"), trade.get("transaction_hash") or "", time.time()))
+                extra.get("order_id"), trade.get("transaction_hash") or "", time.time(), trade_key(trade), source,
+                pm.num(trade.get("timestamp")), detected))
+    bus.publish("copy", {"account_id": ct["account_id"], "status": status})
     if ct["notify"] and status != "skipped":
         uid = db.execute("SELECT user_id FROM accounts WHERE id=?", (ct["account_id"],)).fetchone()[0]
         who = ct["nickname"] or (ct["leader"][:6] + "…" + ct["leader"][-4:])
@@ -311,8 +316,12 @@ def _copy_sell(db, uid, ct, trade, info):
     fraction = 1.0
     try:
         page = pm.positions_page(user=ct["leader"], cond=info["condition"], status="OPEN", limit=20)
-        after = sum(r["current_size"] or 0 for r in page["rows"] if str(r.get("token_id")) == info["token"])
-        before = after + sold
+        rows = [r for r in page["rows"] if str(r.get("token_id")) == info["token"]]
+        after = sum(r["current_size"] or 0 for r in rows)
+        last = max((pm.num(r.get("last_event_at")) or 0 for r in rows), default=0)
+        # A sale seen on the live stream can be newer than the Data API position: then the size is still pre-sale.
+        stale = bool(rows) and 0 < last < int(trade.get("timestamp") or 0)
+        before = after if stale else after + sold
         fraction = min(1.0, sold / before) if before > 0 else 1.0
     except (pm.UpstreamError, LookupError, ValueError):
         pass
@@ -331,19 +340,32 @@ def _copy_sell(db, uid, ct, trade, info):
                           "shares": order["filled"], "price": order["avg"], "order_id": order["id"]}
 
 
-def poll(db, ct):
-    """Copy the leader's fills that appeared since the last check."""
-    acc = db.execute("SELECT user_id, paused FROM accounts WHERE id=?", (ct["account_id"],)).fetchone()
-    if not acc or acc["paused"] or ct["paused"]:
-        return 0
-    uid = acc["user_id"]
-    page = pm.trades_page(user=ct["leader"], limit=50, taker_only=False, gap=0.2)
-    seen = set(json.loads(ct["cursor_keys"] or "[]"))
-    fresh = [r for r in page["rows"] if int(r["timestamp"] or 0) > ct["cursor_ts"]
-             or (int(r["timestamp"] or 0) == ct["cursor_ts"] and _key(r) not in seen)]
-    fresh.sort(key=lambda r: int(r["timestamp"] or 0))
-    infos, done = {}, 0
-    for trade in fresh:
+_locks_guard = threading.Lock()
+_locks = {}
+
+
+def _lock_for(cid):
+    with _locks_guard:
+        return _locks.setdefault(cid, threading.Lock())
+
+
+def trade_key(r):
+    """Identity of one leader fill, the same for the live stream and the Data API."""
+    size = pm.num(r.get("size")) or 0.0
+    return f"{str(r.get('transaction_hash') or '').lower()}:{r.get('token_id')}:{str(r.get('side') or '').upper()}:{round(size, 6):g}"
+
+
+def handle(db, ct, trade, uid, *, infos=None, source="poll", detected=None):
+    """Copy one leader fill unless this copy profile already did (from the stream or the Data API).
+
+    Returns True when the fill was processed now. The check and the copy run under a per-profile lock,
+    so the live stream and the polling fallback can never copy the same fill twice.
+    """
+    key = trade_key(trade)
+    infos = {} if infos is None else infos
+    with _lock_for(ct["id"]):
+        if db.execute("SELECT 1 FROM copy_events WHERE copy_trade_id=? AND trade_key=? LIMIT 1", (ct["id"], key)).fetchone():
+            return False
         tok, cond = str(trade.get("token_id") or ""), str(trade.get("condition_id") or "").lower()
         try:
             if tok not in infos:
@@ -361,8 +383,25 @@ def poll(db, ct):
                 status, reason, extra = _copy_sell(db, uid, ct, trade, info)
         except (pm.UpstreamError, LookupError, ValueError) as exc:
             status, reason, extra = "failed", str(exc)[:200], {}
-        _record(db, ct, status, reason, trade, **extra)
-        done += 1
+        _record(db, ct, status, reason, trade, source=source, detected=detected, **extra)
+    return True
+
+
+def poll(db, ct):
+    """Copy the leader's fills that appeared in the Data API since the last check (fallback for the live stream)."""
+    acc = db.execute("SELECT user_id, paused FROM accounts WHERE id=?", (ct["account_id"],)).fetchone()
+    if not acc or acc["paused"] or ct["paused"]:
+        return 0
+    uid = acc["user_id"]
+    page = pm.trades_page(user=ct["leader"], limit=50, taker_only=False, gap=0.2)
+    seen = set(json.loads(ct["cursor_keys"] or "[]"))
+    fresh = [r for r in page["rows"] if int(r["timestamp"] or 0) > ct["cursor_ts"]
+             or (int(r["timestamp"] or 0) == ct["cursor_ts"] and _key(r) not in seen)]
+    fresh.sort(key=lambda r: int(r["timestamp"] or 0))
+    infos, done = {}, 0
+    for trade in fresh:
+        if handle(db, ct, trade, uid, infos=infos, source="poll", detected=time.time()):
+            done += 1
         ts = int(trade["timestamp"] or 0)
         if ts > ct["cursor_ts"]:
             ct["cursor_ts"], seen = ts, set()

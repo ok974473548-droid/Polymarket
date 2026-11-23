@@ -10,8 +10,11 @@
 """
 
 import json
+import threading
 import time
 
+from . import books
+from . import bus
 from . import db as store
 from . import polymarket as pm
 
@@ -100,9 +103,28 @@ def transfer_from_main(db, uid, aid, amount):
 
 # ---------------------------------------------------------------- market metadata
 
+INFO_TTL = 20.0              # seconds a market's terms are reused (quotes, copies of a burst of fills)
+_info_cache = {}
+_info_lock = threading.Lock()
+
+
 def market_info(cond, tok):
-    """Fresh Gamma terms of one outcome: name, index, fees, size limits and status."""
+    """Gamma terms of one outcome: name, index, fees, size limits and status (reused for INFO_TTL seconds)."""
     cond, tok = pm.condition(cond), pm.token(tok)
+    now = time.monotonic()
+    with _info_lock:
+        hit = _info_cache.get((cond, tok))
+        if hit and now - hit[0] < INFO_TTL:
+            return hit[1]
+    info = _market_info(cond, tok)
+    with _info_lock:
+        if len(_info_cache) > 2000:
+            _info_cache.clear()
+        _info_cache[(cond, tok)] = (now, info)
+    return info
+
+
+def _market_info(cond, tok):
     raw = pm.markets_by_condition([cond]).get(cond)
     if not raw:
         raise LookupError("Рынок не найден на Polymarket")
@@ -191,7 +213,7 @@ def quote(db, uid, body):
     """Preview a fill on the current book without changing anything (used by the order ticket)."""
     spec = _spec({**body, "amount": body.get("amount") or 1, "shares": body.get("shares") or 1})
     info = market_info(spec["cond"], spec["token"])
-    bk = pm.book(spec["token"])
+    bk = books.get(spec["token"])
     levels = bk["asks"] if spec["side"] == "buy" else bk["bids"]
     cap = spec.get("price") if spec["type"] == "limit" else spec["cap"]
     legs = _take(levels, side=spec["side"], budget=spec.get("amount"), shares=spec.get("shares"), cap=cap,
@@ -279,7 +301,7 @@ def place(db, uid, body, *, account_id=None, source="manual", copy_trade_id=None
         spec["price"] = round(round(spec["price"] / tick) * tick, 6)
         if not 0 < spec["price"] < 1:
             raise ValueError("Цена вне допустимого шага рынка")
-    bk = book or pm.book(spec["token"])
+    bk = book or books.get(spec["token"])
     side = spec["side"]
     levels = bk["asks"] if side == "buy" else bk["bids"]
     now = time.time()
@@ -364,14 +386,25 @@ def _release(db, order, reason, status):
                (status, reason, time.time(), order["id"]))
 
 
-def match_resting(db, tokens_books):
-    """Fill resting limit orders whose price the book has reached. Called by the worker."""
+REFILL_AFTER = 20.0          # seconds before a partly filled resting order may fill again
+
+
+def match_resting(db, tokens_books, now=None):
+    """Fill resting limit orders whose price the book has reached. Called by the worker.
+
+    Virtual orders do not take liquidity out of the real book, so the same displayed size could be counted
+    again on every check. The first touch fills at once; a partly filled order fills again only after
+    REFILL_AFTER seconds, the same pace as the 20-second check of 1.1.1, however often the books are read.
+    """
     done = 0
+    now = now or time.time()
     for tok, bk in tokens_books.items():
         orders = store.rows(db.execute("SELECT * FROM orders WHERE status='open' AND token_id=? ORDER BY created", (tok,)))
         for order in orders:
             rest = r6(order["shares"] - order["filled_shares"])
             if rest <= 1e-6:
+                continue
+            if order["filled_shares"] > 1e-6 and now - order["updated"] < REFILL_AFTER:
                 continue
             if order["side"] == "buy":
                 avail = sum(s for p, s in bk["asks"] if p <= order["limit_price"] + EPS)
@@ -392,6 +425,7 @@ def match_resting(db, tokens_books):
                 left = r6(fresh["shares"] - fresh["filled_shares"] - q)
                 if left <= 1e-6:
                     db.execute("UPDATE orders SET status='filled', reserved=0, updated=? WHERE id=?", (time.time(), fresh["id"]))
+            bus.publish("fill", {"account_id": fresh["account_id"], "order_id": fresh["id"]})
             done += 1
     return done
 

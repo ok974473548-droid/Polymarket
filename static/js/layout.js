@@ -193,9 +193,43 @@ async function loadBell(box) {
   }
 }
 
-// Poll for new notifications and show them as toasts while the app is open.
+// Notifications: pushed by the server over /api/stream (SSE) the moment they appear; a slow poll stays as a fallback.
 let lastSeen = 0;
-setInterval(async () => {
+let live = null;
+let refreshTimer = 0;
+const LIVE_PAGES = ["portfolio", "copy-trading", "autopilot"];
+
+function refreshSoon() {
+  // A copy or a fill changed the user's data: redraw the open page (unless the user is typing or in a dialog).
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => {
+    if (!LIVE_PAGES.includes(route().parts[0] || "")) return;
+    if (document.hidden || document.querySelector("dialog[open]") || document.activeElement?.matches("input, textarea, select")) return;
+    render();
+  }, 600);
+}
+
+function connectLive() {
+  if (live || !state.user || !window.EventSource) return;
+  live = new EventSource("/api/stream");
+  live.addEventListener("notify", () => checkNotifications());
+  live.addEventListener("copy", refreshSoon);
+  live.addEventListener("fill", refreshSoon);
+  live.onerror = () => {
+    if (!state.user && live) {
+      live.close();
+      live = null;
+    }
+  };
+}
+
+setInterval(() => {
+  connectLive();
+  if (!live || live.readyState !== 1) checkNotifications();
+}, 30000);
+setTimeout(connectLive, 1500);
+
+async function checkNotifications() {
   if (!state.user || document.hidden) return;
   try {
     const n = await api("/api/notifications");
@@ -209,7 +243,7 @@ setInterval(async () => {
       if (btn && n.unread) btn.insertAdjacentHTML("beforeend", `<span class="dot">${n.unread > 9 ? "9+" : n.unread}</span>`);
     }
   } catch { /* offline */ }
-}, 30000);
+}
 
 // ------------------------------------------------------------ account actions
 document.addEventListener("click", async (e) => {

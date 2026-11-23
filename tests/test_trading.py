@@ -27,8 +27,9 @@ def book(asks=((0.40, 100), (0.45, 100)), bids=((0.38, 100), (0.35, 100))):
 
 class Base(unittest.TestCase):
     def setUp(self):
+        trading._info_cache.clear()
         self.dir = tempfile.TemporaryDirectory()
-        path = str(Path(self.dir.name) / "t.sqlite3")
+        path = self.path = str(Path(self.dir.name) / "t.sqlite3")
         store.init(path)
         self.db = store.connect(path)
         self.uid = auth.create_user(self.db, "owner", "password123", admin=True)
