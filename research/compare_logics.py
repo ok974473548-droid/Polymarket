@@ -13,10 +13,11 @@ Same copy cost for every logic: leader price + slippage, real-size taker fee 0.0
 on a sale before resolution. Copies follow the leader's exit (data has no separate resolution price for sold
 positions).
 
-Run: PYTHONPATH=. python research/compare_logics.py data/audit.sqlite3
+Run: PYTHONPATH=. python research/compare_logics.py data/audit.sqlite3 out.json [leaderboard|markets|all]
 """
 import json
 import math
+import multiprocessing as mp
 import random
 import statistics
 import sys
@@ -27,26 +28,27 @@ from kontur import scout
 
 DAY = 86400
 FEE = 0.05
-DB = sys.argv[1]
-db = store.connect(DB)
-NOW = float(db.execute("SELECT v FROM audit_meta WHERE k='now'").fetchone()[0])
 WINDOWS = [150, 120, 90, 60]  # selection date T = NOW - d days; copies judged on bets opened in [T, T+30d)
 HORIZON = 30 * DAY
 ROSTER = 8
+DB = sys.argv[1]
+OUT = sys.argv[2] if len(sys.argv) > 2 else "compare_result.json"
+UNIVERSE = sys.argv[3] if len(sys.argv) > 3 else "all"   # leaderboard | markets | all
+NOW = 0.0
+WAL = {}   # wallet -> {"name", "slip", "slip_measured", "bets"} (bets only while precomputing one wallet)
 
-rows = store.rows(db.execute("SELECT wallet, name, metrics FROM scout_wallets WHERE metrics IS NOT NULL"))
-WAL = {}
-for r in rows:
-    bets = scout.stored_bets(db, r["wallet"])
+
+def load_wallet(db, w, name, metrics):
+    bets = scout.stored_bets(db, w)
     if not bets:
-        continue
-    m = json.loads(r["metrics"])
+        return None
+    m = json.loads(metrics) if metrics else {}
     for b in bets:  # data fix applied to every logic: finished markets with a 0/1 price are resolved
         if b["state"] == "open" and b["end"] and b["end"] < NOW - 7 * DAY and b["mark"] is not None and (b["mark"] <= 0.01 or b["mark"] >= 0.99):
             b["state"], b["exit"], b["closed"] = "resolved", 1.0 if b["mark"] >= 0.5 else 0.0, b["end"]
-    WAL[r["wallet"]] = {"name": r["name"] or r["wallet"][:10], "bets": bets,
-                        "slip": max(scout.DEFAULT_SLIP, m.get("slip_measured") or 0.01) if m.get("slip_measured") is not None else 0.01,
-                        "slip_measured": m.get("slip_measured")}
+    measured = m.get("slip_measured")
+    return {"name": name or w[:10], "bets": bets, "slip": max(scout.DEFAULT_SLIP, measured) if measured is not None else 0.01,
+            "slip_measured": measured}
 
 
 def fee(p, rate=FEE):
@@ -85,55 +87,35 @@ def kind_at(known, T):
     return scout.behaviour(known, [], m, T)[0]
 
 
-def future(w, T):
+def future(d, T):
     """Copy results of the leader's bets opened in [T, T+30d), judged at NOW."""
     out = []
-    for b in WAL[w]["bets"]:
+    for b in d["bets"]:
         if not T <= b["opened"] < T + HORIZON or not ok_bet(b):
             continue
         if b["state"] == "open":
             if b["mark"] is None:
                 continue
-            r, decided = copy_r(b["entry"], b["mark"], WAL[w]["slip"], False), False
+            r, decided = copy_r(b["entry"], b["mark"], d["slip"], False), False
         else:
-            r, decided = copy_r(b["entry"], b["exit"], WAL[w]["slip"], b["state"] == "resolved" or b["exit"] in (0.0, 1.0)), True
-        out.append({"w": w, "r": r, "decided": decided, "entry": b["entry"], "cond": b["condition"], "oidx": b["oidx"],
-                    "event": b["event_slug"], "days": ((b["end"] or b["opened"]) - b["opened"]) / DAY,
-                    "cost": b["entry"] * b["size"], "opened": b["opened"]})
+            r, decided = copy_r(b["entry"], b["exit"], d["slip"], b["state"] == "resolved" or b["exit"] in (0.0, 1.0)), True
+        out.append({"r": r, "decided": decided, "entry": b["entry"], "cond": b["condition"], "oidx": b["oidx"],
+                    "days": ((b["end"] or b["opened"]) - b["opened"]) / DAY, "cost": b["entry"] * b["size"]})
     return out
 
 
-# ---------------------------------------------------------------- L1: Kontur as is
-def logic_kontur(T):
-    picks = []
-    for w, d in WAL.items():
-        known = known_at(d["bets"], T)
-        m = scout.metrics(known, slip=d["slip"], now=T, as_of=T)
-        m["slip_measured"] = d["slip_measured"] if d["slip_measured"] is not None else scout.DEFAULT_SLIP
-        k = scout.behaviour(known, [], m, T)[0]
-        v = scout.judge(m, k, {})
-        if k == "directional" and v["passed"]:
-            picks.append((v["score"], w))
-    picks.sort(reverse=True)
-    chosen = [w for _, w in picks[:ROSTER]]
-    copies = []
-    for w in chosen:  # Kontur copies: price 0.02-0.97, $5+, market resolves within 60 days
-        copies += [dict(c, wt=1.0) for c in future(w, T) if c["days"] <= 60]
-    return chosen, copies, len(picks)
+# ---------------------------------------------------------------- per-wallet facts at each date T (one pass per wallet)
+def kontur_verdict(d, known, T):
+    """L1: Kontur 1.1.1 as is (scout.metrics / behaviour / judge with the app's own fee estimate)."""
+    m = scout.metrics(known, slip=d["slip"], now=T, as_of=T)
+    m["slip_measured"] = d["slip_measured"] if d["slip_measured"] is not None else scout.DEFAULT_SLIP
+    k = scout.behaviour(known, [], m, T)[0]
+    v = scout.judge(m, k, {})
+    return k == "directional" and v["passed"], v["score"], k
 
 
-# ---------------------------------------------------------------- L2: Whalidate-like
-PRESETS = {  # name: (price lo, price hi, max days to resolution, min whale buy $)
-    "40-80¢, до 30 дн. (как Helm/Beacon)": (0.40, 0.80, 30, 0),
-    "80-98¢, до 30 дн. (как Anchor)": (0.80, 0.98, 30, 0),
-    "60-90¢, до 7 дн., кит от $2000 (как Current)": (0.60, 0.90, 7, 2000),
-    "40-98¢, до 30 дн. (как Reef)": (0.40, 0.98, 30, 0),
-}
-
-
-def whalidate_screen(w, T):
-    d = WAL[w]
-    known = known_at(d["bets"], T)
+def whalidate_screen(known, T):
+    """L2 wallet screen from Whalidate's public methodology (drawdown on a $1000 bankroll with $25 copies)."""
     st = sorted(settled(known, T, lookback=10_000), key=lambda b: b["closed"])
     if len(st) < 30:
         return False
@@ -142,7 +124,6 @@ def whalidate_screen(w, T):
     roi = sum(pnl) / cost if cost else 0
     pos = sum(p for p in pnl if p > 0)
     top = max(pnl) / pos if pos > 0 else 1
-    # drawdown of a $1000 bankroll copying every trade with $25 (their app example: "One copy $25")
     eq, peak, dd = 1000.0, 1000.0, 0.0
     for b in st:
         eq += 25 * (b["exit"] - b["entry"]) / b["entry"]
@@ -151,24 +132,13 @@ def whalidate_screen(w, T):
     return roi >= 0.15 and dd <= 0.25 and top <= 0.5
 
 
-def logic_whalidate(T, preset):
-    lo, hi, days, min_usd = PRESETS[preset]
-    chosen = [w for w in WAL if whalidate_screen(w, T)]
-    copies = []
-    for w in chosen:
-        copies += [dict(c, wt=1.0) for c in future(w, T) if lo <= c["entry"] <= hi and c["days"] <= days and c["cost"] >= min_usd]
-    return chosen, copies, len(chosen)
-
-
-# ---------------------------------------------------------------- L3: skill vs price
 K_SHRINK = 40      # events of evidence for half weight
 BH_Q = 0.10
 
 
-def skill(w, T):
-    d = WAL[w]
-    known = known_at(d["bets"], T)
-    if kind_at(known, T) != "directional":
+def skill(d, known, T, kind):
+    """L3: copy return against the price paid, one number per event, shrunk to zero by the amount of evidence."""
+    if kind != "directional":
         return None
     st = settled(known, T)
     if len(st) < 20:
@@ -177,71 +147,108 @@ def skill(w, T):
     for b in st:
         p = min(0.995, b["entry"] + d["slip"])
         r = copy_r(b["entry"], b["exit"], d["slip"], b["state"] == "resolved" or b["exit"] in (0.0, 1.0))
-        win = 1.0 if r > 0 else 0.0
         e = by_ev[b["event_slug"] or b["condition"]]
-        e[0] += win - p
+        e[0] += (1.0 if r > 0 else 0.0) - p
         e[1] += r
         e[2] += 1
     ev = list(by_ev.values())
     n_ev = len(ev)
     if n_ev < 15:
         return None
-    rets = [e[1] / e[2] for e in ev]   # one number per event: no double counting of one situation
+    rets = [e[1] / e[2] for e in ev]
     mean = statistics.mean(rets)
     sd = statistics.pstdev(rets) or 1e-9
     t = mean / (sd / math.sqrt(n_ev))
-    p_val = 0.5 * math.erfc(t / math.sqrt(2))
-    shrunk = mean * n_ev / (n_ev + K_SHRINK)
-    excess = sum(e[0] for e in ev) / sum(e[2] for e in ev)  # win rate above the price paid
-    return {"w": w, "t": t, "p": p_val, "edge": shrunk, "excess": excess * n_ev / (n_ev + K_SHRINK), "n_ev": n_ev}
+    excess = sum(e[0] for e in ev) / sum(e[2] for e in ev)
+    return {"t": t, "p": 0.5 * math.erfc(t / math.sqrt(2)), "edge": mean * n_ev / (n_ev + K_SHRINK),
+            "excess": excess * n_ev / (n_ev + K_SHRINK), "n_ev": n_ev}
 
 
-def logic_skill(T, top=None):
-    cands = [s for s in (skill(w, T) for w in WAL) if s]
-    cands.sort(key=lambda s: s["p"])
+def _init(now):
+    global NOW
+    NOW = now
+
+
+def precompute(item):
+    w, name, metrics = item
+    db = store.connect(DB)
+    try:
+        d = load_wallet(db, w, name, metrics)
+    finally:
+        db.close()
+    if not d:
+        return None
+    per = {}
+    for days in WINDOWS:
+        T = NOW - days * DAY
+        known = known_at(d["bets"], T)
+        if not known:
+            continue
+        k_pass, k_score, kind = kontur_verdict(d, known, T)
+        per[days] = {"kontur": (k_pass, k_score), "whal": whalidate_screen(known, T), "kind": kind,
+                     "skill": skill(d, known, T, kind), "fut": future(d, T)}
+    return w, {"name": d["name"], "slip": d["slip"], "per": per}
+
+
+# ---------------------------------------------------------------- logics (read the precomputed facts)
+def logic_kontur(days):
+    picks = sorted(((P[days]["kontur"][1], w) for w, P in PRE.items() if days in P and P[days]["kontur"][0]), reverse=True)
+    chosen = [w for _, w in picks[:ROSTER]]
+    return chosen, [dict(c, w=w, wt=1.0) for w in chosen for c in PRE[w]["per"][days]["fut"] if c["days"] <= 60], len(picks)
+
+
+PRESETS = {  # name: (price lo, price hi, max days to resolution, min whale buy $)
+    "40-80¢, до 30 дн. (как Helm/Beacon)": (0.40, 0.80, 30, 0),
+    "80-98¢, до 30 дн. (как Anchor)": (0.80, 0.98, 30, 0),
+    "60-90¢, до 7 дн., кит от $2000 (как Current)": (0.60, 0.90, 7, 2000),
+    "40-98¢, до 30 дн. (как Reef)": (0.40, 0.98, 30, 0),
+}
+
+
+def logic_whalidate(days, preset):
+    lo, hi, mx, min_usd = PRESETS[preset]
+    chosen = [w for w, P in PRE.items() if days in P and P[days]["whal"]]
+    copies = [dict(c, w=w, wt=1.0) for w in chosen for c in PRE[w]["per"][days]["fut"]
+              if lo <= c["entry"] <= hi and c["days"] <= mx and c["cost"] >= min_usd]
+    return chosen, copies, len(chosen)
+
+
+def logic_skill(days, top=None):
+    cands = sorted(((P[days]["skill"], w) for w, P in PRE.items() if days in P and P[days]["skill"]), key=lambda x: x[0]["p"])
     m = len(cands)
-    k = max([i for i, s in enumerate(cands, 1) if s["p"] <= BH_Q * i / m], default=0)
-    passed = [s for s in cands[:k] if s["edge"] > 0.02 and s["excess"] > 0]
-    passed.sort(key=lambda s: -s["edge"])
+    k = max([i for i, (s, _) in enumerate(cands, 1) if s["p"] <= BH_Q * i / m], default=0)
+    passed = [(s, w) for s, w in cands[:k] if s["edge"] > 0.02 and s["excess"] > 0]
+    passed.sort(key=lambda x: -x[0]["edge"])
     chosen = passed[:top] if top else passed
-    info = {s["w"]: s for s in chosen}
     copies = []
-    for w in info:
-        for c in future(w, T):
+    for s, w in chosen:
+        for c in PRE[w]["per"][days]["fut"]:
             if c["days"] > 60:
                 continue
-            p = min(0.99, c["entry"] + WAL[w]["slip"])
-            q = min(0.99, p + info[w]["excess"])
+            p = min(0.99, c["entry"] + PRE[w]["slip"])
+            q = min(0.99, p + s["excess"])
             kelly = max(0.0, (q - p) / (1 - p)) * 0.25 if q > p else 0.0
-            if kelly <= 0 or info[w]["edge"] <= fee(p):  # expected edge must beat the fee
+            if kelly <= 0 or s["edge"] <= fee(p):  # expected edge must beat the fee
                 continue
-            copies.append(dict(c, wt=min(kelly, 0.05)))
+            copies.append(dict(c, w=w, wt=min(kelly, 0.05)))
     # consensus: same market and side by 2+ chosen players -> double weight; opposite sides -> skip both
-    sides = defaultdict(set)
+    sides, buyers = defaultdict(set), defaultdict(set)
     for c in copies:
         sides[c["cond"]].add(c["oidx"])
-    buyers = defaultdict(set)
-    for c in copies:
         buyers[(c["cond"], c["oidx"])].add(c["w"])
-    out = []
-    for c in copies:
-        if len(sides[c["cond"]]) > 1:
-            continue
-        out.append(dict(c, wt=c["wt"] * (2 if len(buyers[(c["cond"], c["oidx"])]) > 1 else 1)))
-    return [s["w"] for s in chosen], out, len(passed)
+    out = [dict(c, wt=c["wt"] * (2 if len(buyers[(c["cond"], c["oidx"])]) > 1 else 1)) for c in copies if len(sides[c["cond"]]) == 1]
+    return [w for _, w in chosen], out, len(passed)
 
 
-# ---------------------------------------------------------------- baselines
-def logic_all(T):
-    ws = [w for w in WAL if kind_at(known_at(WAL[w]["bets"], T), T) == "directional"]
-    return ws, [dict(c, wt=1.0) for w in ws for c in future(w, T) if c["days"] <= 60], len(ws)
+def logic_all(days):
+    ws = [w for w, P in PRE.items() if days in P and P[days]["kind"] == "directional"]
+    return ws, [dict(c, w=w, wt=1.0) for w in ws for c in PRE[w]["per"][days]["fut"] if c["days"] <= 60], len(ws)
 
 
-def logic_random(T, seed):
-    ws, _, _ = logic_all(T)
-    rng = random.Random(seed)
-    pick = rng.sample(ws, min(ROSTER, len(ws)))
-    return pick, [dict(c, wt=1.0) for w in pick for c in future(w, T) if c["days"] <= 60], len(ws)
+def logic_random(days, seed):
+    ws, _, _ = logic_all(days)
+    pick = random.Random(seed).sample(ws, min(ROSTER, len(ws)))
+    return pick, [dict(c, w=w, wt=1.0) for w in pick for c in PRE[w]["per"][days]["fut"] if c["days"] <= 60], len(ws)
 
 
 # ---------------------------------------------------------------- scoring of copies
@@ -271,50 +278,78 @@ def boot_ci(copies, n=1000):
     """95% interval of the weighted ROI, resampling players (copies of one player are not independent)."""
     by_p = defaultdict(list)
     for c in copies:
-        by_p[c["w"]].append(c)
-    ps = list(by_p.values())
+        by_p[c["w"]].append((c["r"] * c["wt"], c["wt"]))
+    ps = [(sum(a for a, _ in v), sum(b for _, b in v)) for v in by_p.values()]
     if len(ps) < 2:
         return None
     rng = random.Random(7)
     vals = []
     for _ in range(n):
-        sample = [c for _ in ps for c in rng.choice(ps)]
-        ws = sum(c["wt"] for c in sample)
-        vals.append(sum(c["r"] * c["wt"] for c in sample) / ws)
+        sample = [rng.choice(ps) for _ in ps]
+        vals.append(sum(a for a, _ in sample) / sum(b for _, b in sample))
     vals.sort()
     return [round(100 * vals[int(0.025 * n)], 1), round(100 * vals[int(0.975 * n)], 1)]
 
 
 LOGICS = {
     "L1 Контур (70% выигрышей, топ-8)": logic_kontur,
-    **{f"L2 Whalidate: {p}": (lambda T, p=p: logic_whalidate(T, p)) for p in PRESETS},
+    **{f"L2 Whalidate: {p}": (lambda days, p=p: logic_whalidate(days, p)) for p in PRESETS},
     "L3 Умение против цены (все прошедшие)": logic_skill,
-    "L3 Умение против цены (топ-8)": lambda T: logic_skill(T, ROSTER),
+    "L3 Умение против цены (топ-8)": lambda days: logic_skill(days, ROSTER),
     "База: все направленные игроки": logic_all,
     "База: случайные 8 (среднее 20 выборок)": None,
 }
 
-result = {"now": NOW, "wallets": len(WAL), "windows_days_before_now": WINDOWS, "logics": {}}
-for name, fn in LOGICS.items():
-    per, pooled = [], []
-    for d in WINDOWS:
-        T = NOW - d * DAY
-        if fn is None:
-            runs = [logic_random(T, s) for s in range(20)]
-            rois = [stats(c)["roi"] for _, c, _ in runs if c]
-            per.append({"T_days": d, "roi_mean": round(statistics.mean(rois), 2), "roi_range": [min(rois), max(rois)]})
-            continue
-        chosen, copies, eligible = fn(T)
-        s = stats(copies)
-        s.update({"T_days": d, "eligible": eligible, "chosen": len(chosen),
-                  "names": [WAL[w]["name"][:14] for w in chosen[:8]]})
-        per.append(s)
-        pooled += copies
-    entry = {"windows": per}
-    if fn is not None:
-        entry["pooled"] = stats(pooled)
-        entry["pooled_ci95_roi"] = boot_ci(pooled)
-    result["logics"][name] = entry
-    print(name, json.dumps(entry.get("pooled", per), ensure_ascii=False), flush=True)
 
-json.dump(result, open(sys.argv[2] if len(sys.argv) > 2 else "compare_result.json", "w"), ensure_ascii=False, indent=1)
+def main():
+    global PRE
+    db = store.connect(DB)
+    now = float(db.execute("SELECT v FROM audit_meta WHERE k='now'").fetchone()[0])
+    _init(now)
+    has_u = db.execute("SELECT 1 FROM sqlite_master WHERE name='audit_universe'").fetchone()
+    if UNIVERSE == "profiled":  # the 919 wallets of the first comparison (regression check)
+        items = db.execute("SELECT wallet, name, metrics FROM scout_wallets WHERE metrics IS NOT NULL").fetchall()
+    elif has_u:
+        where = "" if UNIVERSE == "all" else f"WHERE u.source='{'markets' if UNIVERSE == 'markets' else 'leaderboard'}'"
+        items = db.execute(f"""SELECT u.wallet, COALESCE(s.name, ''), s.metrics FROM audit_universe u
+                               LEFT JOIN scout_wallets s ON s.wallet=u.wallet {where}""").fetchall()
+    else:
+        items = db.execute("SELECT wallet, name, metrics FROM scout_wallets WHERE metrics IS NOT NULL").fetchall()
+    db.close()
+    items = [tuple(r) for r in items]
+    PRE = {}
+    with mp.Pool(4, initializer=_init, initargs=(now,)) as pool:
+        for i, res in enumerate(pool.imap_unordered(precompute, items, chunksize=8)):
+            if res:
+                PRE[res[0]] = res[1]
+            if (i + 1) % 500 == 0:
+                print(f"precomputed {i + 1}/{len(items)}", flush=True)
+    for v in PRE.values():  # logics index per-window facts directly
+        for days, x in v["per"].items():
+            v[days] = x
+    result = {"now": now, "universe": UNIVERSE, "wallets": len(PRE), "windows_days_before_now": WINDOWS, "logics": {}}
+    for name, fn in LOGICS.items():
+        per, pooled = [], []
+        for days in WINDOWS:
+            if fn is None:
+                runs = [logic_random(days, s) for s in range(20)]
+                rois = [stats(c)["roi"] for _, c, _ in runs if c]
+                per.append({"T_days": days, "roi_mean": round(statistics.mean(rois), 2), "roi_range": [min(rois), max(rois)]})
+                continue
+            chosen, copies, eligible = fn(days)
+            s = stats(copies)
+            s.update({"T_days": days, "eligible": eligible, "chosen": len(chosen), "names": [PRE[w]["name"][:14] for w in chosen[:8]]})
+            per.append(s)
+            pooled += copies
+        entry = {"windows": per}
+        if fn is not None:
+            entry["pooled"] = stats(pooled)
+            entry["pooled_ci95_roi"] = boot_ci(pooled)
+        result["logics"][name] = entry
+        print(name, json.dumps(entry.get("pooled", per), ensure_ascii=False), entry.get("pooled_ci95_roi"), flush=True)
+    json.dump(result, open(OUT, "w"), ensure_ascii=False, indent=1)
+
+
+PRE = {}
+if __name__ == "__main__":
+    main()

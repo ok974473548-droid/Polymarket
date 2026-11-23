@@ -1,4 +1,4 @@
-"""Re-crawl the bets of every profiled wallet into an audit copy of the database (app code, 8 threads)."""
+"""Crawl the bets of every candidate (audit_universe, else every profiled wallet) into an audit copy of the database (app code, 8 threads)."""
 import json
 import queue
 import sys
@@ -13,10 +13,13 @@ scout.GAP = 0.06
 NOW = time.time()
 db0 = store.connect(DB)
 db0.execute("CREATE TABLE IF NOT EXISTS audit_meta(k TEXT PRIMARY KEY, v TEXT)")
-db0.execute("INSERT OR REPLACE INTO audit_meta VALUES('now', ?)", (str(NOW),))
+db0.execute("INSERT OR IGNORE INTO audit_meta VALUES('now', ?)", (str(NOW),))
+NOW = float(db0.execute("SELECT v FROM audit_meta WHERE k='now'").fetchone()[0])
 db0.execute("CREATE TABLE IF NOT EXISTS audit_done(wallet TEXT PRIMARY KEY, n INTEGER, partial INTEGER, error TEXT)")
 done_set = {r[0] for r in db0.execute("SELECT wallet FROM audit_done")}
-wallets = [r[0] for r in db0.execute("SELECT wallet FROM scout_wallets WHERE metrics IS NOT NULL") if r[0] not in done_set]
+has_universe = db0.execute("SELECT 1 FROM sqlite_master WHERE name='audit_universe'").fetchone()
+src = "SELECT wallet FROM audit_universe" if has_universe else "SELECT wallet FROM scout_wallets WHERE metrics IS NOT NULL"
+wallets = [r[0] for r in db0.execute(src) if r[0] not in done_set]
 db0.close()
 q = queue.Queue()
 for w in wallets:
