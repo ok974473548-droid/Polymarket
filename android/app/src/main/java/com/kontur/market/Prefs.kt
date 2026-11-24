@@ -6,7 +6,7 @@ import android.content.Context
 object Prefs {
     private const val FILE = "kontur"
     /** Облачный сервер Контура (Railway); можно сменить в приложении. */
-    const val DEFAULT_SERVER = "https://polymarket-production-06d18dbe.up.railway.app"
+    const val DEFAULT_SERVER = "https://polycontur.up.railway.app"
     private const val SERVER = "server"
     private const val SEEN = "seen_ids"
     private const val SEEN_READY = "seen_ready"

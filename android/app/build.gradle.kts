@@ -20,8 +20,8 @@ android {
         applicationId = "com.kontur.market"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10401
-        versionName = "1.4.1"
+        versionCode = 10600
+        versionName = "1.6.0"
     }
 
     signingConfigs {
