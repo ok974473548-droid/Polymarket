@@ -987,3 +987,64 @@ select.input-sm { padding-right: 26px; }
 /* 1.6.0: live refresh — the page is rebuilt out of sight under a snapshot of itself, then swapped in */
 .main.live-hidden { position: absolute; left: 0; right: 0; visibility: hidden; pointer-events: none; }
 .live-shot { pointer-events: none; }
+
+/* 1.7.0: rolling digits (roll.js) — only the digits that changed move */
+.roll { display: inline-flex; align-items: baseline; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rd { display: inline-block; height: 1.15em; line-height: 1.15em; overflow: hidden; vertical-align: bottom; }
+.rd-col { display: flex; flex-direction: column; transition: transform .55s cubic-bezier(.2, .8, .2, 1); will-change: transform; }
+.rd-col > span { height: 1.15em; line-height: 1.15em; text-align: center; }
+.rs { display: inline-block; line-height: 1.15em; }
+@media (prefers-reduced-motion: reduce) { .rd-col { transition: none; } }
+
+/* 1.7.0: live event charts (livechart.js) */
+.lv-card { padding: 16px 18px 12px; }
+.lv-plot { position: relative; margin: 6px -4px 0; overflow: hidden; }
+.lv-tags { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.lv-tag { position: absolute; transform: translateY(-50%); white-space: nowrap; line-height: 1.05; transition: top .45s ease, left .45s ease;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, .65); }
+.lv-tag small { display: block; font-size: 12px; font-weight: 650; }
+.lv-tag b { font-size: 26px; font-weight: 800; letter-spacing: -.01em; }
+.lv-head { display: flex; align-items: flex-start; gap: 16px; }
+.lv-prices { display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap; }
+.lv-prices > div { display: flex; flex-direction: column; }
+.lv-prices small { color: var(--muted); font-size: 12px; }
+.lv-prices .sep { width: 1px; align-self: stretch; background: var(--border-strong); }
+.lv-prices b { font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
+.lv-prices .now b { color: #f7931a; }
+.lv-delta { font-weight: 700; } .lv-delta.up { color: var(--green); } .lv-delta.down { color: var(--red); }
+.lv-timer { margin-left: auto; display: flex; gap: 10px; color: #f05252; text-align: center; }
+.lv-timer b { display: block; font-size: 26px; font-weight: 750; }
+.lv-timer small { font-size: 10px; color: var(--muted); letter-spacing: .05em; }
+.lv-crypto.ended .lv-timer { color: var(--muted); }
+.lv-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.lv-past { display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px; border-radius: 999px; background: var(--well); border: 1px solid var(--border); font-size: 13px; }
+.lv-past i { width: 13px; height: 13px; border-radius: 50%; display: inline-block; }
+.lv-past i.up { background: var(--green); } .lv-past i.down { background: var(--red); }
+.lv-round { padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border); font-size: 13px; color: var(--text2); }
+.lv-round.cur { background: var(--text); color: #0b1220; font-weight: 700; }
+.lv-round.cur::before { content: "●"; color: var(--red); margin-right: 6px; }
+.lv-modes { margin-left: auto; display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.lv-modes button { background: transparent; border: 0; color: var(--muted); padding: 6px 11px; font-size: 13px; }
+.lv-modes button.cur { background: rgba(247, 147, 26, .16); color: #f7931a; }
+.lv-note { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; line-height: 1.5; }
+.lv-pair-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.lv-pair-head .seg { margin-left: auto; }
+.lv-teams { display: flex; gap: 16px; flex-wrap: wrap; }
+.lv-teams span { display: inline-flex; align-items: center; gap: 8px; font-weight: 650; }
+.lv-teams i { width: 10px; height: 10px; border-radius: 3px; }
+.lv-live { display: inline-flex; align-items: center; gap: 6px; color: var(--red); font-weight: 750; font-size: 12.5px; text-transform: uppercase; }
+.lv-live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--red); animation: lv-blink 1.2s infinite; }
+@keyframes lv-blink { 50% { opacity: .25; } }
+.chart-card #plot { min-height: 200px; }
+@media (max-width: 760px) {
+  .lv-card { padding: 12px 12px 10px; }
+  .lv-prices b, .lv-timer b { font-size: 20px; }
+  .lv-tag b { font-size: 21px; }
+  .lv-modes { margin-left: 0; }
+  .lv-pair-head .seg { margin-left: 0; }
+}
+
+/* buy buttons with long outcome names (teams): the name is cut, the rolling price stays whole */
+.out-btns > .buy { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 0; }
+.out-btns .buy .bn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.out-btns .buy [data-c] { flex: none; }

@@ -256,6 +256,7 @@ def event(raw, full=True):
         "liquidity": num(raw.get("liquidity")),
         "oi": num(raw.get("openInterest")),
         "closed": raw.get("closed") is True,
+        "live": raw.get("live") is True,          # a match being played right now
         "neg_risk": raw.get("negRisk") is True,
         "count": len(contracts),
         "contracts": open_first,
@@ -451,7 +452,7 @@ def book(tok):
             "at": (num(raw.get("timestamp")) or time.time() * 1000) / 1000}
 
 
-PRICE_WINDOWS = {"1d": ("1d", 5), "1w": ("1w", 30), "1m": ("1m", 180), "3m": ("max", 720), "ytd": ("max", 720),
+PRICE_WINDOWS = {"1h": ("1h", 1), "6h": ("6h", 1), "1d": ("1d", 5), "1w": ("1w", 30), "1m": ("1m", 180), "3m": ("max", 720), "ytd": ("max", 720),
                  "1y": ("max", 1440), "max": ("max", 1440)}
 
 

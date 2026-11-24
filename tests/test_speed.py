@@ -639,3 +639,44 @@ class NetHelpers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveChartTests(unittest.TestCase):
+    """Live event charts (1.7.0): round slugs, the price shown for an outcome, the public live channel."""
+
+    def test_round_slug(self):
+        from kontur import crypto
+        r = crypto.parse("btc-updown-5m-1795519500")
+        self.assertEqual((r["symbol"], r["period"], r["start"], r["end"], r["variant"]), ("btc", "5m", 1795519500, 1795519800, "fiveminute"))
+        self.assertEqual(crypto.parse("eth-updown-1d-1795453200")["end"], 1795453200 + 86400)
+        self.assertIsNone(crypto.parse("xau-updown-15m-1795519800"))        # gold: no Chainlink stream here
+        self.assertIsNone(crypto.parse("presidential-election-winner-2028"))
+
+    def test_shown_price_follows_polymarket(self):
+        from kontur import books
+        s = books.BookStream()
+        s.connected, s.gen = True, 1
+        s.books["t"] = {"bids": {0.40: 10, 0.38: 5}, "asks": {0.44: 7}, "at": 0, "gen": 1, "last": 0.47}
+        self.assertEqual(s.shown("t")["p"], 0.42)                         # spread 4 cents: the mid
+        s.books["t"]["asks"] = {0.60: 7}
+        self.assertEqual(s.shown("t")["p"], 0.47)                         # spread 20 cents: the last trade
+        s.books["t"] = {"bids": {0.99: 100}, "asks": {}, "at": 0, "gen": 1, "last": None}
+        self.assertEqual(s.shown("t")["p"], 0.99)                         # one-sided book: its only side
+        self.assertIsNone(s.shown("unknown"))
+
+
+class LiveEndpointTests(Server.__bases__[0]):
+    @classmethod
+    def setUpClass(cls):
+        Server.setUpClass.__func__(cls)
+
+    @classmethod
+    def tearDownClass(cls):
+        Server.tearDownClass.__func__(cls)
+
+    def test_live_needs_outcomes_or_a_coin(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("GET", "/api/live?tokens=abc")
+        r = c.getresponse()
+        self.assertEqual(r.status, 400)
+        r.read()

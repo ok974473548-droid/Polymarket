@@ -11,6 +11,7 @@ import { portfolioPage } from "./pages/portfolio.js";
 import { apiPage } from "./pages/api.js";
 import { autopilotPage } from "./pages/autopilot.js";
 import { adminPage, joinPage } from "./pages/admin.js";
+import { stopLive } from "./livechart.js";
 
 const TITLES = { "": "Аналитика Polymarket", traders: "Трейдеры", markets: "Рынки", "copy-trading": "Копирование", portfolio: "Портфель",
   watchlist: "Избранное", tags: "Теги", search: "Поиск", api: "API", autopilot: "Автопилот",
@@ -43,6 +44,7 @@ function page(main) {
 
 function draw() {
   dirty = false;
+  stopLive();
   const { parts, path } = route();
   document.title = (TITLES[parts[0] || ""] || "Контур рынка") + " · Контур рынка";
   header();

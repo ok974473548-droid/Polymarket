@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from kontur import VERSION, accounts, auth, autopilot, books, bus, copytrade, net, news, notify, scout, stream, traders, trading, watchlist
+from kontur import VERSION, accounts, auth, autopilot, books, bus, copytrade, crypto, net, news, notify, scout, stream, traders, trading, watchlist
 from kontur import db as store
 from kontur import polymarket as pm
 from kontur.worker import FAST, SLOW, ScoutPool, WalletPool, Worker
@@ -158,6 +158,8 @@ def get_routes(db, path, query, user):
         return accounts.users(db, need(user)["id"])
     if path == "/api/admin/invites":
         return accounts.invites(db, need(user)["id"])
+    if path == "/api/crypto-round":
+        return crypto.round_info(q1(query, "slug"))
     if path == "/api/home":
         return home(db)
     if path == "/api/markets":
@@ -516,6 +518,8 @@ class Handler(BaseHTTPRequestHandler):
     def api(self, path, query):
         if path == "/api/stream" and self.command == "GET":
             return self.events()
+        if path == "/api/live" and self.command == "GET":
+            return self.live(query)
         raw = b""
         if self.command == "POST":  # read the body first: on keep-alive, unread bytes would spoil the next request
             try:
@@ -589,6 +593,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(b": ping\n\n")
                     self.wfile.flush()
                     continue
+                if kind not in USER_EVENTS:
+                    continue  # live prices of event pages go over /api/live
                 if kind in ("notify", "autopilot") and data.get("user_id") != user["id"]:
                     continue
                 if kind in ("copy", "fill", "account", "prices"):
@@ -604,6 +610,82 @@ class Handler(BaseHTTPRequestHandler):
             pass
         finally:
             bus.unsubscribe(q)
+        return None
+
+    def live(self, query):
+        """Server-sent live prices for an open event page (no sign-in needed): outcome prices from the order book
+        stream ("price") and, on a crypto round, the coin price from Chainlink ("crypto")."""
+        toks = list(dict.fromkeys(t for t in q1(query, "tokens").split(",") if pm.TOKEN.fullmatch(t)))[:40]
+        sym = q1(query, "crypto").lower()
+        sym = sym if sym in crypto.SYMBOLS else ""
+        if not toks and not sym:
+            return self.json(400, {"error": "Нужны исходы или монета"})
+        with _live_lock:
+            if _live_count[0] >= LIVE_MAX:
+                return self.json(503, {"error": "Слишком много открытых живых графиков, попробуйте позже"})
+            _live_count[0] += 1
+            for t in toks:
+                LIVE_TOKENS[t] = LIVE_TOKENS.get(t, 0) + 1
+        books.start()
+        if _on_books not in books.STREAM.listeners:
+            books.STREAM.listeners.append(_on_books)
+        books.watch(toks, ttl=120)
+        if sym:
+            crypto.want()
+        q = bus.subscribe(maxsize=512)
+        self.close_connection = True
+        sent = {}
+
+        def push(kind, data):
+            self.wfile.write(f"event: {kind}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n".encode())
+
+        def refresh():  # the current price of every outcome, when it changed since it was last sent
+            for t in toks:
+                cur = books.shown(t)
+                if cur and cur["p"] is not None and sent.get(t) != cur["p"]:
+                    sent[t] = cur["p"]
+                    push("price", {"t": t, **cur})
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            self.wfile.write(b"retry: 3000\n\n")
+            refresh()
+            self.wfile.flush()
+            until, last_tick, last_watch = time.time() + 1800, time.monotonic(), time.monotonic()
+            while time.time() < until:
+                try:
+                    kind, data, _ = q.get(timeout=1)
+                except queue.Empty:
+                    kind = None
+                if kind == "book" and data.get("t") in toks:
+                    sent[data["t"]] = data.get("p")
+                    push("price", data)
+                elif kind == "crypto" and data.get("s") == sym:
+                    push("crypto", data)
+                now = time.monotonic()
+                if now - last_tick >= 2:          # catches anything the throttle held back, and keeps the line alive
+                    refresh()
+                    self.wfile.write(b": ping\n\n")
+                    last_tick = now
+                if now - last_watch >= 30:
+                    books.watch(toks, ttl=120)
+                    if sym:
+                        crypto.want()
+                    last_watch = now
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            bus.unsubscribe(q)
+            with _live_lock:
+                _live_count[0] -= 1
+                for t in toks:
+                    LIVE_TOKENS[t] -= 1
+                    if LIVE_TOKENS[t] <= 0:
+                        del LIVE_TOKENS[t]
         return None
 
     def image(self, query):
@@ -632,6 +714,30 @@ class Handler(BaseHTTPRequestHandler):
         if ctype == "image/svg+xml":
             extra.append(("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'"))
         return self.send(200, file.read_bytes(), ctype, extra)
+
+
+USER_EVENTS = {"notify", "autopilot", "copy", "fill", "account", "prices"}
+LIVE_TOKENS = {}             # outcome token -> open event pages showing it live
+LIVE_MAX = 300               # open live connections at most (each holds a server thread)
+_live_lock = threading.Lock()
+_live_count = [0]
+_book_sent = {}
+
+
+def _on_books(changed):
+    """The order book stream changed these outcomes: tell open event pages their new price (at most 4 times a second;
+    the page's own 2-second refresh catches anything held back here)."""
+    now = time.monotonic()
+    with _live_lock:
+        toks = [t for t in changed if t in LIVE_TOKENS and now - _book_sent.get(t, 0) >= 0.25]
+        for t in toks:
+            _book_sent[t] = now
+        if len(_book_sent) > 5000:
+            _book_sent.clear()
+    for t in toks:
+        cur = books.shown(t)
+        if cur and cur["p"] is not None:
+            bus.publish("book", {"t": t, **cur})
 
 
 def own_accounts(path, uid):

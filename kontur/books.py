@@ -55,6 +55,24 @@ class BookStream(threading.Thread):
         return {"token": tok, "asks": [[p, s] for p, s in asks], "bids": [[p, s] for p, s in bids],
                 "min_size": None, "tick": None, "at": at, "live": True}
 
+    def shown(self, tok):
+        """Price Polymarket shows for an outcome: the mid of the best bid and ask, or the last trade when the
+        spread is wider than 10 cents (then the mid says little). None without a live book."""
+        with self.lock:
+            b = self.books.get(str(tok))
+            if not b or b["gen"] != self.gen or not self.connected:
+                return None
+            bid = max((p for p, s in b["bids"].items() if s > 0), default=None)
+            ask = min((p for p, s in b["asks"].items() if s > 0), default=None)
+            last = b.get("last")
+        if bid is not None and ask is not None and ask - bid <= 0.10 + 1e-9:
+            price = (bid + ask) / 2
+        elif last is not None:
+            price = last
+        else:  # a one-sided book (an outcome close to certain): its only side
+            price = (bid + ask) / 2 if bid is not None and ask is not None else bid if bid is not None else ask
+        return {"p": round(price, 4) if price is not None else None, "b": bid, "a": ask}
+
     def status(self):
         with self.lock:
             live = sum(1 for b in self.books.values() if b["gen"] == self.gen)
@@ -79,8 +97,17 @@ class BookStream(threading.Thread):
                         lv[p] = s
                 side[name] = lv
             ts = (pm.num(ev.get("timestamp")) or time.time() * 1000) / 1000
-            self.books[tok] = {"asks": side["asks"], "bids": side["bids"], "at": ts, "gen": self.gen}
+            prev = self.books.get(tok) or {}
+            self.books[tok] = {"asks": side["asks"], "bids": side["bids"], "at": ts, "gen": self.gen, "last": prev.get("last")}
             return tok
+        if kind == "last_trade_price":
+            tok = str(ev.get("asset_id") or "")
+            b = self.books.get(tok)
+            p = pm.num(ev.get("price"))
+            if b and b["gen"] == self.gen and p is not None and 0 < p < 1:
+                b["last"] = p
+                return tok
+            return None
         if kind == "price_change":
             ts = (pm.num(ev.get("timestamp")) or time.time() * 1000) / 1000
             changed = None
@@ -215,6 +242,10 @@ def watch(tokens, ttl=120):
 
 def fresh(tok):
     return STREAM.fresh(tok) if STREAM is not None else None
+
+
+def shown(tok):
+    return STREAM.shown(tok) if STREAM is not None else None
 
 
 _prefetched = {}             # token -> (monotonic time, book) fetched ahead by a copy that is being prepared

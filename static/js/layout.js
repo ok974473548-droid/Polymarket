@@ -200,7 +200,7 @@ let live = null;
 let refreshTimer = 0;
 const USER_PAGES = ["portfolio", "copy-trading", "autopilot"];
 // Public pages read prices that change all the time: refreshed on a timer while the tab is visible (seconds).
-const PUBLIC_EVERY = { event: 30, "": 60, markets: 60, traders: 60, tags: 60, watchlist: 60 };
+const PUBLIC_EVERY = { "": 60, markets: 60, traders: 60, tags: 60, watchlist: 60 };   // an event page is live by itself (/api/live)
 let lastQuiet = Date.now();
 
 function refreshSoon(pages = USER_PAGES) {

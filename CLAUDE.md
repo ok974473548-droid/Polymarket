@@ -7,7 +7,7 @@
 ## Запуск и проверка
 - Только Python 3.11+, без сторонних пакетов: `python app.py` → http://127.0.0.1:8787 (`--db`, `--port`, `--no-worker`).
 - Docker: `docker compose up -d --build` (том `kontur-data`).
-- Тесты: `PYTHONPATH=.:tests python -m unittest tests.test_trading tests.test_autopilot tests.test_data tests.test_speed` (120 тестов, без сети).
+- Тесты: `PYTHONPATH=.:tests python -m unittest tests.test_trading tests.test_autopilot tests.test_data tests.test_speed` (123 теста, без сети).
 - Замер скорости: `PYTHONPATH=. python research/bench_perf.py` (сеть, сервер, база, поток сделок).
 - Переменные: `KONTUR_DB`, `HOST`, `PORT`, `KONTUR_SCOUT_THREADS` (6), `KONTUR_SCOUT_GAP` (0.06 с), `KONTUR_STATS_THREADS` (4), `KONTUR_STATS_GAP` (0.06 с).
 
@@ -19,6 +19,7 @@
 | `kontur/ws.py` | WebSocket-клиент на stdlib (TLS, прокси, буфер кадров при таймаутах, сжатие permessage-deflate) |
 | `kontur/stream.py` | Живой поток сделок RTDS → копирование за ~1 с; исполнители по лидерам (порядок сделок сохраняется) |
 | `kontur/books.py` | Живые стаканы (CLOB WS) — только для лимитных заявок и открытого тикета; `books.get` — из памяти, предзагруженный или по сети; позиции переоцениваются через `pm.midpoints` |
+| `kontur/crypto.py` | Криптораунды «вверх или вниз»: живые цены Chainlink (RTDS `crypto_prices_chainlink`, по запросу), данные раунда (цель, история, прошлые раунды) с polymarket.com/api; `/api/crypto-round`, живой канал страницы события `/api/live` (SSE: `price` из стаканов — `books.shown`, `crypto`) |
 | `kontur/packs.py` | Ставки игроков: одна сжатая запись (zlib, по столбцам) на кошелёк в `scout_packs`; перенос старой `scout_bets` при запуске |
 | `kontur/bus.py` | Шина событий внутри процесса (для SSE): `account` (движение денег), `prices` (счета с изменившейся ценой), `copy`, `fill`, `autopilot`, `notify`; страница перерисовывается без мигания — `quietDraw` в `static/js/app.js`, триггеры и таймеры — `layout.js` |
 | `kontur/polymarket.py` | Клиенты Gamma / Data API v2 / CLOB, темп запросов по хостам, пауза для всех при 429, кэш |
@@ -29,7 +30,7 @@
 | `kontur/traders.py` | Рейтинги и статистика трейдеров; закрытые позиции догружаются и хранятся картой «хэш токена → итог» (`wallet_closed`) |
 | `kontur/accounts.py` | Несколько человек: приглашения (одноразовые ссылки, в базе только хэш), регистрация по ним, список пользователей, блокировка (вход и копирование останавливаются), удаление со всеми данными; страница `/admin` и `/join` — `static/js/pages/admin.js` |
 | `kontur/news.py`, `watchlist.py`, `notify.py`, `auth.py`, `db.py` | Новости, избранное, уведомления, вход, база SQLite (справочник исходов `outcomes` для журнала копий) |
-| `static/` | Интерфейс (JS без сборки). Дизайн — токены в `:root` `static/css/app.css`: `--radius` 16, `--card` (градиент), `--surface-shadow`, `--well`, фирменная пара `--brand`/`--brand-2`/`--brand-grad` (синий → бирюзовый); контейнер `.wrap` до 1 880 px; высота графиков — `fitHeight` в `chart.js`; строки сделок и ставок (деньги, подробности под строкой, карточки на телефоне) — `trades.js` |
+| `static/` | Интерфейс (JS без сборки). Дизайн — токены в `:root` `static/css/app.css`: `--radius` 16, `--card` (градиент), `--surface-shadow`, `--well`, фирменная пара `--brand`/`--brand-2`/`--brand-grad` (синий → бирюзовый); контейнер `.wrap` до 1 880 px; высота графиков — `fitHeight` в `chart.js`; строки сделок и ставок (деньги, подробности под строкой, карточки на телефоне) — `trades.js`; живые графики событий — `livechart.js`, прокрутка цифр — `roll.js` |
 | `research/` | Скрипты проверки модели автопилота и итоги прогона |
 | `AUTOPILOT.md` | Устройство автопилота |
 

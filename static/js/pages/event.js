@@ -3,7 +3,9 @@
 // Live News sidebar and the order ticket (Buy/Sell, Market/Limit, Yes/No, $ amount, To win).
 import { $, $$, ago, api, avatar, cents, compact, date, delta, errorBox, esc, go, icon, loadSession, pct, route, short,
   signedUsd, starBtn, state, thumb, toast, unwrap, usd, withQuery, yesNo, shares as fmtShares } from "../core.js";
-import { lineChart, PALETTE } from "../chart.js";
+import { PALETTE } from "../chart.js";
+import { cryptoRound, liveFeed, probChart, stopLive, TEAM_COLORS } from "../livechart.js";
+import { roll, rollHtml } from "../roll.js";
 import { eventCandidates } from "./home.js";
 import { tradesTable } from "./trader.js";
 import { header } from "../layout.js";
@@ -12,8 +14,12 @@ const TABS = [["chart", "График"], ["holders", "Крупные держа�
 const WINDOWS = [["1d", "24Ч"], ["1w", "7Д"], ["1m", "1М"], ["3m", "3М"], ["ytd", "YTD"], ["1y", "1Г"], ["max", "Всё"]];
 let chart = null;
 let ticketCtl = null;
+const CRYPTO = /^(btc|eth|sol|xrp|doge|bnb|hype|zec)-updown-(5m|15m|1h|4h|1d)-\d+$/;
+const PAIR_WINDOWS = [["1h", "1Ч"], ["6h", "6Ч"], ["1d", "1Д"], ["1w", "1Н"], ["max", "МАКС"]];
 
 export async function eventPage(main, slug) {
+  stopLive();
+  chart = null;
   const q = route().q;
   const tab = TABS.some((t) => t[0] === q.get("tab")) ? q.get("tab") : "chart";
   main.innerHTML = `<div class="event-layout"><div class="ev-main" id="ev-main"><div class="sk-block tall"></div></div>
@@ -48,10 +54,88 @@ export async function eventPage(main, slug) {
   else tradesTab(tabHost, e);
   ticket(e, cands);
   newsBox(e);
+  goLive(e, cands, tab);
+}
+
+// ------------------------------------------------------------------ live prices on the page
+// One connection brings every price change of the outcomes shown (and the coin price on a crypto round); the numbers
+// roll to their new values, the chart lines grow.
+function goLive(e, cands, tab) {
+  if (e.closed) return;
+  const toks = [];
+  const shown = [...new Set([...cands.slice(0, 12).map((c) => c.contract), ...e.contracts.filter((c) => !c.closed)])];
+  for (const c of shown) for (const o of c.outcomes.slice(0, 2)) if (o.token) toks.push(o.token);
+  const m = CRYPTO.exec(e.slug);
+  const coin = m && tab === "chart" ? m[1] : "";
+  liveFeed([...new Set(toks)], coin, (tok, p) => {
+    for (const c of e.contracts) for (const o of c.outcomes) if (o.token === tok) o.price = p;
+    document.querySelectorAll(`[data-p="${tok}"]`).forEach((el) => roll(el, pct(p)));
+    document.querySelectorAll(`[data-c="${tok}"]`).forEach((el) => roll(el, cents(p)));
+    chart?.price?.(tok, p);
+  }, (t, v) => chart?.coin?.(t, v));
 }
 
 // ------------------------------------------------------------------ chart + outcomes
+function pairOf(e, cands) {
+  // A market between two named sides (teams, players, Up/Down): one line per side, coloured. A match with several
+  // markets (map winners, handicaps) is drawn by its main one: the busiest market between the two sides.
+  const named = (c) => c.outcomes.length === 2 && !c.closed && c.outcomes.every((o) => o.token && !/^(yes|no)$/i.test(o.name));
+  let main = cands.length === 2 && cands[0].contract === cands[1].contract && named(cands[0].contract) ? cands[0].contract : null;
+  if (!main && e.tags.some((t) => /sports|esports/.test(t.slug))) {
+    // the match itself before single maps, games, sets, handicaps and totals; then the busiest
+    const part = (c) => /\b(game|map|set|round|half|quarter|period)\s*\d|handicap|spread|o\/u|total/i.test(c.label || c.question || "");
+    main = e.contracts.filter(named).sort((a, b) => part(a) - part(b) || (b.volume || 0) - (a.volume || 0))[0] || null;
+  }
+  if (!main) return null;
+  const updown = /^up$/i.test(main.outcomes[0].name) && /^down$/i.test(main.outcomes[1].name);
+  return { colors: updown ? ["#22c55e", "#ef4444"] : TEAM_COLORS,
+    sides: main.outcomes.map((o) => ({ name: yesNo(o.name), token: o.token, price: o.price })) };
+}
+
+function rulesHtml(e) {
+  return e.rules ? `<section class="card rules"><h2>${icon("info", 16)} Правила разрешения</h2><p>${esc(shortRules(e.rules))}</p>
+      ${e.resolution ? `<p class="muted small">Источник: ${/^https?:\/\//.test(e.resolution) ? `<a href="${esc(e.resolution)}" target="_blank" rel="noopener noreferrer">${esc(e.resolution)}</a>` : esc(e.resolution)}</p>` : ""}</section>` : "";
+}
+
+async function cryptoTab(host, e, cands) {
+  host.innerHTML = `<div id="lv-host"></div><section class="outcomes" id="outcomes"></section>${rulesHtml(e)}`;
+  outcomes($("#outcomes"), e, cands);
+  const round = await cryptoRound($("#lv-host"), e.slug, {
+    onEnd: (r) => {
+      toast("Раунд завершён — открываю следующий");
+      setTimeout(() => location.pathname === "/event/" + e.slug && go("/event/" + r.next), 3000);
+    },
+  });
+  if (round) chart = { coin: (t, v) => round.coin(t, v) };
+}
+
+async function pairTab(host, e, cands, pair) {
+  const q = route().q;
+  const win = PAIR_WINDOWS.some((w) => w[0] === q.get("w")) ? q.get("w") : e.live ? "6h" : "1d";
+  host.innerHTML = `<section class="card chart-card lv-card">
+      <div class="lv-pair-head"><div class="lv-teams">${pair.sides.map((c, i) => `<span><i style="background:${pair.colors[i]}"></i>${esc(c.name)}</span>`).join("")}</div>
+        ${e.live ? '<span class="lv-live">В эфире</span>' : ""}
+        <div class="seg" role="group" aria-label="Период">${PAIR_WINDOWS.map(([k, l]) =>
+          `<a href="${withQuery({ w: k })}" class="${win === k ? "cur" : ""}" data-keep-scroll>${l}</a>`).join("")}</div></div>
+      <div id="plot"></div></section>
+    <section class="outcomes" id="outcomes"></section>${rulesHtml(e)}`;
+  outcomes($("#outcomes"), e, cands);
+  const lines = await Promise.all(pair.sides.map(async (c, i) => {
+    let pts = [];
+    try {
+      pts = c.token ? unwrap(await api(`/api/prices?token=${c.token}&window=${win}`)) : [];
+    } catch { /* an empty line */ }
+    return { name: c.name, color: pair.colors[i], points: pts, token: c.token };
+  }));
+  if (!$("#plot")) return;
+  const pc = probChart($("#plot"), lines, { height: 320, intraday: win !== "max" });
+  chart = { price: (tok, p) => lines.forEach((l, i) => l.token === tok && pc.add(i, p)) };
+}
+
 function chartTab(host, e, cands) {
+  if (CRYPTO.test(e.slug) && !e.closed) return cryptoTab(host, e, cands);
+  const pair = pairOf(e, cands);
+  if (pair) return pairTab(host, e, cands, pair);
   const q = route().q;
   const win = WINDOWS.some((w) => w[0] === q.get("w")) ? q.get("w") : "1m";
   const start = q.get("from"), end = q.get("to");
@@ -65,12 +149,11 @@ function chartTab(host, e, cands) {
           <form class="range-form"><label>С<input type="date" name="from" value="${esc(start || "")}" required></label>
           <label>По<input type="date" name="to" value="${esc(end || "")}"></label><button class="btn btn-primary btn-sm">Показать</button>
           ${start ? `<a class="btn btn-sm" href="${withQuery({ from: null, to: null })}" data-keep-scroll>Сбросить</a>` : ""}</form></details></div>
-      <div class="legend" id="legend">${top.map((c, i) => `<button class="lg ${hidden.has(i) ? "off" : ""} ${i >= 4 && !showAll ? "extra" : ""}" data-i="${i}" aria-pressed="${!hidden.has(i)}"><i style="background:${PALETTE[i]}"></i>${esc(c.name)} <b>${pct(c.price)}</b></button>`).join("")}
+      <div class="legend" id="legend">${top.map((c, i) => `<button class="lg ${hidden.has(i) ? "off" : ""} ${i >= 4 && !showAll ? "extra" : ""}" data-i="${i}" aria-pressed="${!hidden.has(i)}"><i style="background:${PALETTE[i]}"></i>${esc(c.name)} <b data-p="${c.token}">${rollHtml(pct(c.price))}</b></button>`).join("")}
         ${top.length > 4 ? `<a class="lg-more" href="${withQuery({ all: showAll ? null : "1" })}" data-keep-scroll>${showAll ? "− Меньше" : "+" + (top.length - 4) + " ещё"}</a>` : ""}</div>
       <div id="plot" class="plot"></div></section>
     <section class="outcomes" id="outcomes"></section>
-    ${e.rules ? `<section class="card rules"><h2>${icon("info", 16)} Правила разрешения</h2><p>${esc(shortRules(e.rules))}</p>
-      ${e.resolution ? `<p class="muted small">Источник: ${/^https?:\/\//.test(e.resolution) ? `<a href="${esc(e.resolution)}" target="_blank" rel="noopener noreferrer">${esc(e.resolution)}</a>` : esc(e.resolution)}</p>` : ""}</section>` : ""}`;
+    ${rulesHtml(e)}`;
   $(".range-form", host).onsubmit = (ev) => {
     ev.preventDefault();
     const f = ev.target;
@@ -92,20 +175,21 @@ async function drawChart(top, win, start, end, hidden, showAll) {
   const series = await Promise.all(top.map(async (c, i) => {
     try {
       const pts = c.token ? unwrap(await api(`/api/prices?token=${c.token}&window=${win}${range}`)) : [];
-      return { name: c.name, color: PALETTE[i], points: pts.map(([t, p]) => [t, p * 100]), visible: !hidden.has(i) && (i < 4 || showAll) };
+      return { name: c.name, color: PALETTE[i], points: pts, visible: !hidden.has(i) && (i < 4 || showAll), token: c.token };
     } catch {
-      return { name: c.name, color: PALETTE[i], points: [], visible: false };
+      return { name: c.name, color: PALETTE[i], points: [], visible: false, token: c.token };
     }
   }));
   if (!plot.isConnected) return;
-  chart?.destroy();
-  chart = lineChart(plot, series, { unit: "%", height: 320, intraday: win === "1d" || win === "1w" });
+  const pc = probChart(plot, series, { height: 320, intraday: win === "1d" || win === "1w" || Boolean(start) });
+  // a chosen past range does not grow with live prices
+  chart = { price: (tok, p) => !start && series.forEach((l, i) => l.token === tok && pc.add(i, p)) };
   for (const b of $$("#legend .lg")) {
     b.onclick = () => {
       const i = Number(b.dataset.i);
       const off = !b.classList.toggle("off");
       b.setAttribute("aria-pressed", !off);
-      chart.setVisible(i, !off);
+      pc.setVisible(i, !off);
       const now = new Set($$("#legend .lg.off").map((x) => x.dataset.i));
       history.replaceState({}, "", withQuery({ hide: [...now].join(",") || null }));
     };
@@ -125,11 +209,11 @@ function outcomes(host, e, cands) {
       return `<div class="out-row">
         <div class="out-name">${multi && c.image ? thumb(c.image, 40) : `<span class="dot-lg" style="background:${PALETTE[i % PALETTE.length]}"></span>`}
           <div><b>${esc(c.name)}</b><small>${c.volume != null ? usd(c.volume, 0) + " объём" : ""}</small></div></div>
-        <div class="out-pct"><strong>${pct(c.price)}</strong>${c.change != null ? delta(c.change * 100, 0) : ""}</div>
+        <div class="out-pct"><strong data-p="${c.token}">${rollHtml(pct(c.price))}</strong>${c.change != null ? delta(c.change * 100, 0) : ""}</div>
         <div class="out-btns">${multi
-          ? `<button class="buy yes" data-pick="${c.contract.condition}" data-o="0" ${live ? "" : "disabled"}>Купить ${esc(yesNo(yes.name))} ${cents(yes.price)}</button>
-             <button class="buy no" data-pick="${c.contract.condition}" data-o="1" ${live ? "" : "disabled"}>Купить ${esc(yesNo(no.name))} ${cents(no.price)}</button>`
-          : `<button class="buy ${c.index ? "no" : "yes"}" data-pick="${c.contract.condition}" data-o="${c.index}" ${live ? "" : "disabled"}>Купить ${cents(c.price)}</button>`}</div></div>`;
+          ? `<button class="buy yes" data-pick="${c.contract.condition}" data-o="0" ${live ? "" : "disabled"}><span class="bn">Купить ${esc(yesNo(yes.name))}</span> <span data-c="${yes.token}">${rollHtml(cents(yes.price))}</span></button>
+             <button class="buy no" data-pick="${c.contract.condition}" data-o="1" ${live ? "" : "disabled"}><span class="bn">Купить ${esc(yesNo(no.name))}</span> <span data-c="${no.token}">${rollHtml(cents(no.price))}</span></button>`
+          : `<button class="buy ${c.index ? "no" : "yes"}" data-pick="${c.contract.condition}" data-o="${c.index}" ${live ? "" : "disabled"}>Купить <span data-c="${c.token}">${rollHtml(cents(c.price))}</span></button>`}</div></div>`;
     }).join("")}
     ${cands.length > 8 ? `<a class="show-all" href="${withQuery({ rows: all ? null : "all" })}" data-keep-scroll>${all ? "Свернуть" : `Показать все позиции (${cands.length})`}</a>` : ""}
     ${closed.length && multi ? `<details class="closed-list"><summary>Завершённые рынки (${closed.length})</summary>${closed.map((c) =>
@@ -254,7 +338,7 @@ function ticket(e, cands) {
         ${multi ? `<select id="tk-contract" class="tk-select" aria-label="Исход">${contracts.filter((x) => !x.closed).map((x) => `<option value="${x.condition}" ${x === c ? "selected" : ""}>${esc(x.label || x.question)}</option>`).join("")}</select>` : `<b>${esc(label)}</b>`}</div></div>
       <div class="tk-row"><div class="tk-sides" role="tablist">${["buy", "sell"].map((s) => `<button role="tab" aria-selected="${st.side === s}" class="${st.side === s ? "cur" : ""}" data-side="${s}">${s === "buy" ? "Купить" : "Продать"}</button>`).join("")}</div>
         <select id="tk-type" class="tk-type" aria-label="Тип заявки"><option value="market">Рыночная</option><option value="limit" ${st.type === "limit" ? "selected" : ""}>Лимитная</option></select></div>
-      <div class="tk-outs">${out.slice(0, 2).map((o, i) => `<button class="tk-out ${i ? "no" : "yes"} ${st.o === i ? "cur" : ""}" data-o="${i}">${esc(yesNo(o.name))} <b>${cents(o.price)}</b></button>`).join("")}</div>
+      <div class="tk-outs">${out.slice(0, 2).map((o, i) => `<button class="tk-out ${i ? "no" : "yes"} ${st.o === i ? "cur" : ""}" data-o="${i}">${esc(yesNo(o.name))} <b data-c="${o.token}">${rollHtml(cents(o.price))}</b></button>`).join("")}</div>
       ${!live ? '<p class="tk-closed">Рынок закрыт для торговли.</p>' : st.type === "limit" ? limitFields() : st.side === "buy" ? buyFields() : sellFields()}
       <div class="tk-summary" id="tk-sum"></div>
       ${state.user ? `<button class="btn btn-primary btn-block tk-go" id="tk-go" ${live ? "" : "disabled"}>${st.side === "buy" ? "Купить" : "Продать"} ${esc(yesNo(out[st.o]?.name || ""))}</button>`
