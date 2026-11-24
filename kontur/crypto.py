@@ -17,13 +17,13 @@ from collections import deque
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
-from . import bus
+from . import bus, views
 from . import polymarket as pm
 from .ws import WebSocket, WsError
 
 URL = "wss://ws-live-data.polymarket.com"
 SITE = "https://polymarket.com/api"
-SYMBOLS = {"btc", "eth", "sol", "xrp", "doge", "bnb", "hype", "zec"}
+SYMBOLS = views.ROUND_SYMBOLS
 NAMES = {"btc": "Биткоин", "eth": "Эфириум", "sol": "Солана", "xrp": "XRP", "doge": "Догикоин", "bnb": "BNB",
          "hype": "Hyperliquid", "zec": "Zcash"}
 PERIODS = {"5m": (300, "fiveminute"), "15m": (900, "fifteenminute"), "1h": (3600, "hourly"),
@@ -201,15 +201,21 @@ def round_info(slug):
             target = None
     now = time.time()
     lo = start - 30
+    finished = now >= end
     history = []
     try:
-        raw = pm.fetch(SITE + "/crypto/price-history?" + urlencode({**q, "twapEnabled": "false", "historySeed": "true"}), gap=0.1)
+        # a round being played: the last couple of minutes ("history seed"); a finished one: the whole round
+        # (Polymarket answers with 61 points from start to end, as its own chart of a finished round shows)
+        extra = {"twapEnabled": "false"} if finished else {"twapEnabled": "false", "historySeed": "true"}
+        raw = pm.fetch(SITE + "/crypto/price-history?" + urlencode({**q, **extra}), gap=0.1)
         history = [[int(x["timestamp"] / 1000), float(x["value"])] for x in raw if isinstance(x, dict) and pm.num(x.get("value"))]
     except (pm.UpstreamError, LookupError, ValueError, TypeError):
         history = []
     # The server's own stream is the source; Polymarket's history only fills the time before its first point.
     # Mixing the two second by second draws spikes: their clocks differ by up to a minute.
     own = STREAM.series(sym, lo, min(end, now)) if STREAM else []
+    if finished and own and own[0][0] > start + 5:
+        own = []          # the stream saw only part of a finished round: Polymarket's whole round reads better
     first = own[0][0] if own else float("inf")
     merged = dict((t, v) for t, v in history if lo <= t < first)
     merged.update(own)
@@ -231,6 +237,7 @@ def round_info(slug):
         with _cache_lock:
             _past[pkey] = (time.monotonic(), past)
     span = PERIODS[r["period"]][0]
+    current = start + max(0, int((now - start) // span)) * span      # the round being played now (same grid)
     return {**r, "name": NAMES.get(sym, sym.upper()), "target": target, "points": [[t, round(v, 6)] for t, v in points],
-            "past": past, "now": now, "prev": f"{sym}-updown-{r['period']}-{start - span}",
-            "next": f"{sym}-updown-{r['period']}-{start + span}"}
+            "past": past, "now": now, "finished": finished, "prev": f"{sym}-updown-{r['period']}-{start - span}",
+            "next": f"{sym}-updown-{r['period']}-{start + span}", "live": f"{sym}-updown-{r['period']}-{current}"}

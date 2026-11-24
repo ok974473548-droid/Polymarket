@@ -7,7 +7,7 @@
 ## Запуск и проверка
 - Только Python 3.11+, без сторонних пакетов: `python app.py` → http://127.0.0.1:8787 (`--db`, `--port`, `--no-worker`).
 - Docker: `docker compose up -d --build` (том `kontur-data`).
-- Тесты: `PYTHONPATH=.:tests python -m unittest tests.test_trading tests.test_autopilot tests.test_data tests.test_speed` (123 теста, без сети).
+- Тесты: `PYTHONPATH=.:tests python -m unittest tests.test_trading tests.test_autopilot tests.test_data tests.test_speed tests.test_views` (140 тестов, без сети).
 - Замер скорости: `PYTHONPATH=. python research/bench_perf.py` (сеть, сервер, база, поток сделок).
 - Переменные: `KONTUR_DB`, `HOST`, `PORT`, `KONTUR_SCOUT_THREADS` (6), `KONTUR_SCOUT_GAP` (0.06 с), `KONTUR_STATS_THREADS` (4), `KONTUR_STATS_GAP` (0.06 с).
 
@@ -19,10 +19,11 @@
 | `kontur/ws.py` | WebSocket-клиент на stdlib (TLS, прокси, буфер кадров при таймаутах, сжатие permessage-deflate) |
 | `kontur/stream.py` | Живой поток сделок RTDS → копирование за ~1 с; исполнители по лидерам (порядок сделок сохраняется) |
 | `kontur/books.py` | Живые стаканы (CLOB WS) — только для лимитных заявок и открытого тикета; `books.get` — из памяти, предзагруженный или по сети; позиции переоцениваются через `pm.midpoints` |
-| `kontur/crypto.py` | Криптораунды «вверх или вниз»: живые цены Chainlink (RTDS `crypto_prices_chainlink`, по запросу), данные раунда (цель, история, прошлые раунды) с polymarket.com/api; `/api/crypto-round`, живой канал страницы события `/api/live` (SSE: `price` из стаканов — `books.shown`, `crypto`) |
+| `kontur/crypto.py` | Криптораунды «вверх или вниз»: живые цены Chainlink (RTDS `crypto_prices_chainlink`, по запросу), данные раунда (цель, история: идущий — последние минуты, завершённый — целиком; прошлые раунды; `live` — идущий сейчас) с polymarket.com/api; `/api/crypto-round`, живой канал страницы события `/api/live` (SSE: `price` из стаканов — `books.shown`, `crypto`) |
 | `kontur/packs.py` | Ставки игроков: одна сжатая запись (zlib, по столбцам) на кошелёк в `scout_packs`; перенос старой `scout_bets` при запуске |
 | `kontur/bus.py` | Шина событий внутри процесса (для SSE): `account` (движение денег), `prices` (счета с изменившейся ценой), `copy`, `fill`, `autopilot`, `notify`; страница перерисовывается без мигания — `quietDraw` в `static/js/app.js`, триггеры и таймеры — `layout.js` |
-| `kontur/polymarket.py` | Клиенты Gamma / Data API v2 / CLOB, темп запросов по хостам, пауза для всех при 429, кэш |
+| `kontur/views.py` | Какой график у страницы события, как решает Polymarket: `round` (криптораунд), `asset` (цена монеты), `single` (одна линия), `match` (цвета команд, ничья серая), `multi` (negRisk, `seriesColor` → палитра), `none` (независимые вопросы — только список); проверка на 41 событии исследования — `tests/data/events_24nov2026.json.gz` |
+| `kontur/polymarket.py` | Клиенты Gamma / Data API v2 / CLOB, темп запросов по хостам, пауза для всех при 429, кэш; событие с `teams`, `score`, `series`, `tweets`, `view`; история цен — CLOB с шагами периодов Polymarket (`history_params`: 1Ч–1Д минута, 1Н 5 мин, 1М 30 мин, ВСЕ 12 ч, молодой рынок — с создания) |
 | `kontur/scout.py` | Поиск и оценка игроков для автопилота: ставки из позиций (догрузка: закрытые — только новые, `start`), копия с задержкой и комиссией, метрики, тип поведения, отбор, балл, проверка на истории |
 | `kontur/autopilot.py` | Состав, скамейка, испытание, замены, копии автопилота, настройки |
 | `kontur/copytrade.py`, `trading.py` | Копирование (`handle` — одна сделка, ключ `trade_key` общий для потока и Data API, без дублей); заявки, проход по стакану, комиссии, позиции |

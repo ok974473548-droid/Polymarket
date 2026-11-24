@@ -4,18 +4,30 @@
 import { $, $$, ago, api, avatar, cents, compact, date, delta, errorBox, esc, go, icon, loadSession, pct, route, short,
   signedUsd, starBtn, state, thumb, toast, unwrap, usd, withQuery, yesNo, shares as fmtShares } from "../core.js";
 import { PALETTE } from "../chart.js";
-import { cryptoRound, liveFeed, probChart, stopLive, TEAM_COLORS } from "../livechart.js";
+import { cryptoRound, liveFeed, probChart, stopLive } from "../livechart.js";
 import { roll, rollHtml } from "../roll.js";
 import { eventCandidates } from "./home.js";
 import { tradesTable } from "./trader.js";
 import { header } from "../layout.js";
 
 const TABS = [["chart", "График"], ["holders", "Крупные держатели"], ["trades", "Сделки"]];
-const WINDOWS = [["1d", "24Ч"], ["1w", "7Д"], ["1m", "1М"], ["3m", "3М"], ["ytd", "YTD"], ["1y", "1Г"], ["max", "Всё"]];
+// the periods of polymarket.com's charts; "ВСЕ" is chosen there by default
+const WINDOWS = [["1h", "1Ч"], ["6h", "6Ч"], ["1d", "1Д"], ["1w", "1Н"], ["1m", "1М"], ["max", "ВСЕ"]];
 let chart = null;
 let ticketCtl = null;
-const CRYPTO = /^(btc|eth|sol|xrp|doge|bnb|hype|zec)-updown-(5m|15m|1h|4h|1d)-\d+$/;
-const PAIR_WINDOWS = [["1h", "1Ч"], ["6h", "6Ч"], ["1d", "1Д"], ["1w", "1Н"], ["max", "МАКС"]];
+
+// Which chart the page shows is decided by the server (kontur/views.py), as polymarket.com decides it: a crypto
+// round, one line, a match, several outcomes, or no chart at all for independent questions.
+function viewOf(e) {
+  return e.view || { kind: "none", lines: [], main: [] };     // a copy of the event cached before 1.8.0
+}
+
+// the main market of a match (who wins) first in the list and in the ticket, then the rest in their order
+function mainFirst(cands, v) {
+  if (!v.main?.length) return cands;
+  const rank = (c) => (v.main.includes(c.condition) ? v.main.indexOf(c.condition) : v.main.length);
+  return cands.map((c, i) => [c, i]).sort((x, y) => rank(x[0]) - rank(y[0]) || x[1] - y[1]).map((x) => x[0]);
+}
 
 export async function eventPage(main, slug) {
   stopLive();
@@ -33,7 +45,9 @@ export async function eventPage(main, slug) {
     return;
   }
   document.title = e.title + " · Контур рынка";
-  const cands = eventCandidates(e);
+  const v = viewOf(e);
+  const cands = mainFirst(eventCandidates(e), v);
+  const listOnly = v.kind === "none" || v.kind === "asset";
   const host = $("#ev-main");
   const showAllTags = q.get("alltags") === "1";
   const tags = showAllTags ? e.tags : e.tags.slice(0, 4);
@@ -46,7 +60,7 @@ export async function eventPage(main, slug) {
       <div class="ev-actions">${starBtn("event", e.slug, e.title, e.image, true)}
         <a class="btn btn-sm" href="https://polymarket.com/event/${esc(e.slug)}" target="_blank" rel="noopener noreferrer">${icon("ext", 14)} Polymarket</a></div></header>
     <nav class="tabs" aria-label="Разделы события">${TABS.map(([k, l]) =>
-      `<a href="${withQuery({ tab: k === "chart" ? null : k, cursor: null })}" class="${tab === k ? "cur" : ""}" data-keep-scroll>${l}</a>`).join("")}</nav>
+      `<a href="${withQuery({ tab: k === "chart" ? null : k, cursor: null })}" class="${tab === k ? "cur" : ""}" data-keep-scroll>${k === "chart" && listOnly ? "Исходы" : l}</a>`).join("")}</nav>
     <div id="ev-tab"></div>`;
   const tabHost = $("#ev-tab");
   if (tab === "chart") chartTab(tabHost, e, cands);
@@ -62,11 +76,11 @@ export async function eventPage(main, slug) {
 // roll to their new values, the chart lines grow.
 function goLive(e, cands, tab) {
   if (e.closed) return;
-  const toks = [];
+  const v = viewOf(e);
+  const toks = v.lines.map((l) => l.token).filter(Boolean);
   const shown = [...new Set([...cands.slice(0, 12).map((c) => c.contract), ...e.contracts.filter((c) => !c.closed)])];
   for (const c of shown) for (const o of c.outcomes.slice(0, 2)) if (o.token) toks.push(o.token);
-  const m = CRYPTO.exec(e.slug);
-  const coin = m && tab === "chart" ? m[1] : "";
+  const coin = v.kind === "round" && tab === "chart" ? v.symbol : "";
   liveFeed([...new Set(toks)], coin, (tok, p) => {
     for (const c of e.contracts) for (const o of c.outcomes) if (o.token === tok) o.price = p;
     document.querySelectorAll(`[data-p="${tok}"]`).forEach((el) => roll(el, pct(p)));
@@ -76,80 +90,98 @@ function goLive(e, cands, tab) {
 }
 
 // ------------------------------------------------------------------ chart + outcomes
-function pairOf(e, cands) {
-  // A market between two named sides (teams, players, Up/Down): one line per side, coloured. A match with several
-  // markets (map winners, handicaps) is drawn by its main one: the busiest market between the two sides.
-  const named = (c) => c.outcomes.length === 2 && !c.closed && c.outcomes.every((o) => o.token && !/^(yes|no)$/i.test(o.name));
-  let main = cands.length === 2 && cands[0].contract === cands[1].contract && named(cands[0].contract) ? cands[0].contract : null;
-  if (!main && e.tags.some((t) => /sports|esports/.test(t.slug))) {
-    // the match itself before single maps, games, sets, handicaps and totals; then the busiest
-    const part = (c) => /\b(game|map|set|round|half|quarter|period)\s*\d|handicap|spread|o\/u|total/i.test(c.label || c.question || "");
-    main = e.contracts.filter(named).sort((a, b) => part(a) - part(b) || (b.volume || 0) - (a.volume || 0))[0] || null;
-  }
-  if (!main) return null;
-  const updown = /^up$/i.test(main.outcomes[0].name) && /^down$/i.test(main.outcomes[1].name);
-  return { colors: updown ? ["#22c55e", "#ef4444"] : TEAM_COLORS,
-    sides: main.outcomes.map((o) => ({ name: yesNo(o.name), token: o.token, price: o.price })) };
-}
-
 function rulesHtml(e) {
   return e.rules ? `<section class="card rules"><h2>${icon("info", 16)} Правила разрешения</h2><p>${esc(shortRules(e.rules))}</p>
       ${e.resolution ? `<p class="muted small">Источник: ${/^https?:\/\//.test(e.resolution) ? `<a href="${esc(e.resolution)}" target="_blank" rel="noopener noreferrer">${esc(e.resolution)}</a>` : esc(e.resolution)}</p>` : ""}</section>` : "";
 }
 
+function chartTab(host, e, cands) {
+  const v = viewOf(e);
+  if (v.kind === "round") return cryptoTab(host, e, cands);
+  if (v.kind === "single" || v.kind === "match") return linesTab(host, e, cands, v);
+  if (v.kind === "multi") return multiTab(host, e, cands, v);
+  // independent questions ("will he say…", "by which date…"): polymarket.com shows the list only, no chart
+  host.innerHTML = `<section class="outcomes" id="outcomes"></section>${rulesHtml(e)}`;
+  outcomes($("#outcomes"), e, cands);
+}
+
 async function cryptoTab(host, e, cands) {
   host.innerHTML = `<div id="lv-host"></div><section class="outcomes" id="outcomes"></section>${rulesHtml(e)}`;
   outcomes($("#outcomes"), e, cands);
-  const round = await cryptoRound($("#lv-host"), e.slug, {
-    onEnd: (r) => {
-      toast("Раунд завершён — открываю следующий");
-      setTimeout(() => location.pathname === "/event/" + e.slug && go("/event/" + r.next), 3000);
-    },
-  });
+  const round = await cryptoRound($("#lv-host"), e.slug);
   if (round) chart = { coin: (t, v) => round.coin(t, v) };
 }
 
-async function pairTab(host, e, cands, pair) {
+const windowOf = (q) => (WINDOWS.some((w) => w[0] === q.get("w")) ? q.get("w") : "max");
+const periods = (win, custom = false) => `<div class="seg" role="group" aria-label="Период">${WINDOWS.map(([k, l]) =>
+  `<a href="${withQuery({ w: k === "max" ? null : k, from: null, to: null })}" class="${win === k && !custom ? "cur" : ""}" data-keep-scroll>${l}</a>`).join("")}</div>`;
+// the event's creation: "ВСЕ" of a young market then comes in fine steps (see polymarket.prices)
+const sinceOf = (e) => Math.floor(Date.parse(e.created || e.start || "") / 1000) || 0;
+// "Yes" / "Up" in the header of a one-line chart, in Polymarket's words
+const OUTCOME_WORDS = { yes: "Да", no: "Нет", up: "Вырастет", down: "Упадёт" };
+const outcomeWord = (name) => OUTCOME_WORDS[String(name || "").toLowerCase()] || name;
+
+async function loadLines(e, list, win, range = "", visible = () => true) {
+  const since = win === "max" && !range ? sinceOf(e) : 0;
+  return Promise.all(list.map(async (l, i) => {
+    let pts = [];
+    try {
+      pts = l.token ? unwrap(await api(`/api/prices?token=${l.token}&window=${win}${range}${since ? "&since=" + since : ""}`)) : [];
+    } catch { /* an empty line */ }
+    return { name: yesNo(l.name), color: l.color, points: pts, token: l.token, visible: visible(i) };
+  }));
+}
+
+// hours on the time axis when the lines span less than three days (dates alone would repeat: "23 23 24 24")
+function intraday(lines) {
+  const spans = lines.map((l) => (l.points.length > 1 ? l.points[l.points.length - 1][0] - l.points[0][0] : 0));
+  return Math.max(0, ...spans) < 3 * 86400;
+}
+
+function changeOf(e, line) {
+  const c = e.contracts.find((x) => x.condition === line.condition);
+  if (c?.change24h == null) return "";
+  const ch = (line.index ? -c.change24h : c.change24h) * 100;
+  return delta(ch, Math.abs(ch) < 1 ? 1 : 0);
+}
+
+// one line ("3% chance") or a match (the sides in their colours)
+async function linesTab(host, e, cands, v) {
   const q = route().q;
-  const win = PAIR_WINDOWS.some((w) => w[0] === q.get("w")) ? q.get("w") : e.live ? "6h" : "1d";
-  host.innerHTML = `<section class="card chart-card lv-card">
-      <div class="lv-pair-head"><div class="lv-teams">${pair.sides.map((c, i) => `<span><i style="background:${pair.colors[i]}"></i>${esc(c.name)}</span>`).join("")}</div>
-        ${e.live ? '<span class="lv-live">В эфире</span>' : ""}
-        <div class="seg" role="group" aria-label="Период">${PAIR_WINDOWS.map(([k, l]) =>
-          `<a href="${withQuery({ w: k })}" class="${win === k ? "cur" : ""}" data-keep-scroll>${l}</a>`).join("")}</div></div>
+  const win = windowOf(q);
+  const single = v.kind === "single";
+  const first = v.lines[0];
+  const head = single
+    ? `<div class="lv-single"><small>${esc(outcomeWord(first.name))}</small>
+        <div><b><span data-p="${first.token}">${rollHtml(pct(first.price))}</span> вероятность</b>${changeOf(e, first)}</div></div>`
+    : `<div class="lv-teams">${v.lines.map((l) => `<span><i style="background:${l.color}"></i>${esc(yesNo(l.name))}</span>`).join("")}</div>
+       ${e.live ? '<span class="lv-live">В эфире</span>' : ""}`;
+  host.innerHTML = `<section class="card chart-card lv-card ${single ? "lv-one" : ""}">
+      <div class="lv-pair-head">${head}${periods(win)}</div>
       <div id="plot"></div></section>
     <section class="outcomes" id="outcomes"></section>${rulesHtml(e)}`;
   outcomes($("#outcomes"), e, cands);
-  const lines = await Promise.all(pair.sides.map(async (c, i) => {
-    let pts = [];
-    try {
-      pts = c.token ? unwrap(await api(`/api/prices?token=${c.token}&window=${win}`)) : [];
-    } catch { /* an empty line */ }
-    return { name: c.name, color: pair.colors[i], points: pts, token: c.token };
-  }));
+  const lines = await loadLines(e, v.lines, win);
   if (!$("#plot")) return;
-  const pc = probChart($("#plot"), lines, { height: 320, intraday: win !== "max" });
+  const pc = probChart($("#plot"), lines, { height: 300, intraday: intraday(lines), tags: !single });
   chart = { price: (tok, p) => lines.forEach((l, i) => l.token === tok && pc.add(i, p)) };
 }
 
-function chartTab(host, e, cands) {
-  if (CRYPTO.test(e.slug) && !e.closed) return cryptoTab(host, e, cands);
-  const pair = pairOf(e, cands);
-  if (pair) return pairTab(host, e, cands, pair);
+// several outcomes: the four most likely drawn, the rest a click away in the legend
+function multiTab(host, e, cands, v) {
   const q = route().q;
-  const win = WINDOWS.some((w) => w[0] === q.get("w")) ? q.get("w") : "1m";
+  const win = windowOf(q);
   const start = q.get("from"), end = q.get("to");
   const showAll = q.get("all") === "1";
-  const top = cands.slice(0, 12);
+  const top = v.lines;
   const hidden = new Set((q.get("hide") || "").split(",").filter(Boolean).map(Number));
   host.innerHTML = `<section class="card chart-card">
-      <div class="chart-tools"><div class="seg" role="group" aria-label="Период">${WINDOWS.map(([k, l]) =>
-        `<a href="${withQuery({ w: k === "1m" ? null : k, from: null, to: null })}" class="${win === k && !start ? "cur" : ""}" data-keep-scroll>${l}</a>`).join("")}</div>
+      <div class="chart-tools">${periods(win, Boolean(start))}
         <details class="range-pick"><summary class="btn btn-sm">${icon("calendar", 14)} ${start ? esc(start) + " — " + esc(end || "сегодня") : "Диапазон"}</summary>
           <form class="range-form"><label>С<input type="date" name="from" value="${esc(start || "")}" required></label>
           <label>По<input type="date" name="to" value="${esc(end || "")}"></label><button class="btn btn-primary btn-sm">Показать</button>
           ${start ? `<a class="btn btn-sm" href="${withQuery({ from: null, to: null })}" data-keep-scroll>Сбросить</a>` : ""}</form></details></div>
-      <div class="legend" id="legend">${top.map((c, i) => `<button class="lg ${hidden.has(i) ? "off" : ""} ${i >= 4 && !showAll ? "extra" : ""}" data-i="${i}" aria-pressed="${!hidden.has(i)}"><i style="background:${PALETTE[i]}"></i>${esc(c.name)} <b data-p="${c.token}">${rollHtml(pct(c.price))}</b></button>`).join("")}
+      <div class="legend" id="legend">${top.map((l, i) => `<button class="lg ${hidden.has(i) ? "off" : ""} ${i >= 4 && !showAll ? "extra" : ""}" data-i="${i}" aria-pressed="${!hidden.has(i)}"><i style="background:${l.color}"></i>${esc(l.name)} <b data-p="${l.token}">${rollHtml(pct(l.price))}</b></button>`).join("")}
         ${top.length > 4 ? `<a class="lg-more" href="${withQuery({ all: showAll ? null : "1" })}" data-keep-scroll>${showAll ? "− Меньше" : "+" + (top.length - 4) + " ещё"}</a>` : ""}</div>
       <div id="plot" class="plot"></div></section>
     <section class="outcomes" id="outcomes"></section>
@@ -160,7 +192,7 @@ function chartTab(host, e, cands) {
     go(withQuery({ from: f.from.value, to: f.to.value || null, w: null }));
   };
   outcomes($("#outcomes"), e, cands);
-  drawChart(top, win, start, end, hidden, showAll);
+  drawChart(e, top, win, start, end, hidden, showAll);
 }
 
 function shortRules(text) {
@@ -168,20 +200,13 @@ function shortRules(text) {
   return first.length > 600 ? first.slice(0, 600).replace(/\s+\S*$/, "") + "…" : first;
 }
 
-async function drawChart(top, win, start, end, hidden, showAll) {
+async function drawChart(e, top, win, start, end, hidden, showAll) {
   const plot = $("#plot");
   const toTs = (d, endOfDay) => (d ? Math.floor(new Date(d + (endOfDay ? "T23:59:59" : "T00:00:00")).getTime() / 1000) : "");
   const range = start ? `&start=${toTs(start)}&end=${toTs(end, true) || Math.floor(Date.now() / 1000)}` : "";
-  const series = await Promise.all(top.map(async (c, i) => {
-    try {
-      const pts = c.token ? unwrap(await api(`/api/prices?token=${c.token}&window=${win}${range}`)) : [];
-      return { name: c.name, color: PALETTE[i], points: pts, visible: !hidden.has(i) && (i < 4 || showAll), token: c.token };
-    } catch {
-      return { name: c.name, color: PALETTE[i], points: [], visible: false, token: c.token };
-    }
-  }));
+  const series = await loadLines(e, top, win, range, (i) => !hidden.has(i) && (i < 4 || showAll));
   if (!plot.isConnected) return;
-  const pc = probChart(plot, series, { height: 320, intraday: win === "1d" || win === "1w" || Boolean(start) });
+  const pc = probChart(plot, series, { height: 320, intraday: intraday(series) });
   // a chosen past range does not grow with live prices
   chart = { price: (tok, p) => !start && series.forEach((l, i) => l.token === tok && pc.add(i, p)) };
   for (const b of $$("#legend .lg")) {
@@ -202,13 +227,17 @@ function outcomes(host, e, cands) {
   const list = all ? cands : cands.slice(0, 8);
   const multi = cands.length && cands[0].contract !== cands[cands.length - 1].contract;
   const closed = e.contracts.filter((c) => c.closed);
+  // the row's dot in the colour of its line on the chart; a match's Yes/No markets (a team, the draw) by the line's name
+  const v = viewOf(e);
+  const lineColor = new Map(v.lines.map((l) => [l.token, l.color]));
+  const lineName = new Map(v.kind === "match" ? v.lines.filter((l) => l.name === "Ничья").map((l) => [l.token, l.name]) : []);
   host.innerHTML = `<div class="out-head"><span>Исход</span><span>Вероятность</span><span></span></div>
     ${list.map((c, i) => {
       const yes = c.contract.outcomes[0], no = c.contract.outcomes[1];
       const live = !c.contract.closed && c.contract.accepting;
       return `<div class="out-row">
-        <div class="out-name">${multi && c.image ? thumb(c.image, 40) : `<span class="dot-lg" style="background:${PALETTE[i % PALETTE.length]}"></span>`}
-          <div><b>${esc(c.name)}</b><small>${c.volume != null ? usd(c.volume, 0) + " объём" : ""}</small></div></div>
+        <div class="out-name">${multi && c.image ? thumb(c.image, 40) : `<span class="dot-lg" style="background:${lineColor.get(c.token) || PALETTE[i % PALETTE.length]}"></span>`}
+          <div><b>${esc(lineName.get(c.token) || c.name)}</b><small>${c.volume != null ? usd(c.volume, 0) + " объём" : ""}</small></div></div>
         <div class="out-pct"><strong data-p="${c.token}">${rollHtml(pct(c.price))}</strong>${c.change != null ? delta(c.change * 100, 0) : ""}</div>
         <div class="out-btns">${multi
           ? `<button class="buy yes" data-pick="${c.contract.condition}" data-o="0" ${live ? "" : "disabled"}><span class="bn">Купить ${esc(yesNo(yes.name))}</span> <span data-c="${yes.token}">${rollHtml(cents(yes.price))}</span></button>

@@ -170,7 +170,7 @@ def get_routes(db, path, query, user):
         return pm.event_by_slug(db, q1(query, "slug"))
     if path == "/api/prices":
         start, end = pm.num(q1(query, "start")), pm.num(q1(query, "end"))
-        return pm.prices(db, q1(query, "token"), q1(query, "window", "max"), start, end)
+        return pm.prices(db, q1(query, "token"), q1(query, "window", "max"), start, end, since=pm.num(q1(query, "since")))
     if path == "/api/holders":
         return pm.holders(db, q1(query, "condition"))
     if path == "/api/event-trades":

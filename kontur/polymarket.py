@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
-from . import net
+from . import net, views
 
 GAMMA = "https://gamma-api.polymarket.com"
 CLOB = "https://clob.polymarket.com"
@@ -231,9 +231,26 @@ def contract(item):
         "min_size": num(item.get("orderMinSize")) or 5,
         "tick": num(item.get("orderPriceMinTickSize")) or 0.01,
         "neg_risk": item.get("negRisk") is True,
+        "color": series_color(item.get("seriesColor")),
+        "type": text(item.get("sportsMarketType"), 60),     # moneyline, spreads, totals, … (matches only)
         "rules": text(item.get("description"), 4000),
         "resolution": text(item.get("resolutionSource"), 400),
     }
+
+
+HEX_COLOR = re.compile(r"#[0-9A-Fa-f]{6}\Z")
+
+
+def series_color(value):
+    """A market's own line colour. Gamma gives "light,dark" (or one colour); the app is dark, so the second one."""
+    parts = [p.strip().upper() for p in str(value or "").split(",") if HEX_COLOR.fullmatch(p.strip())]
+    return parts[-1] if parts else ""
+
+
+def team(item):
+    return {"name": text(item.get("name"), 120), "abbr": text(item.get("abbreviation"), 12).upper(),
+            "logo": text(item.get("logo"), 600), "color": series_color(item.get("color")),
+            "side": text(item.get("ordering"), 10), "record": text(item.get("record"), 20)}
 
 
 def event(raw, full=True):
@@ -262,8 +279,19 @@ def event(raw, full=True):
         "contracts": open_first,
     }
     if full:
-        obj["rules"] = text(raw.get("description"), 6000)
-        obj["resolution"] = text(raw.get("resolutionSource"), 400)
+        series = next((s for s in raw.get("series") or [] if isinstance(s, dict)), {})
+        obj.update({
+            "rules": text(raw.get("description"), 6000),
+            "resolution": text(raw.get("resolutionSource"), 400),
+            "teams": [team(t) for t in raw.get("teams") or [] if isinstance(t, dict) and t.get("name")][:3],
+            "score": text(raw.get("score"), 80),
+            "period": text(raw.get("period"), 20),
+            "ended": raw.get("ended") is True,
+            "elapsed": text(raw.get("elapsed"), 20),
+            "tweets": num(raw.get("tweetCount")),
+            "series": {"slug": text(series.get("slug"), 120), "recurrence": text(series.get("recurrence"), 20)} if series else None,
+        })
+        obj["view"] = views.view(obj)
     else:
         obj["contracts"] = [{k: v for k, v in c.items() if k not in {"rules", "resolution"}} for c in open_first[:2]]
     return obj
@@ -452,25 +480,43 @@ def book(tok):
             "at": (num(raw.get("timestamp")) or time.time() * 1000) / 1000}
 
 
-PRICE_WINDOWS = {"1h": ("1h", 1), "6h": ("6h", 1), "1d": ("1d", 5), "1w": ("1w", 30), "1m": ("1m", 180), "3m": ("max", 720), "ytd": ("max", 720),
-                 "1y": ("max", 1440), "max": ("max", 1440)}
+# The periods of polymarket.com's charts and the step of their points (as its Data API v2 serves them): 1h, 6h and
+# 1d by the minute, 1w by 5 minutes, 1m by 30 minutes, max by 12 hours. The same points come from the CLOB, which
+# answers a dozen lines at once in a fraction of a second; Data API v2 answered such a burst with 503s and
+# 5-second waits (checked 24.11.2026), so the CLOB serves them. 3m, ytd and 1y (links from before 1.8.0) are cut
+# from max.
+PRICE_WINDOWS = {"1h": ("1h", 1), "6h": ("6h", 1), "1d": ("1d", 1), "1w": ("1w", 5), "1m": ("1m", 30),
+                 "max": ("max", 720), "3m": ("max", 720), "ytd": ("max", 720), "1y": ("max", 1440)}
+YOUNG_MARKET = 30 * 86400
 
 
-def prices(db, tok, window="max", start=None, end=None):
+def history_params(tok, window="max", since=None, now=None):
+    """CLOB query for a chart period. "max" of a young market (since = its creation) starts from that moment with
+    the step polymarket.com uses for such a span (a minute up to a day, 5 minutes up to a week, then 30 minutes):
+    interval=max would give a point every 12 hours, three or four points for a day-old market."""
+    interval, fidelity = PRICE_WINDOWS.get(window, PRICE_WINDOWS["max"])
+    age = (now or time.time()) - since if since else None
+    if window == "max" and age is not None and 0 < age <= YOUNG_MARKET:
+        return {"market": tok, "startTs": int(since), "fidelity": 1 if age <= 86400 else 5 if age <= 7 * 86400 else 30}
+    return {"market": tok, "interval": interval, "fidelity": fidelity}
+
+
+def prices(db, tok, window="max", start=None, end=None, since=None):
+    """[[time, price]] of one outcome: a period of the site's charts, or a chosen date range."""
     tok = token(tok)
     if start and end:
         span = max(1, (end - start) / 86400)
         params = {"market": tok, "startTs": int(start), "endTs": int(end), "fidelity": max(1, int(span * 1440 // 400))}
     else:
-        interval, fidelity = PRICE_WINDOWS.get(window, PRICE_WINDOWS["max"])
-        params = {"market": tok, "interval": interval, "fidelity": fidelity}
+        params = history_params(tok, window, since)
     url = CLOB + "/prices-history?" + urlencode(params)
 
     def load():
         raw = fetch(url)
-        points = [[int(r["t"]), float(r["p"])] for r in raw.get("history") or []
-                  if num(r.get("t")) is not None and num(r.get("p")) is not None]
-        points.sort()
+        # one point per moment: the history may repeat its last moment, which the chart rejects
+        points = sorted({int(num(r.get("t"))): float(num(r.get("p"))) for r in raw.get("history") or []
+                         if isinstance(r, dict) and num(r.get("t")) is not None and num(r.get("p")) is not None}.items())
+        points = [[t, p] for t, p in points]
         if window in {"3m", "ytd", "1y"} and not start:
             now = time.time()
             first = {"3m": now - 92 * 86400, "1y": now - 366 * 86400,

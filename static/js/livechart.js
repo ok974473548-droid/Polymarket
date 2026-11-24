@@ -64,7 +64,7 @@ const pct = (p) => Math.round(p * 100) + "%";
  * lines: [{name, color, points: [[t, p 0..1]], visible}]; returns {add(i, p), setVisible(i, on)}.
  * Live points join the last bucket of the history (its typical spacing), so the time axis keeps its scale.
  */
-export function probChart(host, lines, { height = 320, intraday = true, gapRight = 0.3 } = {}) {
+export function probChart(host, lines, { height = 320, intraday = true, gapRight = 0.3, tags = true } = {}) {
   const L = window.LightweightCharts;
   host.innerHTML = `<div class="lv-plot" style="height:${fitHeight(height)}px"><div class="lv-tags"></div></div>`;
   const plot = host.firstElementChild, tagsBox = plot.firstElementChild;
@@ -99,9 +99,16 @@ export function probChart(host, lines, { height = 320, intraday = true, gapRight
   fit();
   new ResizeObserver(() => requestAnimationFrame(fit)).observe(plot);
   const place = () => {
+    if (!tags) return;
     const placed = items.filter((it) => it.on && it.last).map((it) => ({ it, y: it.s.priceToCoordinate(it.last[1]), x: chart.timeScale().timeToCoordinate(it.last[0]) }))
       .filter((p) => p.y != null && p.x != null).sort((a, b) => a.y - b.y);
     for (let i = 1; i < placed.length; i++) if (placed[i].y - placed[i - 1].y < 46) placed[i].y = placed[i - 1].y + 46;
+    // pushed below the chart (several outcomes near 0%): move the stack back up, keeping the spacing
+    const bottom = plot.clientHeight - 56;
+    for (let i = placed.length - 1; i >= 0; i--) {
+      const limit = i === placed.length - 1 ? bottom : placed[i + 1].y - 46;
+      if (placed[i].y > limit) placed[i].y = limit;
+    }
     const seen = new Set();
     for (const { it, y, x } of placed) {
       let tag = tagsBox.querySelector(`[data-n="${CSS.escape(it.l.name)}"]`);
@@ -162,17 +169,21 @@ export async function cryptoRound(host, slug, { onEnd } = {}) {
     return null;
   }
   const L = window.LightweightCharts;
-  const long = r.end - r.start >= 3600;
+  const span = r.end - r.start, long = span >= 3600, hours = span >= 4 * 3600;
   const when = long ? `${dm(r.start)}, ${hm(r.start)}–${hm(r.end)}` : `${hm(r.start)}–${hm(r.end)}`;
+  // a daily round starts at the same time every day: name it by the date it ends on ("Up or Down on November 24"),
+  // as Polymarket does
+  const roundName = (s) => (span >= 86400 ? dm(s + span) : hm(s));
   host.innerHTML = `<section class="card lv-card lv-crypto">
     <div class="lv-head"><div class="lv-prices">
         <div><small>Целевая цена</small><b class="lv-target">${r.target ? money(r.target) : "—"}</b></div><span class="sep"></span>
-        <div class="now"><small>Текущая цена <span class="lv-delta"></span></small><b class="lv-now"></b></div></div>
-      <div class="lv-timer" aria-label="До конца раунда"><div><b class="t-m">00</b><small>МИН</small></div><div><b class="t-s">00</b><small>СЕК</small></div></div></div>
+        <div class="now"><small><span class="lv-now-label">${r.finished ? "Итоговая цена" : "Текущая цена"}</span> <span class="lv-delta"></span></small><b class="lv-now"></b></div></div>
+      <div class="lv-timer" aria-label="До конца раунда">${hours ? '<div><b class="t-h">00</b><small>Ч</small></div>' : ""}<div><b class="t-m">00</b><small>МИН</small></div><div><b class="t-s">00</b><small>СЕК</small></div></div>
+      <a class="lv-golive" href="/event/${esc(r.finished ? r.live : r.next)}" ${r.finished ? "" : "hidden"}>К текущему раунду ›</a></div>
     <div class="lv-plot" style="height:${fitHeight(300)}px"></div>
     <div class="lv-foot">
       <span class="lv-past" title="Итоги прошлых раундов: зелёный — вверх, красный — вниз">Прошлые ${r.past.slice(-5).map((p) => `<i class="${p.outcome === "up" ? "up" : "down"}"></i>`).join("")}</span>
-      <a class="lv-round" href="/event/${esc(r.prev)}">${hm(r.start - (r.end - r.start))}</a><span class="lv-round cur">${hm(r.start)}</span><a class="lv-round" href="/event/${esc(r.next)}">${hm(r.end)}</a>
+      <a class="lv-round" href="/event/${esc(r.prev)}">${roundName(r.start - span)}</a><span class="lv-round cur ${r.finished ? "done" : ""}">${roundName(r.start)}</span><a class="lv-round" href="/event/${esc(r.next)}">${roundName(r.end)}</a>
       <div class="lv-modes" role="group" aria-label="Вид графика"><button class="cur" data-mode="line">Линия</button><button data-mode="candles">Свечи</button></div></div>
     <p class="lv-note">${esc(r.name)}, ${when}: цена по Chainlink — по ней Polymarket решает исход. Пунктир — цена на старте раунда: если к концу цена выше, исход «Вверх».</p></section>`;
   const card = host.firstElementChild, plot = $q(card, ".lv-plot");
@@ -242,16 +253,23 @@ export async function cryptoRound(host, slug, { onEnd } = {}) {
   let ended = false;
   const tick = () => {
     const left = Math.max(0, r.end - Date.now() / 1000);
-    roll($q(card, ".t-m"), String(Math.floor(left / 60)).padStart(2, "0").slice(-3));
-    roll($q(card, ".t-s"), String(Math.floor(left % 60)).padStart(2, "0"));
+    const two = (n) => String(Math.floor(n)).padStart(2, "0");
+    if (hours) roll($q(card, ".t-h"), two(left / 3600));
+    roll($q(card, ".t-m"), hours ? two((left % 3600) / 60) : two(left / 60));
+    roll($q(card, ".t-s"), two(left % 60));
     if (!left && !ended) {
+      // the round is over: say so and offer the round being played now (Polymarket does not jump there by itself)
       ended = true;
       card.classList.add("ended");
+      $q(card, ".lv-now-label").textContent = "Итоговая цена";
+      $q(card, ".lv-golive").hidden = false;
+      $q(card, ".lv-round.cur").classList.add("done");
       onEnd?.(r);
     }
   };
   tick();
-  every(250, tick);
+  if (!r.finished) every(250, tick);
+  else { ended = true; card.classList.add("ended"); }
   // the target price is published a few seconds after the round starts
   if (!r.target) every(5000, async () => {
     if (r.target) return;

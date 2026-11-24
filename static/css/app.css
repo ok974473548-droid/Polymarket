@@ -1016,6 +1016,12 @@ select.input-sm { padding-right: 26px; }
 .lv-timer b { display: block; font-size: 26px; font-weight: 750; }
 .lv-timer small { font-size: 10px; color: var(--muted); letter-spacing: .05em; }
 .lv-crypto.ended .lv-timer { color: var(--muted); }
+.lv-golive { margin-left: auto; align-self: center; display: inline-flex; align-items: center; gap: 7px; padding: 7px 14px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--well); color: var(--text); font-size: 13.5px; font-weight: 600; white-space: nowrap; }
+.lv-golive::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 3px rgba(239, 68, 68, .2); }
+.lv-golive:hover { border-color: var(--brand-line); }
+.lv-crypto.ended .lv-timer { display: none; }
+.lv-round.cur.done::before { color: var(--muted); }
 .lv-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .lv-past { display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px; border-radius: 999px; background: var(--well); border: 1px solid var(--border); font-size: 13px; }
 .lv-past i { width: 13px; height: 13px; border-radius: 50%; display: inline-block; }
@@ -1028,6 +1034,12 @@ select.input-sm { padding-right: 26px; }
 .lv-modes button.cur { background: rgba(247, 147, 26, .16); color: #f7931a; }
 .lv-note { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; line-height: 1.5; }
 .lv-pair-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+/* one question: its outcome and "3% вероятность" in large type, as on polymarket.com */
+.lv-single { display: grid; gap: 2px; }
+.lv-single small { color: #2797ff; font-size: 12px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.lv-single > div { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.lv-single b { color: #2797ff; font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
+.lv-single .delta { font-size: 13px; }
 .lv-pair-head .seg { margin-left: auto; }
 .lv-teams { display: flex; gap: 16px; flex-wrap: wrap; }
 .lv-teams span { display: inline-flex; align-items: center; gap: 8px; font-weight: 650; }

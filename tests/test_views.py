@@ -1,0 +1,195 @@
+"""Which chart an event page shows (kontur/views.py), the history behind it and the crypto round's data.
+
+The events are real Gamma events of the 24.11.2026 research of polymarket.com (trimmed to 6 markets each), with the
+chart polymarket.com drew for each of them that day."""
+
+import gzip
+import json
+import tempfile
+import time
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
+
+from kontur import crypto, views
+from kontur import db as store
+from kontur import polymarket as pm
+
+DATA = Path(__file__).parent / "data" / "events_24nov2026.json.gz"
+EVENTS = json.loads(gzip.decompress(DATA.read_bytes()))
+BY_SLUG = {e["slug"]: e for e in EVENTS}
+
+# Where we knowingly differ from polymarket.com: no live price of gold and of stocks reaches us (Polymarket draws a
+# round there, we draw the chance of "Up"), and B200 thresholds carry an internal flag Gamma does not show.
+KNOWN = {"xau-updown-15m-1795522500": "single", "nflx-up-or-down-on-november-24-2026": "single",
+         "b200-average-rental-price-in-december-2026": "none"}
+
+
+def view(slug):
+    return pm.event(BY_SLUG[slug])["view"]
+
+
+class ChartChoice(unittest.TestCase):
+    def test_every_event_gets_polymarkets_chart(self):
+        for raw in EVENTS:
+            with self.subTest(slug=raw["slug"]):
+                self.assertEqual(pm.event(raw)["view"]["kind"], KNOWN.get(raw["slug"], raw["_polymarket"]))
+
+    def test_independent_questions_have_no_chart(self):
+        for slug in ("what-will-trump-say-in-november-2026", "israel-x-iran-ceasefire-continues-throughptptpt-20260716224448963",
+                     "time-person-of-the-year-2026"):
+            self.assertEqual(view(slug), {"kind": "none", "lines": [], "main": []})
+
+    def test_one_question_is_one_line(self):
+        v = view("trump-out-as-president-before-2027")
+        self.assertEqual(v["kind"], "single")
+        self.assertEqual(len(v["lines"]), 1)
+        line = v["lines"][0]
+        self.assertEqual((line["name"], line["index"], line["color"]), ("Yes", 0, views.SINGLE))
+        raw = BY_SLUG["trump-out-as-president-before-2027"]["markets"][0]
+        self.assertEqual(line["token"], json.loads(raw["clobTokenIds"])[0])
+
+    def test_coin_price_events_and_rounds(self):
+        self.assertEqual(view("btc-updown-5m-1795523100")["kind"], "round")
+        self.assertEqual(view("btc-updown-5m-1795523100")["symbol"], "btc")
+        hit = view("what-price-will-bitcoin-hit-in-november-2026")
+        self.assertEqual((hit["kind"], hit["symbol"], hit["lines"]), ("asset", "btc", []))
+        # ranges of the price on a day are mutually exclusive outcomes: lines, not the coin price
+        self.assertEqual(view("bitcoin-price-on-november-24-2026")["kind"], "multi")
+
+    def test_match_in_team_colours_main_market_first(self):
+        v = view("nba-det-orl-2026-11-24")
+        self.assertEqual([(l["name"], l["color"]) for l in v["lines"]], [("Pistons", "#C02040"), ("Magic", "#2080C0")])
+        main = next(m for m in BY_SLUG["nba-det-orl-2026-11-24"]["markets"] if m.get("sportsMarketType") == "moneyline")
+        self.assertEqual(v["main"], [main["conditionId"].lower()])
+        self.assertEqual([l["index"] for l in v["lines"]], [0, 1])
+
+    def test_football_draw_in_grey_between_the_teams(self):
+        v = view("acle-daj-bjg-2026-11-24")
+        self.assertEqual([l["name"] for l in v["lines"]], ["Daejeon Citizen FC", "Ничья", "Beijing Guoan"])
+        self.assertEqual(v["lines"][1]["color"], views.DRAW)
+        self.assertEqual(len(v["main"]), 3)
+
+    def test_sides_of_one_colour_told_apart(self):
+        a, b = view("atp-cui-hassan-2026-11-22")["lines"]            # both flags are red
+        self.assertEqual(a["color"], "#C02121")
+        self.assertNotEqual(a["color"], b["color"])
+
+    def test_several_outcomes_own_colours_most_likely_first(self):
+        v = view("presidential-election-winner-2028")
+        prices = [l["price"] for l in v["lines"]]
+        self.assertEqual(prices, sorted(prices, reverse=True))
+        colors = {l["name"]: l["color"] for l in v["lines"]}
+        self.assertEqual(colors["Alexandria Ocasio-Cortez"], "#2970FF")   # seriesColor "#456BD5,#2970FF": the dark-theme one
+        self.assertEqual(colors["JD Vance"], "#FA534D")
+        self.assertEqual(len(set(colors.values())), len(colors))
+        weather = view("highest-temperature-in-london-on-november-25-2026")   # no colours of their own: the palette
+        self.assertEqual([l["color"] for l in weather["lines"][:4]], views.PALETTE[:4])
+
+    def test_dark_colours_made_readable(self):
+        self.assertEqual(views.readable("#2797FF"), "#2797FF")
+        light = views.readable("#002F6C")                              # navy on a near-black page
+        bg = views._luminance(views.BACKGROUND)
+        self.assertGreaterEqual((views._luminance(views._rgb(light)) + 0.05) / (bg + 0.05), 3)
+
+    def test_series_colour(self):
+        self.assertEqual(pm.series_color("#1E3A8A,#5B8DEF"), "#5B8DEF")
+        self.assertEqual(pm.series_color("#FA534D"), "#FA534D")
+        self.assertEqual(pm.series_color(""), "")
+        self.assertEqual(pm.series_color("red; background:url(x)"), "")
+
+    def test_event_fields_of_a_match(self):
+        e = pm.event(BY_SLUG["atp-cui-hassan-2026-11-22"])
+        self.assertEqual([t["name"] for t in e["teams"]], ["Jie Cui", "Benjamin Hassan"])
+        self.assertEqual(e["teams"][0]["color"], "#C02121")
+        self.assertEqual(e["series"], {"slug": "atp", "recurrence": "daily"})
+        self.assertTrue(e["score"])
+        raw = BY_SLUG["elon-musk-of-tweets-november-17-november-24-2026"]
+        self.assertGreater(raw["tweetCount"], 0)
+        self.assertEqual(pm.event(raw)["tweets"], raw["tweetCount"])
+        listed = pm.event(BY_SLUG["nba-det-orl-2026-11-24"], full=False)     # catalog cards carry no chart choice
+        self.assertNotIn("view", listed)
+
+
+class History(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        path = str(Path(self.dir.name) / "t.sqlite3")
+        store.init(path)
+        self.db = store.connect(path)
+
+    def tearDown(self):
+        self.db.close()
+        self.dir.cleanup()
+
+    def test_periods_in_polymarkets_steps(self):
+        steps = {w: pm.history_params("1", w) for w in ("1h", "6h", "1d", "1w", "1m", "max")}
+        self.assertEqual({w: (p["interval"], p["fidelity"]) for w, p in steps.items()},
+                         {"1h": ("1h", 1), "6h": ("6h", 1), "1d": ("1d", 1), "1w": ("1w", 5), "1m": ("1m", 30), "max": ("max", 720)})
+        self.assertEqual(pm.history_params("1", "3m")["interval"], "max")      # a link from before 1.8.0
+
+    def test_all_of_a_young_market_from_its_creation(self):
+        now = 2_000_000_000
+        day_old = pm.history_params("1", "max", since=now - 20 * 3600, now=now)
+        self.assertEqual(day_old, {"market": "1", "startTs": now - 20 * 3600, "fidelity": 1})
+        self.assertEqual(pm.history_params("1", "max", since=now - 3 * 86400, now=now)["fidelity"], 5)
+        self.assertEqual(pm.history_params("1", "max", since=now - 20 * 86400, now=now)["fidelity"], 30)
+        old = pm.history_params("1", "max", since=now - 90 * 86400, now=now)
+        self.assertEqual((old["interval"], old["fidelity"]), ("max", 720))
+        # a shorter period is not affected by the market's age
+        self.assertEqual(pm.history_params("1", "1d", since=now - 3600, now=now)["interval"], "1d")
+
+    def test_one_point_per_moment(self):
+        raw = {"history": [{"t": 30, "p": 0.3}, {"t": 10, "p": 0.1}, {"t": 30, "p": 0.31}, {"t": 20, "p": "0.2"}, {"t": None, "p": 1}]}
+        with patch.object(pm, "fetch", return_value=raw) as fetch:
+            got = pm.prices(self.db, "123", "1w")["data"]
+        self.assertEqual(got, [[10, 0.1], [20, 0.2], [30, 0.31]])
+        q = parse_qs(urlparse(fetch.call_args[0][0]).query)
+        self.assertEqual((q["interval"], q["fidelity"]), (["1w"], ["5"]))
+
+
+class CryptoRound(unittest.TestCase):
+    def fake(self, url):
+        self.urls.append(url)
+        if "/crypto/crypto-price" in url:
+            return {"openPrice": 60000.5}
+        if "/crypto/price-history" in url:
+            return [{"timestamp": (self.start + i * 5) * 1000, "value": 60000 + i} for i in range(61)]
+        if "/past-results" in url:
+            return {"data": {"results": [{"startTime": "x", "outcome": "up", "openPrice": 1, "closePrice": 2}]}}
+        raise AssertionError(url)
+
+    def setUp(self):
+        self.urls = []
+        self.start = 1_795_523_100
+        crypto._targets.clear()
+        crypto._past.clear()
+
+    def info(self, now):
+        with patch.object(pm, "fetch", side_effect=lambda url, **kw: self.fake(url)), \
+             patch.object(crypto, "want"), patch.object(crypto, "STREAM", None), patch.object(crypto.time, "time", return_value=now):
+            return crypto.round_info(f"btc-updown-5m-{self.start}")
+
+    def test_finished_round_is_drawn_whole_with_the_round_being_played(self):
+        r = self.info(self.start + 300 * 3 + 40)                   # three rounds later
+        self.assertTrue(r["finished"])
+        self.assertEqual(len(r["points"]), 61)
+        history = next(u for u in self.urls if "/crypto/price-history" in u)
+        self.assertNotIn("historySeed", history)                   # the whole round, not the last minutes
+        self.assertEqual(r["live"], f"btc-updown-5m-{self.start + 900}")
+        self.assertEqual(r["next"], f"btc-updown-5m-{self.start + 300}")
+
+    def test_round_being_played_asks_the_last_minutes(self):
+        r = self.info(self.start + 100)
+        self.assertFalse(r["finished"])
+        self.assertIn("historySeed=true", next(u for u in self.urls if "/crypto/price-history" in u))
+        self.assertEqual(r["live"], f"btc-updown-5m-{self.start}")
+
+    def test_the_same_coins_as_the_chart_choice(self):
+        self.assertIs(crypto.SYMBOLS, views.ROUND_SYMBOLS)
+        self.assertIsNone(crypto.parse("xau-updown-15m-1795522500"))
+
+
+if __name__ == "__main__":
+    unittest.main()

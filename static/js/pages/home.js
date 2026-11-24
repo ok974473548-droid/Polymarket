@@ -17,9 +17,12 @@ export function sparkline(values, w = 120, h = 36) {
 
 export function eventCandidates(e) {
   // Multi-market events list one binary contract per candidate; a single contract lists its outcomes.
-  const open = e.contracts.filter((c) => !c.closed && c.outcomes.length === 2);
-  if (open.length > 1) {
-    return open.map((c) => ({ name: c.label || c.question, image: c.image, price: c.outcomes[0].price, token: c.outcomes[0].token,
+  const binary = e.contracts.filter((c) => c.outcomes.length === 2);
+  const open = binary.filter((c) => !c.closed);
+  // all markets of a finished event (a match with a draw), not the Yes/No of its first one
+  const list = open.length ? open : e.closed ? binary : open;
+  if (list.length > 1) {
+    return list.map((c) => ({ name: c.label || c.question, image: c.image, price: c.outcomes[0].price, token: c.outcomes[0].token,
       volume: c.volume, change: c.change24h, condition: c.condition, index: 0, contract: c }))
       .sort((a, b) => (b.price ?? 0) - (a.price ?? 0));
   }
