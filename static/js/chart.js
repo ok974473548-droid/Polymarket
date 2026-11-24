@@ -19,12 +19,21 @@ export function axisMoney(v) {
  * options: {unit: "%" | "$", height}
  * Returns {setVisible(index, bool), destroy()}.
  */
+/** Chart height for this screen: the base height on a laptop, up to 35% taller on wide monitors, never over 55% of the window. */
+export function fitHeight(base) {
+  const w = window.innerWidth, h = window.innerHeight;
+  if (w < 1100) return base;
+  const k = Math.min(1.35, 1 + Math.max(0, w - 1440) / 1400);
+  return Math.round(Math.max(base, Math.min(base * k, h * 0.55)));
+}
+
 export function lineChart(host, series, options = {}) {
   const LC = window.LightweightCharts;
   host.innerHTML = "";
   host.classList.add("chart-host");
   const unit = options.unit === "$" ? "$" : "%";
-  const height = options.height || 260;
+  const base = options.height || 260;
+  const height = fitHeight(base);
   const usable = series.filter((s) => s.points && s.points.length);
   if (!LC || !usable.length) {
     host.innerHTML = `<div class="chart-empty">${options.empty || "Нет истории цен за выбранный период"}</div>`;
@@ -96,7 +105,7 @@ export function lineChart(host, series, options = {}) {
     tip.style.left = (x + 16 + w > host.clientWidth ? x - w - 16 : x + 16) + "px";
     tip.style.top = "8px";
   });
-  const ro = new ResizeObserver(() => host.clientWidth && chart.applyOptions({ width: host.clientWidth }));
+  const ro = new ResizeObserver(() => host.clientWidth && chart.applyOptions({ width: host.clientWidth, height: fitHeight(base) }));
   ro.observe(host);
   return {
     setVisible(i, on) {

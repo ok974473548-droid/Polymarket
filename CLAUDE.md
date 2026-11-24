@@ -28,7 +28,7 @@
 | `kontur/worker.py` | Фоновые задачи (fast / slow), пулы потоков `JobPool`: поиск игроков (`ScoutPool`), статистика трейдеров (`WalletPool`) |
 | `kontur/traders.py` | Рейтинги и статистика трейдеров; закрытые позиции догружаются и хранятся картой «хэш токена → итог» (`wallet_closed`) |
 | `kontur/news.py`, `watchlist.py`, `notify.py`, `auth.py`, `db.py` | Новости, избранное, уведомления, вход, база SQLite (справочник исходов `outcomes` для журнала копий) |
-| `static/` | Интерфейс (JS без сборки) |
+| `static/` | Интерфейс (JS без сборки). Дизайн — токены в `:root` `static/css/app.css`: `--radius` 16, `--card` (градиент), `--surface-shadow`, `--well`, фирменная пара `--brand`/`--brand-2`/`--brand-grad` (синий → бирюзовый); контейнер `.wrap` до 1 880 px; высота графиков — `fitHeight` в `chart.js` |
 | `research/` | Скрипты проверки модели автопилота и итоги прогона |
 | `AUTOPILOT.md` | Устройство автопилота |
 
