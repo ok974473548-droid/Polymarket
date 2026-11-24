@@ -49,7 +49,14 @@ DEFAULTS = {
     "max_top_share": 40,  # %, share of profit from the best bet
     "min_recent": 2,      # new bets in the last 14 days
     "max_slip": 0.03,     # $, median price move 60 s after the leader's buys
+    "selection": "skill",  # "skill": wins against the price paid; "winrate": the share of winning copies (until 1.10.0)
+    "min_skill_edge": 2,  # %, return of a copy over what its price promised, shrunk by the amount of evidence
 }
+SELECTIONS = {"skill": "Умение против цены", "winrate": "Доля выигрышей"}
+METRICS_VERSION = 2       # 2: fee 0.05 * p * (1 - p) and skill against the price (1.10.0)
+SKILL_MIN_BETS, SKILL_MIN_EVENTS = 20, 15
+K_SHRINK = 40             # events of evidence for half weight
+BH_Q = 0.10               # false discovery rate across all candidates (Benjamini–Hochberg)
 
 TYPES = {
     "directional": "Направленный",
@@ -64,9 +71,13 @@ TYPES = {
 
 # ---------------------------------------------------------------- maths
 
+FEE_RATE = 0.05     # taker fee of the markets copies are made in: 0.05 * p * (1 - p) per share, as live copies pay
+# (until 1.10.0 the estimate used 0.02, two and a half times less than the copies actually paid)
+
+
 def fee_est(price):
-    """Conservative per-share taker fee estimate used for history (real fees apply to real copies)."""
-    return 0.02 * price * (1 - price)
+    """Per-share taker fee of a copy (the same formula real copies pay)."""
+    return FEE_RATE * price * (1 - price)
 
 
 def wilson_lb(wins, n, z=1.96):
@@ -257,9 +268,48 @@ def _decided(bets, slip, start, end):
         if abs(r) < PUSH:
             continue
         out.append({"closed": b["closed"], "opened": b["opened"], "r": r, "edge": edge, "entry": b["entry"],
-                    "win": r > 0, "hold": max(0.0, b["closed"] - b["opened"]) / DAY})
+                    "win": r > 0, "hold": max(0.0, b["closed"] - b["opened"]) / DAY,
+                    "ev": b.get("event_slug") or b.get("condition") or b["token"]})
     out.sort(key=lambda x: x["closed"])
     return out
+
+
+def skill_stats(d, slip):
+    """How much better a player's copies did than their price promised (research/compare_logics.py, logic L3).
+
+    A copy bought at p wins with probability p if the price is fair, so its "excess" is win - p. Bets of one event
+    move together, so the evidence is counted by event: the mean copy return of each event, its t statistic over
+    events and a one-sided p-value. Edge and excess are shrunk towards zero by n / (n + 40) events. None when the
+    history is too short to say."""
+    if len(d) < SKILL_MIN_BETS:
+        return None
+    by = {}
+    for x in d:
+        e = by.setdefault(x["ev"], [0.0, 0.0, 0])
+        e[0] += (1.0 if x["win"] else 0.0) - min(0.995, x["entry"] + slip)
+        e[1] += x["r"]
+        e[2] += 1
+    n_ev = len(by)
+    if n_ev < SKILL_MIN_EVENTS:
+        return None
+    rets = [e[1] / e[2] for e in by.values()]
+    mean = statistics.mean(rets)
+    sd = statistics.pstdev(rets) or 1e-9
+    t = mean / (sd / math.sqrt(n_ev))
+    k = n_ev / (n_ev + K_SHRINK)
+    excess = sum(e[0] for e in by.values()) / sum(e[2] for e in by.values())
+    return {"t": t, "p": 0.5 * math.erfc(t / math.sqrt(2)), "edge": mean * k, "excess": excess * k, "n_ev": n_ev}
+
+
+def bh_cut(pvalues, q=BH_Q):
+    """Benjamini–Hochberg: the largest p-value still significant among all candidates (0 when none is)."""
+    ps = sorted(p for p in pvalues if p is not None)
+    m = len(ps)
+    cut = 0.0
+    for i, p in enumerate(ps, 1):
+        if p <= q * i / m:
+            cut = p
+    return cut
 
 
 def metrics(bets, *, slip=DEFAULT_SLIP, now=None, as_of=None, lookback=LOOKBACK_DAYS, target_wr=70):
@@ -315,6 +365,8 @@ def metrics(bets, *, slip=DEFAULT_SLIP, now=None, as_of=None, lookback=LOOKBACK_
         "open_n": len(open_r), "open_r": (sum(open_r) / len(open_r)) if open_r else None,
         "first_seen": min((b["opened"] for b in bets), default=None),
         "slip": slip,
+        "skill": skill_stats(d, slip),
+        "version": METRICS_VERSION,
     }
 
 
@@ -354,10 +406,34 @@ def behaviour(bets, trades, m, now=None):
     return kind, facts
 
 
-def gates(m, kind, settings):
-    """Selection checks with the user's thresholds. Each item: key, label, ok, value, need."""
+def gates(m, kind, settings, cut=None):
+    """Selection checks with the user's thresholds. Each item: key, label, ok, value, need.
+
+    `cut` is the Benjamini–Hochberg p-value threshold across all candidates (skill selection only)."""
     s = {**DEFAULTS, **{k: v for k, v in (settings or {}).items() if k in DEFAULTS}}
     pct = lambda v: None if v is None else round(v * 100, 1)  # noqa: E731
+    if s.get("selection") == "skill":
+        sk = m.get("skill")
+        cut = 0.0 if cut is None else cut
+        return [
+            {"key": "type", "label": "Тип поведения", "ok": kind == "directional", "value": TYPES.get(kind, kind),
+             "need": TYPES["directional"]},
+            {"key": "history", "label": "История для оценки умения", "ok": sk is not None,
+             "value": f"{m['n']} ставок, {sk['n_ev']} событий" if sk else f"{m['n']} ставок",
+             "need": f"от {SKILL_MIN_BETS} ставок и {SKILL_MIN_EVENTS} событий"},
+            {"key": "skill", "label": "Умение доказано (не удача)", "ok": bool(sk) and sk["p"] <= cut and cut > 0,
+             "value": None if not sk else f"p = {sk['p']:.4f}", "need": f"p ≤ {cut:.4f} (поправка на {int(BH_Q * 100)}% ложных)"},
+            {"key": "edge", "label": "Доходность сверх цены", "ok": bool(sk) and sk["edge"] * 100 >= s["min_skill_edge"],
+             "value": None if not sk else pct(sk["edge"]), "need": f"от {s['min_skill_edge']}%"},
+            {"key": "excess", "label": "Выигрывает чаще, чем обещала цена", "ok": bool(sk) and sk["excess"] > 0,
+             "value": None if not sk else pct(sk["excess"]), "need": "больше 0 п. п."},
+            {"key": "top", "label": "Доля лучшей ставки", "ok": m["top_share"] is not None and m["top_share"] * 100 <= s["max_top_share"],
+             "value": pct(m["top_share"]), "need": f"до {s['max_top_share']}%"},
+            {"key": "recent", "label": "Новых ставок за 14 дней", "ok": m["new_14d"] >= s["min_recent"], "value": m["new_14d"],
+             "need": f"от {s['min_recent']}"},
+            {"key": "slip", "label": "Проскальзывание", "ok": m.get("slip_measured") is not None and m["slip"] <= s["max_slip"],
+             "value": None if m.get("slip_measured") is None else round(m["slip"], 3), "need": f"до ${s['max_slip']}"},
+        ]
     out = [
         {"key": "type", "label": "Тип поведения", "ok": kind == "directional", "value": TYPES.get(kind, kind),
          "need": TYPES["directional"]},
@@ -380,10 +456,20 @@ def gates(m, kind, settings):
     return out
 
 
-def score(m):
-    """0–100: reliability 40, return 25, stability 15, copyability 10, recent form 10."""
+def score(m, selection="winrate"):
+    """0–100. Skill: return over the price 50, evidence 20, stability 15, copyability 15.
+    Win rate: reliability 40, return 25, stability 15, copyability 10, recent form 10."""
     if not m["n"]:
         return 0.0
+    if selection == "skill":
+        sk = m.get("skill")
+        if not sk:
+            return 0.0
+        part = 50 * _clamp(sk["edge"] / 0.12)
+        part += 20 * _clamp((sk["t"] - 2) / 4)
+        part += 15 * (m["stability"] if m["stability"] is not None else 0.5)
+        part += 15 * _clamp(1 - (m["slip"] or 0) / 0.04)
+        return round(part, 1)
     part = 40 * _clamp((m["lb"] - 0.55) / 0.30)
     part += 25 * _clamp((m["roi"] or 0) / 0.25)
     part += 15 * (m["stability"] if m["stability"] is not None else 0.5)
@@ -392,10 +478,29 @@ def score(m):
     return round(part, 1)
 
 
-def judge(m, kind, settings):
-    checks = gates(m, kind, settings)
-    return {"passed": all(c["ok"] for c in checks), "checks": checks, "score": score(m),
-            "failed": [c["label"] for c in checks if not c["ok"]]}
+def judge(m, kind, settings, cut=None):
+    checks = gates(m, kind, settings, cut)
+    mode = (settings or {}).get("selection", DEFAULTS["selection"])
+    return {"passed": all(c["ok"] for c in checks), "checks": checks, "score": score(m, mode),
+            "failed": [c["label"] for c in checks if not c["ok"]], "selection": mode}
+
+
+_cut_cache = {"at": 0.0, "cut": 0.0}
+
+
+def skill_cut(db, ttl=300):
+    """The Benjamini–Hochberg threshold over every profiled directional candidate (cached for a few minutes)."""
+    if time.time() - _cut_cache["at"] < ttl:
+        return _cut_cache["cut"]
+    ps = []
+    for kind, raw in db.execute("SELECT kind, metrics FROM scout_wallets WHERE metrics IS NOT NULL"):
+        if kind != "directional":
+            continue
+        sk = json.loads(raw).get("skill")
+        if sk:
+            ps.append(sk["p"])
+    _cut_cache.update(at=time.time(), cut=bh_cut(ps))
+    return _cut_cache["cut"]
 
 
 # ---------------------------------------------------------------- storage and crawl jobs
@@ -477,15 +582,22 @@ def profile_wallet(db, wallet, now=None):
     m = metrics(bets, now=now)
     kind, facts = behaviour(bets, trades, m, now)
     in_roster = db.execute("SELECT 1 FROM ap_players WHERE wallet=? AND state IN ('active','bench')", (wallet,)).fetchone()
-    promising = kind == "directional" and m["n"] >= 15 and (m["wr"] or 0) >= 0.55
+    # worth a closer look: wins often, or wins more often than its prices promised (a buyer of cheap outcomes
+    # with 40% wins can be the better player; until 1.10.0 only wr >= 55% was kept)
+    sk = m.get("skill")
+    promising = kind == "directional" and m["n"] >= 15 and ((m["wr"] or 0) >= 0.55 or bool(sk and sk["edge"] > 0))
     slip = None
     if promising or in_roster:
         slip = measure_slip(trades, now)
-        if slip:
-            m = metrics(bets, slip=max(DEFAULT_SLIP, slip["median"]), now=now)
-    m["slip_measured"] = slip["median"] if slip else None
+    live = live_slip(db, wallet)
+    used = copy_slip(slip["median"] if slip else None, live)
+    if used is not None:
+        m = metrics(bets, slip=used, now=now)
+    m["slip_measured"] = slip["median"] if slip else (live["mean"] if live else None)
     m["slip_samples"] = slip["samples"] if slip else 0
     m["slip_over"] = slip["over"] if slip else None
+    m["slip_live"] = live["mean"] if live else None
+    m["slip_live_n"] = live["n"] if live else 0
     m["partial"] = partial
     keep = promising or in_roster
     with store.tx(db):
@@ -495,6 +607,58 @@ def profile_wallet(db, wallet, now=None):
                       name=CASE WHEN name='' THEN ? ELSE name END WHERE wallet=?""",
                    (now, kind, json.dumps(facts), json.dumps(m), score(m), name or "", wallet))
     return m
+
+
+LIVE_SLIP_MIN = 5            # live market copies of a player before their price counts
+LIVE_SLIP_DAYS = 60
+
+
+def live_slip(db, wallet):
+    """What copies of this player really paid over the player's price: market-order buys of every user's copies.
+
+    The price a minute after the player's buy (measure_slip) misses that the player's own buy has just taken the
+    cheap asks; live copies of thin markets paid about four times more (24.11.2026: $0.058 against $0.014)."""
+    rows = db.execute("""SELECT e.price - e.leader_price FROM copy_events e JOIN orders o ON o.id=e.order_id
+                         WHERE e.leader=? AND e.status='filled' AND e.side='buy' AND o.type='market'
+                         AND e.leader_price > 0 AND e.price > 0 AND e.at > ?""",
+                      (wallet, time.time() - LIVE_SLIP_DAYS * DAY)).fetchall()
+    moves = [r[0] for r in rows if r[0] is not None]
+    if len(moves) < LIVE_SLIP_MIN:
+        return None
+    return {"mean": sum(moves) / len(moves), "n": len(moves)}
+
+
+def copy_slip(measured, live):
+    """Slippage a copy is valued with: the worse of the minute-after price and what live copies paid."""
+    vals = [v for v in (measured, live["mean"] if live else None) if v is not None]
+    return max(DEFAULT_SLIP, *vals) if vals else None
+
+
+def refresh_metrics(db, limit=200):
+    """Recompute stored metrics of an older version from the bets kept for the wallet (no network).
+
+    Wallets whose bets were not kept stay as they are until their next profile."""
+    done = 0
+    rows = store.rows(db.execute("SELECT wallet, metrics, profiled FROM scout_wallets WHERE metrics IS NOT NULL"))
+    for row in rows:
+        old = json.loads(row["metrics"])
+        if old.get("version") == METRICS_VERSION:
+            continue
+        bets = packs.load(db, row["wallet"])
+        if not bets:
+            continue
+        # as of the stored profile: the bets kept end there, so "new bets in 14 days" stays what it was
+        m = metrics(bets, slip=old.get("slip") or DEFAULT_SLIP, now=row["profiled"] or time.time())
+        for k in ("slip_measured", "slip_samples", "slip_over", "slip_live", "slip_live_n", "partial"):
+            if k in old:
+                m[k] = old[k]
+        db.execute("UPDATE scout_wallets SET metrics=?, score=? WHERE wallet=?", (json.dumps(m), score(m), row["wallet"]))
+        done += 1
+        if done >= limit:
+            break
+    if done:
+        _cut_cache["at"] = 0.0
+    return done
 
 
 def stored_bets(db, wallet):
@@ -514,14 +678,17 @@ def candidate(db, wallet):
 def candidates(db, settings):
     """All profiled wallets with the user's verdict, best first."""
     out = []
+    cut = skill_cut(db)
     for row in store.rows(db.execute("SELECT * FROM scout_wallets WHERE metrics IS NOT NULL")):
         m = json.loads(row["metrics"])
-        verdict = judge(m, row["kind"], settings)
+        verdict = judge(m, row["kind"], settings, cut)
+        sk = m.get("skill") or {}
         out.append({"wallet": row["wallet"], "name": row["name"], "image": row["image"], "kind": row["kind"],
                     "kind_label": TYPES.get(row["kind"], row["kind"]), "sources": json.loads(row["sources"] or "[]"),
                     "profiled": row["profiled"], "n": m["n"], "wr": m["wr"], "lb": m["lb"], "roi": m["roi"], "edge": m["edge"],
                     "avg_entry": m["avg_entry"], "new_14d": m["new_14d"], "slip": m.get("slip_measured"),
-                    "recent_wr": m["recent_wr"], "score": verdict["score"], "passed": verdict["passed"],
+                    "recent_wr": m["recent_wr"], "skill_edge": sk.get("edge"), "skill_excess": sk.get("excess"),
+                    "skill_p": sk.get("p"), "score": verdict["score"], "passed": verdict["passed"],
                     "failed": verdict["failed"]})
     out.sort(key=lambda r: (not r["passed"], -r["score"]))
     return out
@@ -539,7 +706,7 @@ def backtest(db, settings, count, days_back=60, now=None):
     """Pick a roster with data known `days_back` days ago, then score what its bets did afterwards."""
     now = now or time.time()
     as_of = now - days_back * DAY
-    picks, pool_after = [], []
+    picks, pool_after, known = [], [], []
     for row in store.rows(db.execute("SELECT wallet, name, image, kind, metrics FROM scout_wallets WHERE metrics IS NOT NULL")):
         bets = stored_bets(db, row["wallet"])
         if not bets:
@@ -550,9 +717,13 @@ def backtest(db, settings, count, days_back=60, now=None):
         past["slip_measured"] = cur.get("slip_measured")
         after = _after(bets, slip, as_of, now)
         pool_after.extend(after)
+        known.append((row, past, after))
+    # skill is judged against every candidate known then, as it is today
+    cut = bh_cut([p["skill"]["p"] for r, p, _ in known if r["kind"] == "directional" and p.get("skill")])
+    for row, past, after in known:
         if row["kind"] != "directional":
             continue
-        verdict = judge(past, row["kind"], settings)
+        verdict = judge(past, row["kind"], settings, cut)
         if verdict["passed"]:
             picks.append({"wallet": row["wallet"], "name": row["name"], "image": row["image"], "score": verdict["score"],
                           "before": {"n": past["n"], "wr": past["wr"], "roi": past["roi"]}, "after_bets": after})

@@ -246,6 +246,15 @@ def job_discover(db):
         scout.discover(db)
 
 
+def job_rescore(db):
+    """Profiles stored by an older version are recomputed from the bets kept (no network), 200 at a time.
+    Once nothing is left to recompute, the job stops looking until the metrics version changes again."""
+    if not _scouting(db) or store.kv_get(db, "scout:rescored", "") == str(scout.METRICS_VERSION):
+        return
+    if not scout.refresh_metrics(db, limit=200):
+        store.kv_set(db, "scout:rescored", str(scout.METRICS_VERSION))
+
+
 def job_scout(db, skip=()):
     """Profile one wallet; returns it (None when there is nothing to do)."""
     if not _scouting(db):
@@ -356,6 +365,7 @@ SLOW = [
     ("tags", job_tags, 8),
     ("discover", job_discover, 300),
     ("backtest", job_backtest, 120),
+    ("rescore", job_rescore, 60),
 ]
 
 

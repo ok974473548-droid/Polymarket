@@ -20,6 +20,15 @@ from . import polymarket as pm
 
 MIN_BUY = 1.0
 EPS = 1e-9
+# Callables (db, order, event, shares, cost) told about resting orders, inside the transaction of the change:
+# "fill" when the book reached a resting order, "end" when it was cancelled or expired. The autopilot records
+# its limit copies this way.
+ORDER_HOOKS = []
+
+
+def _hook(db, order, event, shares=0.0, cost=0.0):
+    for fn in ORDER_HOOKS:
+        fn(db, order, event, shares, cost)
 
 
 def r6(x):
@@ -391,6 +400,18 @@ def _release(db, order, reason, status):
         _move(db, order["account_id"], order["reserved"], "release", "Возврат резерва заявки", order["id"])
     db.execute("UPDATE orders SET status=?, reserved=0, reason=?, updated=? WHERE id=?",
                (status, reason, time.time(), order["id"]))
+    _hook(db, store.one(db.execute("SELECT * FROM orders WHERE id=?", (order["id"],))), "end")
+
+
+def cancel_copy_orders(db, account_id, token, copy_trade_id, reason):
+    """Withdraw a copy's waiting buys of one outcome (the player has sold before they filled). Returns how many."""
+    n = 0
+    for order in store.rows(db.execute("""SELECT * FROM orders WHERE account_id=? AND token_id=? AND copy_trade_id=?
+                                          AND side='buy' AND status='open'""", (account_id, token, copy_trade_id))):
+        with store.tx(db):
+            _release(db, order, reason, "cancelled")
+        n += 1
+    return n
 
 
 REFILL_AFTER = 20.0          # seconds before a partly filled resting order may fill again
@@ -432,6 +453,8 @@ def match_resting(db, tokens_books, now=None):
                 left = r6(fresh["shares"] - fresh["filled_shares"] - q)
                 if left <= 1e-6:
                     db.execute("UPDATE orders SET status='filled', reserved=0, updated=? WHERE id=?", (time.time(), fresh["id"]))
+                _hook(db, store.one(db.execute("SELECT * FROM orders WHERE id=?", (fresh["id"],))), "fill",
+                      q, r6(q * fresh["limit_price"] + fee))
             bus.publish("fill", {"account_id": fresh["account_id"], "order_id": fresh["id"]})
             done += 1
     return done

@@ -1084,3 +1084,15 @@ select.input-sm { padding-right: 26px; }
 .out-btns > .buy { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 0; }
 .out-btns .buy .bn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .out-btns .buy [data-c] { flex: none; }
+
+/* 1.10.0: settings that lose or lock money, choices with their meaning */
+.ap-warn { display: flex; gap: 10px; align-items: flex-start; margin: 12px 0 4px; padding: 10px 12px; border-radius: 12px;
+  border: 1px solid rgba(245, 158, 11, .35); background: rgba(245, 158, 11, .08); color: #fcd34d; font-size: 13px; line-height: 1.45; }
+.ap-warn > svg { flex: none; margin-top: 2px; }
+.ap-warn ul { margin: 0; padding-left: 16px; display: grid; gap: 4px; flex: 1; min-width: 0; color: var(--text2); }
+.ap-warn .btn { flex: none; }
+.set-choice { grid-column: 1 / -1; }
+.set-choice select { width: 100%; margin-top: 4px; }
+.set-choice small { display: block; margin-top: 6px; line-height: 1.45; }
+@media (max-width: 760px) { .ap-warn { flex-wrap: wrap; } }
+.ap-summary .ap-warn { grid-column: 1 / -1; margin: 0; }

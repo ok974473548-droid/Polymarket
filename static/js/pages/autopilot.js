@@ -41,11 +41,14 @@ export async function autopilotPage(main) {
           <button class="btn btn-sm" data-deposit data-account="${a.id}">${icon("plus", 14)} Пополнить</button>
           <button class="btn btn-sm" data-withdraw data-account="${a.id}">${icon("bank", 14)} Вывести</button></div></div>
       <dl class="ap-kpis">
-        <div><dt>Выиграно копий</dt><dd class="${tone(st.wr, s.min_wr / 100, 0.5)}">${p100(st.wr)}</dd><small>${st.closed ? `${st.wins} из ${st.closed} решённых` : "пока нет решённых"} · цель ${s.min_wr}–${Math.min(95, s.min_wr + 10)}%</small></div>
-        <div><dt>Ожидание по составу</dt><dd>${p100(st.expected_wr)}</dd><small>средняя доля выигрышей игроков по истории</small></div>
-        <div><dt>Свободно / в ставках</dt><dd>${usd(a.cash)}</dd><small>${usd(a.positions)} в ${num(st.open)} открытых копиях</small></div>
+        <div><dt>Выиграно копий</dt><dd>${p100(st.wr)}</dd><small>${st.closed ? `${st.wins} из ${st.closed} решённых` : "пока нет решённых"}</small></div>
+        <div><dt>Ожидаемая доходность копии</dt><dd class="${tone(st.expected_roi, 0.0001, 0)}">${st.expected_roi == null ? "—" : sp100(st.expected_roi)}</dd>
+          <small title="Доля выигрышей во многом задаётся ценой: покупка за 85¢ выигрывает в 85% случаев и ничего не зарабатывает">по истории игроков, после цены, комиссии и сдвига цены${st.expected_wr != null ? ` · выигрышей ${p100(st.expected_wr)}` : ""}</small></div>
+        <div><dt>Свободно / в ставках</dt><dd>${usd(a.cash)}</dd><small>${usd(a.positions)} в ${num(st.open)} открытых копиях${st.waiting ? ` · ${num(st.waiting)} ждут цену` : ""}</small></div>
         <div><dt>Доля игрока · копия</dt><dd>${usd(d.share)}</dd><small>одна копия ${usd(copySize)} (${num(s.copy_pct)}% доли)</small></div>
       </dl>
+      ${(d.warnings || []).length ? `<div class="ap-warn">${icon("alert", 16)}<ul>${d.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>
+        <button class="btn btn-sm" type="button" id="ap-warn-fix">${icon("sliders", 14)} Настройки</button></div>` : ""}
       <p class="ap-status small muted">${icon("clock", 13)} ${d.reviewed ? "Пересмотр состава " + ago(d.reviewed) : "Первый пересмотр начнётся в течение минуты"} ·
         проверено игроков ${num(d.scout.profiled)} из ${num(d.scout.total)} · замен за сутки ${d.swaps_today} из ${s.max_swaps_per_day}
         <button class="link-btn" id="ap-review">Пересмотреть сейчас</button></p></section>
@@ -62,6 +65,7 @@ export async function autopilotPage(main) {
     }
   };
   $("#ap-settings").onclick = () => settingsDialog(d, () => autopilotPage(main));
+  if ($("#ap-warn-fix")) $("#ap-warn-fix").onclick = () => settingsDialog(d, () => autopilotPage(main));
   $("#ap-transfer").onclick = () => transferDialog(a, () => autopilotPage(main));
   $("#ap-review").onclick = async () => {
     await api("/api/autopilot/review", {});
@@ -157,14 +161,19 @@ const GROUPS = [
     ["active_count", "Игроков в составе", "", 1], ["bench_size", "Мест на скамейке", "", 1],
     ["copy_pct", "Копия ставки, % доли игрока", "%", 1], ["event_cap_pct", "Лимит на одно событие, % бюджета", "%", 1]]],
   ["Отбор игроков", [
-    ["min_wr", "Доля выигрышей копий, от", "%", 1], ["min_lb", "Надёжная граница (Уилсон), от", "%", 1],
-    ["min_bets", "Решённых ставок за 180 дней, от", "", 1], ["min_roi", "Доходность на ставку, от", "%", 0.5],
-    ["min_edge", "Преимущество над ценой, от", "$", 0.005], ["max_top_share", "Доля прибыли от лучшей ставки, до", "%", 1],
-    ["min_recent", "Новых ставок за 14 дней, от", "", 1], ["max_slip", "Проскальзывание через 60 с, до", "$", 0.005]]],
-  ["Что копировать", [
+    ["selection", "Как отбирать", "select"],
+    ["min_skill_edge", "Доходность сверх цены, от", "%", 0.5, "skill"],
+    ["min_wr", "Доля выигрышей копий, от", "%", 1, "winrate"], ["min_lb", "Надёжная граница (Уилсон), от", "%", 1, "winrate"],
+    ["min_bets", "Решённых ставок за 180 дней, от", "", 1, "winrate"], ["min_roi", "Доходность на ставку, от", "%", 0.5, "winrate"],
+    ["min_edge", "Преимущество над ценой, от", "$", 0.005, "winrate"], ["max_top_share", "Доля прибыли от лучшей ставки, до", "%", 1],
+    ["min_recent", "Новых ставок за 14 дней, от", "", 1], ["max_slip", "Проскальзывание, до", "$", 0.005]]],
+  ["Что копировать и как", [
+    ["copy_mode", "Как покупать копию", "select"],
+    ["limit_wait_min", "Ждать цену игрока, минут", "", 1, "limit"],
+    ["copy_slip_pct", "Копия дороже игрока, % цены, не больше", "%", 0.5, "market"],
+    ["copy_slip", "Копия дороже игрока, $, не больше", "$", 0.005, "market"],
     ["price_min", "Цена ставки, от", "$", 0.01], ["price_max", "Цена ставки, до", "$", 0.01],
-    ["min_leader_trade", "Сделка игрока, от", "$", 1], ["max_days_to_end", "До разрешения рынка, дней (0 — без лимита)", "", 1],
-    ["copy_slip", "Цена копии хуже цены игрока, не больше", "$", 0.005]]],
+    ["min_leader_trade", "Сделка игрока, от", "$", 1], ["max_days_to_end", "До разрешения рынка, дней (0 — без лимита)", "", 1]]],
   ["Испытание на скамейке", [
     ["probation_days", "Срок испытания, дней", "", 1], ["probation_min_bets", "Новых ставок за испытание, от", "", 1],
     ["allow_early", "Брать досрочно, если готовых нет", "bool"], ["early_days", "Досрочно — после дней на скамейке", "", 1],
@@ -177,16 +186,40 @@ const GROUPS = [
     ["cooldown_days", "Выбывший может вернуться через, дней", "", 1]]],
 ];
 
+// choices: value, label, what it means
+const CHOICES = {
+  selection: [["skill", "Умение против цены (рекомендуется)", "Игрок выигрывает чаще, чем обещала цена его ставок, и это не удача: проверено поправкой на сотни сравнений. Покупатель дорогих исходов с 90% выигрышей сюда не проходит — у него выигрывает цена, а не умение."],
+    ["winrate", "Доля выигрышей копий (как до 1.10)", "Отбор по доле выигрышных копий и надёжной границе. Выбирает в основном покупателей дорогих исходов."]],
+  copy_mode: [["limit", "Лимитная по цене игрока (рекомендуется)", "Заявка по цене игрока ждёт несколько минут: сразу после его покупки дешёвые предложения выкуплены, но часто возвращаются. Что не исполнилось — снимается. По истории 1 512 кошельков: +6,3% на копию против +1,5% у покупки сразу, исполняется около 40% копий."],
+    ["market", "Сразу по рынку", "Покупка сразу, но не дороже допуска: в долларах и в процентах цены игрока (срабатывает меньший)."]],
+};
+
 function settingsDialog(d, done) {
   const s = d.settings;
+  const field = ([key, label, unit, step, mode]) => {
+    const dep = mode ? ` data-when="${mode}"` : "";
+    if (unit === "bool") return `<label class="toggle set-bool"${dep}><input type="checkbox" name="${key}" ${s[key] ? "checked" : ""}><span></span> ${label}</label>`;
+    if (unit === "select") {
+      return `<label class="set-choice">${label}<select name="${key}">${CHOICES[key].map(([v, l]) => `<option value="${v}" ${s[key] === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+        <small class="muted" data-hint="${key}"></small></label>`;
+    }
+    return `<label${dep}>${label}<div class="input-unit">${unit === "$" ? "<i>$</i>" : ""}<input name="${key}" type="number" step="${step}" value="${s[key]}"
+          title="По умолчанию ${d.defaults[key]}">${unit === "%" ? "<i>%</i>" : ""}</div></label>`;
+  };
   const dl = modal("Настройки автопилота", `<form class="form ap-settings" id="set-form">
-    ${GROUPS.map(([title, items]) => `<fieldset><legend>${title}</legend><div class="set-grid">${items.map(([key, label, unit, step]) => unit === "bool"
-      ? `<label class="toggle set-bool"><input type="checkbox" name="${key}" ${s[key] ? "checked" : ""}><span></span> ${label}</label>`
-      : `<label>${label}<div class="input-unit">${unit === "$" ? "<i>$</i>" : ""}<input name="${key}" type="number" step="${step}" value="${s[key]}"
-          title="По умолчанию ${d.defaults[key]}">${unit === "%" ? "<i>%</i>" : ""}</div></label>`).join("")}</div></fieldset>`).join("")}
+    ${(d.warnings || []).length ? `<div class="ap-warn">${icon("alert", 16)}<ul>${d.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
+    ${GROUPS.map(([title, items]) => `<fieldset><legend>${title}</legend><div class="set-grid">${items.map(field).join("")}</div></fieldset>`).join("")}
     <p class="form-error" hidden></p>
     <div class="modal-actions"><button type="button" class="btn" id="set-reset">Сбросить по умолчанию</button><button class="btn btn-primary">Сохранить</button></div></form>`, { wide: true });
   const f = $("#set-form", dl);
+  // fields that only matter for one choice are shown with it
+  const sync = () => {
+    const on = new Set([f.selection.value, f.copy_mode.value]);
+    f.querySelectorAll("[data-when]").forEach((el) => (el.hidden = !on.has(el.dataset.when)));
+    for (const key of Object.keys(CHOICES)) $(`[data-hint="${key}"]`, f).textContent = CHOICES[key].find((c) => c[0] === f[key].value)?.[2] || "";
+  };
+  f.selection.onchange = f.copy_mode.onchange = sync;
+  sync();
   const err = (m) => {
     const el = $(".form-error", f);
     el.textContent = m;
@@ -195,7 +228,9 @@ function settingsDialog(d, done) {
   f.onsubmit = async (e) => {
     e.preventDefault();
     const body = {};
-    for (const [, items] of GROUPS) for (const [key, , unit] of items) body[key] = unit === "bool" ? f[key].checked : Number(f[key].value);
+    for (const [, items] of GROUPS) for (const [key, , unit] of items) {
+      body[key] = unit === "bool" ? f[key].checked : unit === "select" ? f[key].value : Number(f[key].value);
+    }
     try {
       await api("/api/autopilot/settings", body);
       dl.close();
@@ -287,7 +322,8 @@ function benchTab(host, d) {
 }
 
 // ------------------------------------------------------------------ candidates
-const CAND_SORTS = { score: (r) => r.score, wr: (r) => r.wr ?? -1, lb: (r) => r.lb ?? -1, roi: (r) => r.roi ?? -9, n: (r) => r.n, new: (r) => r.new_14d, slip: (r) => -(r.slip ?? 9) };
+const CAND_SORTS = { score: (r) => r.score, wr: (r) => r.wr ?? -1, lb: (r) => r.lb ?? -1, roi: (r) => r.roi ?? -9, n: (r) => r.n, new: (r) => r.new_14d,
+  slip: (r) => -(r.slip ?? 9), excess: (r) => r.skill_excess ?? -9, skill: (r) => r.skill_edge ?? -9 };
 
 async function candidatesTab(host, d) {
   const q = route().q;
@@ -324,10 +360,16 @@ async function candidatesTab(host, d) {
     };
     const stateLabel = { active: '<span class="badge badge-green">В составе</span>', bench: '<span class="badge badge-gold">На скамейке</span>',
       retired: '<span class="badge badge-gray">Выбыл</span>', banned: '<span class="badge badge-red">Исключён</span>' };
-    $("#c-table").innerHTML = rows.length ? `<table class="table table-tight"><thead><tr><th>Игрок</th><th>Тип</th>${th("n", "Ставок")}${th("wr", "Выигрыши")}${th("lb", "Надёжно")}${th("roi", "Доходность")}${th("new", "Новых 14 дн")}${th("slip", "Проскальз.")}${th("score", "Балл")}<th>Отбор</th><th></th></tr></thead><tbody>
+    const skill = d.settings.selection === "skill";
+    const mid = skill ? `${th("excess", "Чаще цены")}${th("skill", "Сверх цены")}` : `${th("lb", "Надёжно")}${th("roi", "Доходность")}`;
+    const midCells = (r) => skill
+      ? `<td class="num ${tone(r.skill_excess, 0.0001, 0)}" title="Насколько чаще выигрывает, чем обещала цена (п. п.)">${r.skill_excess == null ? "—" : sp100(r.skill_excess)}</td>
+         <td class="num ${tone(r.skill_edge, 0.0001, 0)}" title="Доходность копии сверх цены, с поправкой на объём истории">${r.skill_edge == null ? "—" : sp100(r.skill_edge)}</td>`
+      : `<td class="num">${p100(r.lb)}</td><td class="num ${tone(r.roi, 0.0001, 0)}">${sp100(r.roi)}</td>`;
+    $("#c-table").innerHTML = rows.length ? `<table class="table table-tight"><thead><tr><th>Игрок</th><th>Тип</th>${th("n", "Ставок")}${th("wr", "Выигрыши")}${mid}${th("new", "Новых 14 дн")}${th("slip", "Проскальз.")}${th("score", "Балл")}<th>Отбор</th><th></th></tr></thead><tbody>
       ${rows.map((r) => `<tr><td><a class="trader-cell" href="/traders/${r.wallet}">${avatar(r.wallet, r.image, r.name, 26)}<span>${esc(playerName(r))}</span></a></td>
-        <td class="small">${esc(r.kind_label)}</td><td class="num">${num(r.n)}</td><td class="num ${tone(r.wr, d.settings.min_wr / 100, 0.55)}">${p100(r.wr)}</td>
-        <td class="num">${p100(r.lb)}</td><td class="num ${tone(r.roi, 0.0001, 0)}">${sp100(r.roi)}</td><td class="num">${num(r.new_14d)}</td>
+        <td class="small">${esc(r.kind_label)}</td><td class="num">${num(r.n)}</td><td class="num">${p100(r.wr)}</td>
+        ${midCells(r)}<td class="num">${num(r.new_14d)}</td>
         <td class="num">${r.slip == null ? "—" : cents(r.slip)}</td><td class="num"><b>${Math.round(r.score)}</b></td>
         <td class="small">${r.state ? stateLabel[r.state] : r.passed ? '<span class="badge badge-green">Проходит</span>' : `<span class="muted" title="${esc(r.failed.join(", "))}">${esc(r.failed.slice(0, 2).join(", "))}${r.failed.length > 2 ? "…" : ""}</span>`}</td>
         <td class="num nowrap"><button class="btn btn-sm" data-detail="${r.wallet}" title="Подробнее">${icon("info", 14)}<span class="btn-label">Подробнее</span></button>${!r.state ? ` <button class="btn btn-sm" data-act="bench" data-w="${r.wallet}" title="На скамейку">${icon("plus", 14)}<span class="btn-label">На скамейку</span></button>` : ""}</td></tr>`).join("")}</tbody></table>`
@@ -357,16 +399,18 @@ async function betsTab(host) {
 
 async function activityTab(host, d) {
   const q = route().q;
-  const status = ["filled", "skipped", "failed"].includes(q.get("status")) ? q.get("status") : "";
-  host.innerHTML = `<div class="filters-row"><div class="seg">${[["", "Все"], ["filled", "Скопировано"], ["skipped", "Пропущено"], ["failed", "Ошибка"]].map(([k, l]) =>
+  const status = ["filled", "waiting", "skipped", "failed"].includes(q.get("status")) ? q.get("status") : "";
+  host.innerHTML = `<div class="filters-row"><div class="seg">${[["", "Все"], ["filled", "Скопировано"], ["waiting", "Ждут цену"], ["skipped", "Пропущено"], ["failed", "Ошибка"]].map(([k, l]) =>
     `<a href="${withQuery({ status: k || null })}" class="${status === k ? "cur" : ""}" data-keep-scroll>${l}</a>`).join("")}</div>
     <span class="muted small">Каждая сделка игроков из состава: сколько вложил игрок и сколько мы. Нажмите на строку — подробности.</span></div><div class="tablewrap" id="act"><div class="sk-block tall"></div></div>`;
   try {
     const rows = await api("/api/autopilot/events?status=" + status);
     const box = $("#act");
-    const slip = d?.settings?.copy_slip;
+    const st = d?.settings || {};
+    const slip = st.copy_mode === "limit" ? `лимитная заявка по цене игрока, ждёт ${st.limit_wait_min} мин`
+      : st.copy_slip != null ? `до ${cents(st.copy_slip)} и до ${num(st.copy_slip_pct)}% цены игрока` : "";
     box.innerHTML = rows.length ? `${delaySummary(rows) ? `<div class="pad-x">${delaySummary(rows)}</div>` : ""}${activityTable(rows, {
-      who: "Игрок", filled: "Скопировано", slip: slip != null ? `до ${cents(slip)} за акцию от цены игрока` : "",
+      who: "Игрок", filled: "Скопировано", slip,
       settings: () => `<button class="btn btn-sm" type="button" data-open-settings>${icon("sliders", 14)} Изменить в настройках</button>` })}`
       : `<div class="pad">${emptyBox("Событий пока нет", "Здесь появятся сделки игроков из состава.")}</div>`;
     bindRows(box);

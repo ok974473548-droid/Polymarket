@@ -34,6 +34,9 @@ const REASONS = [
   [/Рынок уже закрыт/, "Рынок закрыт", false],
   [/выведен из состава/, "Игрок вне состава", false],
   [/копировать поздно/, "Поздно", false],
+  [/Цена не вернулась/, "Цена не вернулась", true],
+  [/продал раньше|ждала цену игрока/, "Игрок уже продал", false],
+  [/минимальной заявки/, "Мало для заявки", false],
 ];
 export function reasonShort(r) {
   for (const [re, label, setting] of REASONS) if (re.test(r.reason || "")) return { label, setting };
@@ -94,6 +97,7 @@ export function activityTable(rows, opts) {
       const filled = r.status === "filled" && r.amount != null;
       const why = r.status === "filled" ? null : reasonShort(r);
       const badge = r.status === "filled" ? `<span class="badge badge-green">${opts.filled || "Скопировано"}</span>`
+        : r.status === "waiting" ? `<span class="badge badge-gold" title="${esc(r.reason || "")}">Ждёт цену</span>`
         : `<span class="badge ${r.status === "failed" ? "badge-red" : "badge-gray"}" title="${esc(r.reason || "")}">${esc(why.label)}</span>`;
       const side = `<span class="side ${buy ? "buy" : "sell"}">${buy ? "Купил" : "Продал"}${out ? ` «${esc(out)}»` : ""}</span>`;
       // A buy: money in and what it pays if the outcome wins ($1 a share). A sale: money received.

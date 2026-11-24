@@ -7,7 +7,7 @@ from unittest.mock import patch
 from kontur import autopilot, copytrade, packs, scout, trading
 from kontur import db as store
 from kontur import polymarket as pm
-from test_trading import COND, YES, Base
+from test_trading import COND, YES, Base, book
 
 DAY = 86400
 NOW = 1_800_000_000.0
@@ -108,13 +108,13 @@ class MetricsTests(unittest.TestCase):
         bets = bets_for(45, 12, step=2.5 * DAY) + bets_for(3, 0, start=NOW - 10 * DAY)
         m = scout.metrics(bets, slip=0.01, now=NOW)
         m["slip_measured"] = 0.01
-        verdict = scout.judge(m, "directional", {})
+        verdict = scout.judge(m, "directional", {"selection": "winrate"})
         self.assertTrue(verdict["passed"], verdict["failed"])
         self.assertGreater(verdict["score"], 50)
-        strict = scout.judge(m, "directional", {"min_wr": 90})
+        strict = scout.judge(m, "directional", {"selection": "winrate", "min_wr": 90})
         self.assertFalse(strict["passed"])
         self.assertIn("Доля выигрышей копий", strict["failed"])
-        self.assertFalse(scout.judge(m, "market_maker", {})["passed"])
+        self.assertFalse(scout.judge(m, "market_maker", {"selection": "winrate"})["passed"])
 
 
 def store_candidate(db, wallet, wins=45, losses=12, kind="directional", recent=3, name=""):
@@ -146,7 +146,9 @@ class AutopilotTests(Base):
         for i in range(1, 16):
             store_candidate(self.db, wallet(i), wins=40 + i, losses=12)
         store_candidate(self.db, wallet(99), kind="market_maker")
-        autopilot.update_settings(self.db, self.uid, {"active_count": 5, "bench_size": 3})
+        # roster mechanics are checked with the win-rate selection and market copies (skill and limit copies: below)
+        autopilot.update_settings(self.db, self.uid, {"active_count": 5, "bench_size": 3, "selection": "winrate",
+                                                      "copy_mode": "market"})
         autopilot.enable(self.db, self.uid, True, budget=500)
         self.aid = autopilot.account_id(self.db, self.uid)
 
@@ -360,6 +362,291 @@ class AutopilotTests(Base):
         self.assertIn("copies", card)
         detail = autopilot.player(self.db, self.uid, card["wallet"])
         self.assertTrue(detail["verdict"]["passed"])
+
+
+def bets_events(n, entry, wins, start=NOW - 170 * DAY, step=DAY, prefix="e"):
+    """Decided bets of one player, each in its own event (skill is counted by event)."""
+    out, t = [], start
+    for i in range(n):
+        win = (i + 1) * wins // n != i * wins // n
+        out.append(dict(token=f"{prefix}{i}", condition=f"{prefix}c{i}", oidx=0, outcome="Yes", title="Will it happen?",
+                        event_slug=f"{prefix}ev{i}", entry=entry, size=100, opened=t, end=None, short=0,
+                        state="closed" if win else "resolved", exit=1.0 if win else 0.0, closed=t + DAY, mark=None))
+        t += step
+    return out
+
+
+class SkillTests(unittest.TestCase):
+    def test_fee_estimate_is_the_real_copy_fee(self):
+        # 1.10.0: 0.05 * p * (1 - p) per share, as live copies pay (before: 0.02 * p * (1 - p))
+        self.assertAlmostEqual(scout.fee_est(0.60), 0.012)
+        r, edge = scout.copy_result(0.60, 1.0, 0.01, True)
+        self.assertAlmostEqual(edge, 1 - 0.61 - 0.05 * 0.61 * 0.39)
+        old_edge = 1 - 0.61 - 0.02 * 0.61 * 0.39
+        self.assertAlmostEqual(old_edge - edge, 0.03 * 0.61 * 0.39)   # было → стало: $0.0071 less per share
+
+    def test_bh_cut(self):
+        self.assertAlmostEqual(scout.bh_cut([0.001, 0.01, 0.2, 0.5], q=0.10), 0.01)
+        self.assertEqual(scout.bh_cut([0.3, 0.6]), 0.0)
+        self.assertEqual(scout.bh_cut([]), 0.0)
+
+    def test_favourite_buyer_against_skilled_underdog_buyer(self):
+        # 88% wins buying at 80¢ is mostly the price; 50% wins buying at 30¢ is skill.
+        fav = scout.metrics(bets_events(80, 0.80, 70) + bets_events(5, 0.80, 5, start=NOW - 5 * DAY, prefix="r"),
+                            slip=0.005, now=NOW)
+        dog = scout.metrics(bets_events(80, 0.30, 40) + bets_events(5, 0.30, 3, start=NOW - 5 * DAY, prefix="r"),
+                            slip=0.005, now=NOW)
+        for m in (fav, dog):
+            m["slip_measured"] = 0.005
+        self.assertGreater(fav["wr"], 0.85)
+        self.assertLess(dog["wr"], 0.55)
+        self.assertLess(fav["skill"]["excess"], dog["skill"]["excess"])
+        self.assertLess(dog["skill"]["p"], 0.001)
+        self.assertGreater(fav["skill"]["p"], 0.001)
+        winrate = {"selection": "winrate"}
+        self.assertTrue(scout.judge(fav, "directional", winrate)["passed"])      # until 1.10.0 the favourite was chosen
+        self.assertFalse(scout.judge(dog, "directional", winrate)["passed"])     # and the skilled player was not
+        skill = {"selection": "skill"}
+        self.assertFalse(scout.judge(fav, "directional", skill, cut=0.001)["passed"])
+        verdict = scout.judge(dog, "directional", skill, cut=0.001)
+        self.assertTrue(verdict["passed"], verdict["failed"])
+        self.assertGreater(verdict["score"], 50)
+        self.assertFalse(scout.judge(dog, "directional", skill, cut=0.0)["passed"])  # nothing significant across all
+
+    def test_skill_needs_enough_events(self):
+        one_event = bets_for(45, 12)          # every bet in one event: no independent evidence
+        self.assertIsNone(scout.metrics(one_event, now=NOW)["skill"])
+
+    def test_live_copies_set_the_slippage(self):
+        self.assertIsNone(scout.copy_slip(None, None))
+        self.assertEqual(scout.copy_slip(0.01, None), 0.01)
+        self.assertEqual(scout.copy_slip(0.01, {"mean": 0.058, "n": 10}), 0.058)
+        self.assertEqual(scout.copy_slip(None, {"mean": -0.01, "n": 10}), scout.DEFAULT_SLIP)
+
+    def test_expected_return(self):
+        self.assertAlmostEqual(autopilot.expected_return({"skill": {"edge": 0.04}, "roi": 0.3, "n": 100}), 0.04)
+        self.assertAlmostEqual(autopilot.expected_return({"skill": None, "roi": 0.2, "n": 40}), 0.1)
+        self.assertIsNone(autopilot.expected_return({"skill": None, "roi": None, "n": 0}))
+
+
+class LiveSlipTests(Base):
+    def test_from_market_copies_of_every_user(self):
+        leader = "0x" + "c" * 40
+        acc = self.acc["id"]
+        ct = self.db.execute("INSERT INTO copy_trades(account_id, leader, sizing, created) VALUES(?,?,'fixed',?)",
+                             (acc, leader, time.time())).lastrowid
+        for i, (paid, kind) in enumerate([(0.45, "market")] * 5 + [(0.40, "limit")] * 3):
+            cur = self.db.execute("""INSERT INTO orders(account_id, token_id, condition_id, side, type, status, created, updated)
+                                     VALUES(?,?,?,?,?,?,?,?)""", (acc, YES, COND, "buy", kind, "filled", time.time(), time.time()))
+            self.db.execute("""INSERT INTO copy_events(copy_trade_id, account_id, leader, status, side, leader_price, price, order_id, at)
+                               VALUES(?,?,?,'filled','buy',0.40,?,?,?)""", (ct, acc, leader, paid, cur.lastrowid, time.time()))
+        live = scout.live_slip(self.db, leader)
+        self.assertEqual(live["n"], 5)                # limit copies pay the player's price by design: left out
+        self.assertAlmostEqual(live["mean"], 0.05)
+
+    def test_old_profiles_are_recomputed_from_kept_bets(self):
+        w = "0x" + "d" * 40
+        bets = bets_events(40, 0.30, 20)
+        packs.save(self.db, w, bets)
+        old = scout.metrics(bets, now=NOW)
+        old.pop("version")
+        old.pop("skill")
+        old["slip_measured"] = 0.01
+        self.db.execute("INSERT INTO scout_wallets(wallet, name, image, sources, added, profiled, kind, facts, metrics, score) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?)", (w, "x", "", "[]", NOW, NOW, "directional", "{}", json.dumps(old), 1))
+        self.assertEqual(scout.refresh_metrics(self.db), 1)
+        m = json.loads(self.db.execute("SELECT metrics FROM scout_wallets WHERE wallet=?", (w,)).fetchone()[0])
+        self.assertEqual(m["version"], scout.METRICS_VERSION)
+        self.assertIsNotNone(m["skill"])
+        self.assertEqual(m["slip_measured"], 0.01)
+        self.assertEqual(scout.refresh_metrics(self.db), 0)
+        # the minute job stops looking once nothing is left to recompute
+        from kontur import worker
+        store.kv_set(self.db, "scout:wanted", "1")
+        self.db.execute("UPDATE scout_wallets SET metrics=? WHERE wallet=?", (json.dumps(old), w))
+        worker.job_rescore(self.db)
+        self.assertEqual(store.kv_get(self.db, "scout:rescored", ""), "")
+        worker.job_rescore(self.db)
+        self.assertEqual(store.kv_get(self.db, "scout:rescored", ""), str(scout.METRICS_VERSION))
+
+
+class CopyJournalMigrationTests(unittest.TestCase):
+    def test_older_journal_rebuilt_with_every_row(self):
+        import os
+        import sqlite3
+        import tempfile
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "old.sqlite3")
+        store.init(path)
+        db = sqlite3.connect(path)
+        # make it look like 1.9.0: the CHECK without 'waiting', a few rows
+        sql = db.execute("SELECT sql FROM sqlite_master WHERE name='copy_events'").fetchone()[0]
+        cols = [r[1] for r in db.execute("PRAGMA table_info(copy_events)")]
+        db.execute("PRAGMA foreign_keys=OFF")
+        db.execute("ALTER TABLE copy_events RENAME TO ce_tmp")
+        db.execute(sql.replace(",'waiting'", ""))
+        db.execute("DROP TABLE ce_tmp")
+        db.execute("INSERT INTO users(id, username, pw_hash, pw_salt, created) VALUES(1,'u','x','y',0)")
+        db.execute("INSERT INTO accounts(id, user_id, kind, name, balance, created) VALUES(1,1,'copy','c',0,0)")
+        db.execute("INSERT INTO copy_trades(id, account_id, leader, sizing, created) VALUES(1,1,'0xabc','fixed',0)")
+        for i in range(5):
+            db.execute("INSERT INTO copy_events(copy_trade_id, account_id, leader, status, reason, side, at, key_hash) "
+                       "VALUES(1,1,'0xabc','skipped','r',?,?,?)", ("buy", i, i))
+        db.commit()
+        with self.assertRaises(sqlite3.IntegrityError):
+            db.execute("INSERT INTO copy_events(copy_trade_id, account_id, leader, status, side, at) VALUES(1,1,'x','waiting','buy',0)")
+        db.close()
+        store.init(path)                                      # the app starting with the new version
+        db = store.connect(path)
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM copy_events").fetchone()[0], 5)
+        self.assertEqual([r[1] for r in db.execute("PRAGMA table_info(copy_events)")], cols)
+        db.execute("INSERT INTO copy_events(copy_trade_id, account_id, leader, status, side, at) VALUES(1,1,'x','waiting','buy',0)")
+        names = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='copy_events'")}
+        self.assertTrue({"copy_events_hash", "copy_events_account", "copy_events_at"} <= names)
+        db.close()
+
+
+class NewAutopilotTests(AutopilotTests):
+    """1.10.0: limit copies, the price allowance, manual removal, a bigger roster, soft activity, warnings."""
+
+    def trade(self, price, side="BUY", tx="0x1"):
+        return {"side": side, "price": price, "size": 1000, "title": "Will it rain?", "outcome": "Yes", "event_slug": "rain",
+                "token_id": YES, "condition_id": COND, "transaction_hash": tx, "timestamp": self.now}
+
+    def ct_of(self, leader):
+        return store.one(self.db.execute("SELECT * FROM copy_trades WHERE leader=? AND account_id=?", (leader, self.aid)))
+
+    def event_of(self, ct):
+        return store.one(self.db.execute("SELECT * FROM copy_events WHERE copy_trade_id=? ORDER BY id DESC", (ct["id"],)))
+
+    def test_market_copy_price_allowance_relative(self):
+        autopilot.review(self.db, self.uid)
+        leader = self.players("active")[0]
+        autopilot.update_settings(self.db, self.uid, {"copy_slip": 0.2, "copy_slip_pct": 50})
+        (status, _, _), _, _ = self.copy_buy(leader, price=0.30)        # was: up to $0.15 more allowed → bought at 40–45¢
+        self.assertEqual(status, "filled")
+        autopilot.update_settings(self.db, self.uid, {"copy_slip_pct": 3})
+        (status, reason, _), _, _ = self.copy_buy(leader, price=0.30)   # now: 3% of 30¢ (at least 1¢) → nothing to buy
+        self.assertEqual(status, "skipped")
+        self.assertIn("$0.01", reason)
+        self.assertAlmostEqual(autopilot.price_allowance(0.15, {"copy_slip": 0.2, "copy_slip_pct": 3}), 0.01)
+        self.assertAlmostEqual(autopilot.price_allowance(0.80, {"copy_slip": 0.2, "copy_slip_pct": 3}), 0.024)
+        self.assertAlmostEqual(autopilot.price_allowance(0.80, {"copy_slip": 0.02, "copy_slip_pct": 3}), 0.02)
+
+    def test_limit_copy_waits_then_fills(self):
+        autopilot.update_settings(self.db, self.uid, {"copy_mode": "limit", "limit_wait_min": 2})
+        autopilot.review(self.db, self.uid)
+        leader = self.players("active")[0]
+        ct = self.ct_of(leader)
+        cash = self.db.execute("SELECT balance FROM accounts WHERE id=?", (self.aid,)).fetchone()[0]
+        self.assertTrue(copytrade.handle(self.db, ct, self.trade(0.38), self.uid, source="stream"))
+        ev = self.event_of(ct)
+        self.assertEqual(ev["status"], "waiting", ev["reason"])                 # best ask 40¢ > the player's 38¢
+        order = store.one(self.db.execute("SELECT * FROM orders WHERE id=?", (ev["order_id"],)))
+        self.assertEqual((order["type"], order["status"], order["limit_price"]), ("limit", "open", 0.38))
+        self.assertAlmostEqual(order["shares"], 26.31)                          # $10 copy / 38¢
+        self.assertAlmostEqual(autopilot._open_cost(self.db, self.uid, wallet=leader), 26.31 * 0.38, places=4)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM ap_bets").fetchone()[0], 0)
+        trading.match_resting(self.db, {YES: book(asks=((0.37, 100),))})        # the price came back
+        bet = store.one(self.db.execute("SELECT * FROM ap_bets WHERE wallet=?", (leader,)))
+        self.assertAlmostEqual(bet["shares"], 26.31)
+        self.assertAlmostEqual(bet["cost"], 26.31 * 0.38, places=4)            # the player's price, no taker fee
+        ev = self.event_of(ct)
+        self.assertEqual(ev["status"], "filled")
+        self.assertAlmostEqual(ev["price"], 0.38)
+        after = self.db.execute("SELECT balance FROM accounts WHERE id=?", (self.aid,)).fetchone()[0]
+        self.assertAlmostEqual(cash - after, 26.31 * 0.38, places=4)
+
+    def test_limit_copy_expires_or_is_withdrawn_on_sale(self):
+        autopilot.update_settings(self.db, self.uid, {"copy_mode": "limit", "limit_wait_min": 2})
+        autopilot.review(self.db, self.uid)
+        a, b = self.players("active")[:2]
+        cash = self.db.execute("SELECT balance FROM accounts WHERE id=?", (self.aid,)).fetchone()[0]
+        copytrade.handle(self.db, self.ct_of(a), self.trade(0.38, tx="0xa"), self.uid)
+        copytrade.handle(self.db, self.ct_of(b), self.trade(0.38, tx="0xb"), self.uid)
+        # b sells before the price came back: the waiting buy is withdrawn
+        copytrade.handle(self.db, self.ct_of(b), self.trade(0.36, side="SELL", tx="0xc"), self.uid)
+        self.assertEqual(self.event_of(self.ct_of(b))["reason"], "Покупка ещё ждала цену игрока — снята")
+        buy_b = store.one(self.db.execute("SELECT * FROM copy_events WHERE copy_trade_id=? AND side='buy'", (self.ct_of(b)["id"],)))
+        self.assertEqual(buy_b["status"], "skipped")
+        self.assertEqual(buy_b["reason"], "Игрок продал раньше, чем цена вернулась")
+        # a's order runs out of time
+        self.now += 3 * 60
+        trading.expire_orders(self.db)
+        ev = self.event_of(self.ct_of(a))
+        self.assertEqual((ev["status"], ev["reason"]), ("skipped", "Цена не вернулась к цене игрока за отведённое время"))
+        self.assertAlmostEqual(self.db.execute("SELECT balance FROM accounts WHERE id=?", (self.aid,)).fetchone()[0], cash, places=6)
+
+    def test_limit_copy_fills_at_once_when_the_price_is_there(self):
+        autopilot.update_settings(self.db, self.uid, {"copy_mode": "limit"})
+        autopilot.review(self.db, self.uid)
+        leader = self.players("active")[0]
+        (status, reason, extra), _, _ = self.copy_buy(leader, price=0.40)
+        self.assertEqual(status, "filled", reason)
+        self.assertAlmostEqual(extra["price"], 0.40)
+
+    def test_manual_removal_is_not_undone(self):
+        autopilot.review(self.db, self.uid)
+        target = self.players("bench")[0]
+        autopilot.action(self.db, self.uid, target, "remove")
+        autopilot.review(self.db, self.uid)
+        self.assertIn(target, self.players("retired"))                 # until 1.10.0 it was back on the bench at once
+        self.assertNotIn(target, self.players("bench"))
+        until = self.db.execute("SELECT until FROM ap_players WHERE wallet=?", (target,)).fetchone()[0]
+        self.assertGreaterEqual(until - self.now, 7 * DAY)
+        self.assertEqual(len(self.players("bench")), 3)                 # its place went to someone else
+
+    def test_bigger_roster_fills_new_places(self):
+        autopilot.review(self.db, self.uid)
+        self.assertEqual(len(self.players("active")), 5)
+        autopilot.update_settings(self.db, self.uid, {"active_count": 7})
+        autopilot.review(self.db, self.uid)
+        self.assertEqual(len(self.players("active")), 7)                # until 1.10.0: 5 until the bench was ready
+        self.lose(self.players("active")[0], 5)
+        n_bench = len(self.players("bench"))
+        autopilot.review(self.db, self.uid)
+        self.assertLessEqual(len(self.players("active")), 7)
+        self.assertEqual(self.db.execute("SELECT value FROM kv WHERE key=?", (f"ap:{self.uid}:bootstrapped",)).fetchone()[0], "7")
+        self.assertLessEqual(len(self.players("bench")), n_bench + 1)
+
+    def idle(self, wallet):
+        m = json.loads(self.db.execute("SELECT metrics FROM scout_wallets WHERE wallet=?", (wallet,)).fetchone()[0])
+        m["new_14d"] = 1
+        self.db.execute("UPDATE scout_wallets SET metrics=?, profiled=? WHERE wallet=?", (json.dumps(m), self.now + 1, wallet))
+
+    def test_idle_player_replaced_only_when_someone_can_take_over(self):
+        for i in range(40, 48):                      # active players for the roster and the bench
+            store_candidate(self.db, wallet(i), wins=50, losses=12, recent=8)
+        autopilot.update_settings(self.db, self.uid, {"min_recent": 4, "allow_early": True, "early_days": 7})
+        autopilot.review(self.db, self.uid)
+        self.assertEqual(len(self.players("bench")), 3)
+        idle = self.players("active")[0]
+        self.now += 60
+        self.idle(idle)                                                 # 1 new bet in 14 days, soft requirement 2
+        autopilot.review(self.db, self.uid)
+        self.assertIn(idle, self.players("active"))                     # nobody on the bench may enter yet
+        reason = self.db.execute("SELECT reason FROM ap_players WHERE wallet=?", (idle,)).fetchone()[0]
+        self.assertIn("новых ставок", reason.lower())
+        self.now += 8 * DAY                                             # the bench may enter early now
+        self.idle(idle)
+        autopilot.review(self.db, self.uid)
+        self.assertNotIn(idle, self.players("active"))
+        self.assertEqual(len(self.players("active")), 5)
+
+    def test_warnings_for_settings_that_lose_or_lock_money(self):
+        self.assertEqual(len(autopilot.warnings(autopilot.settings(self.db, self.uid))), 1)   # win-rate selection at 70%
+        autopilot.update_settings(self.db, self.uid, {"selection": "skill"})
+        self.assertEqual(autopilot.warnings(autopilot.settings(self.db, self.uid)), [])
+        autopilot.update_settings(self.db, self.uid, {"price_max": 0.99, "max_days_to_end": 0, "copy_slip": 0.2,
+                                                      "copy_slip_pct": 50})
+        text = " ".join(autopilot.warnings(autopilot.settings(self.db, self.uid)))
+        self.assertIn("99¢", text)
+        self.assertIn("Без ограничения срока", text)
+        self.assertIn("$0.20", text)
+        ov = autopilot.overview(self.db, self.uid)
+        self.assertEqual(len(ov["warnings"]), 3)
+        with self.assertRaises(ValueError):
+            autopilot.update_settings(self.db, self.uid, {"copy_mode": "fast"})
 
 
 if __name__ == "__main__":

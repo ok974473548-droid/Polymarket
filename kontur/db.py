@@ -153,7 +153,7 @@ CREATE TABLE IF NOT EXISTS copy_events(
   copy_trade_id INTEGER NOT NULL REFERENCES copy_trades(id) ON DELETE CASCADE,
   account_id INTEGER NOT NULL,
   leader TEXT NOT NULL,
-  status TEXT NOT NULL CHECK(status IN ('filled','skipped','failed')),
+  status TEXT NOT NULL CHECK(status IN ('filled','skipped','failed','waiting')),
   reason TEXT NOT NULL DEFAULT '',
   side TEXT NOT NULL,
   title TEXT NOT NULL DEFAULT '',
@@ -398,6 +398,7 @@ def init(path):
             have = {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
             if column not in have:
                 db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        _allow_waiting_copies(db)
         _hash_copy_keys(db)
         for sql in INDEXES:
             db.execute(sql)
@@ -406,6 +407,36 @@ def init(path):
         db.execute("PRAGMA optimize")
     finally:
         db.close()
+
+
+def _allow_waiting_copies(db):
+    """1.10.0: a copy may wait for the player's price ('waiting'). SQLite cannot change a CHECK in place, so a
+    copy_events table of an older version is rebuilt once with every row kept (the documented way: new table,
+    copy, drop, rename; indexes are made again by INDEXES)."""
+    sql = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='copy_events'").fetchone()[0]
+    if "'waiting'" in sql:
+        return
+    start = SCHEMA.index("CREATE TABLE IF NOT EXISTS copy_events(")
+    create = SCHEMA[start:SCHEMA.index(");", start) + 2].replace("copy_events(", "copy_events_new(", 1)
+    old_cols = [r[1] for r in db.execute("PRAGMA table_info(copy_events)")]
+    db.execute("PRAGMA foreign_keys=OFF")
+    try:
+        with tx(db):
+            db.execute("DROP TABLE IF EXISTS copy_events_new")
+            db.execute(create)
+            for table, column, definition in MIGRATIONS:
+                if table == "copy_events":
+                    db.execute(f"ALTER TABLE copy_events_new ADD COLUMN {column} {definition}")
+            new_cols = {r[1] for r in db.execute("PRAGMA table_info(copy_events_new)")}
+            cols = ", ".join(c for c in old_cols if c in new_cols)
+            db.execute(f"INSERT INTO copy_events_new({cols}) SELECT {cols} FROM copy_events")
+            moved = db.execute("SELECT COUNT(*) FROM copy_events_new").fetchone()[0]
+            if moved != db.execute("SELECT COUNT(*) FROM copy_events").fetchone()[0]:
+                raise RuntimeError("Перенос журнала копий не сошёлся — база не изменена")
+            db.execute("DROP TABLE copy_events")
+            db.execute("ALTER TABLE copy_events_new RENAME TO copy_events")
+    finally:
+        db.execute("PRAGMA foreign_keys=ON")
 
 
 def key_hash(key):
