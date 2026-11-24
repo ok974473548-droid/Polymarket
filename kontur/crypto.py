@@ -29,8 +29,10 @@ SITE = "https://polymarket.com/api"
 SYMBOLS = views.ROUND_SYMBOLS
 NAMES = {"btc": "Биткоин", "eth": "Эфириум", "sol": "Солана", "xrp": "XRP", "doge": "Догикоин", "bnb": "BNB",
          "hype": "Hyperliquid", "zec": "Zcash"}
-PERIODS = {"5m": (300, "fiveminute"), "15m": (900, "fifteenminute"), "1h": (3600, "hourly"),
-           "4h": (14400, "fourhourly"), "1d": (86400, "daily")}
+# variant names as polymarket.com sends them (until 1.11.0 "fifteenminute", "hourly"…: the API then answered with the
+# open of another round, and the targets of 15-minute to daily rounds were wrong)
+PERIODS = {"5m": (300, "fiveminute"), "15m": (900, "fifteen"), "1h": (3600, "onehour"),
+           "4h": (14400, "fourhour"), "1d": (86400, "oneday")}
 SLUG = re.compile(r"^([a-z]+)-updown-(5m|15m|1h|4h|1d)-(\d{9,11})$")
 KEEP = 2 * 3600            # seconds of live prices kept per coin
 IDLE_CLOSE = 600           # close the stream this long after the last viewer
@@ -256,8 +258,11 @@ def round_info(slug):
     history = []
     try:
         # a round being played: the last couple of minutes ("history seed"); a finished one: the whole round
-        # (Polymarket answers with 61 points from start to end, as its own chart of a finished round shows)
-        extra = {"twapEnabled": "false"} if finished else {"twapEnabled": "false", "historySeed": "true"}
+        # (Polymarket answers with 61 points from start to end, as its own chart of a finished round shows).
+        # twapEnabled=true as polymarket.com asks: that is the Chainlink price the round resolves on. Until 1.11.0
+        # "false" was sent and the answer was an exchange price in USDT, about $70 above Chainlink for bitcoin
+        # (24.11.2026), so the line jumped where the history met the live stream; a finished round had 6 points.
+        extra = {} if finished else {"historySeed": "true"}
         raw = pm.fetch(SITE + "/crypto/price-history?" + urlencode({**q, **extra}), gap=0.1)
         history = [[int(x["timestamp"] / 1000), float(x["value"])] for x in raw if isinstance(x, dict) and pm.num(x.get("value"))]
     except (pm.UpstreamError, LookupError, ValueError, TypeError):

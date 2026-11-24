@@ -87,7 +87,7 @@ function goLive(e, cands, tab) {
     document.querySelectorAll(`[data-p="${tok}"]`).forEach((el) => roll(el, pct(p)));
     document.querySelectorAll(`[data-c="${tok}"]`).forEach((el) => roll(el, cents(p)));
     chart?.price?.(tok, p);
-  }, (t, v) => chart?.coin?.(t, v));
+  }, (t, v) => chart?.coin?.(t, v), { round: coin ? e.slug : "", onTrade: (side, usd) => chart?.trade?.(side, usd) });
 }
 
 // ------------------------------------------------------------------ chart + outcomes
@@ -110,7 +110,7 @@ async function cryptoTab(host, e, cands) {
   host.innerHTML = `<div id="lv-host"></div><section class="outcomes" id="outcomes"></section>${rulesHtml(e)}`;
   outcomes($("#outcomes"), e, cands);
   const round = await cryptoRound($("#lv-host"), e.slug);
-  if (round) chart = { coin: (t, v) => round.coin(t, v) };
+  if (round) chart = { coin: (t, v) => round.coin(t, v), trade: (side, usd) => round.trade(side, usd) };
 }
 
 const windowOf = (q) => (WINDOWS.some((w) => w[0] === q.get("w")) ? q.get("w") : "max");

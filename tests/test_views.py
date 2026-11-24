@@ -5,6 +5,9 @@ chart polymarket.com drew for each of them that day."""
 
 import gzip
 import json
+import os
+import shutil
+import subprocess
 import tempfile
 import time
 import unittest
@@ -177,14 +180,26 @@ class CryptoRound(unittest.TestCase):
         self.assertEqual(len(r["points"]), 61)
         history = next(u for u in self.urls if "/crypto/price-history" in u)
         self.assertNotIn("historySeed", history)                   # the whole round, not the last minutes
+        self.assertIn("twapEnabled=true", history)                 # the Chainlink price, not an exchange's
         self.assertEqual(r["live"], f"btc-updown-5m-{self.start + 900}")
         self.assertEqual(r["next"], f"btc-updown-5m-{self.start + 300}")
 
     def test_round_being_played_asks_the_last_minutes(self):
         r = self.info(self.start + 100)
         self.assertFalse(r["finished"])
-        self.assertIn("historySeed=true", next(u for u in self.urls if "/crypto/price-history" in u))
+        history = next(u for u in self.urls if "/crypto/price-history" in u)
+        self.assertIn("historySeed=true", history)
+        self.assertIn("twapEnabled=true", history)
         self.assertEqual(r["live"], f"btc-updown-5m-{self.start}")
+
+    def test_variant_names_as_polymarket_sends_them(self):
+        # polymarket.com 24.11.2026: other names get the open of another round (15 minutes: $59 417 instead of $59 999)
+        names = {p: crypto.parse(f"btc-updown-{p}-{self.start}")["variant"] for p in ("5m", "15m", "1h", "4h", "1d")}
+        self.assertEqual(names, {"5m": "fiveminute", "15m": "fifteen", "1h": "onehour", "4h": "fourhour", "1d": "oneday"})
+        with patch.object(pm, "fetch", side_effect=lambda url, **kw: self.fake(url)), \
+             patch.object(crypto, "want"), patch.object(crypto, "STREAM", None), patch.object(crypto.time, "time", return_value=self.start + 60):
+            crypto.round_info(f"btc-updown-15m-{self.start}")
+        self.assertTrue(all("variant=fifteen&" in u for u in self.urls))
 
     def test_round_trades_subscription_written_without_spaces(self):
         sub = crypto.trades_subscription("btc-updown-5m-1795523100")
@@ -234,3 +249,33 @@ class CryptoRound(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+@unittest.skipUnless(shutil.which("node"), "node is not installed")
+class RoundChartMath(unittest.TestCase):
+    """The arithmetic of static/js/roundchart.js (the canvas itself is checked in a browser)."""
+
+    def run_js(self, expr):
+        path = os.path.join(os.path.dirname(__file__), "..", "static", "js", "roundchart.js")
+        code = f"import('{Path(path).resolve().as_uri()}').then((m) => console.log(JSON.stringify({expr})))"
+        out = subprocess.run(["node", "--input-type=module", "-e", code], capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
+
+    def test_axis_steps_are_round(self):
+        got = self.run_js("[m.priceStep(23, 5), m.priceStep(0.0031, 5), m.priceStep(140, 4), m.stepDecimals(2.5), m.stepDecimals(0.05), m.stepDecimals(10)]")
+        self.assertEqual(got, [5, 0.001, 50, 1, 2, 0])
+
+    def test_prices_written_as_in_russian(self):
+        got = self.run_js("[m.money(60185, 0), m.money(1684.26, 2), m.coinDecimals(60000), m.coinDecimals(2.34), m.coinDecimals(0.18)]")
+        self.assertEqual(got, ["$60\u00a0185", "$1\u00a0684,26", 2, 4, 5])
+
+    def test_live_line_steps_softly_between_prices(self):
+        got = self.run_js("[m.valueAt([[0, 1], [2, 3]], 1), m.valueAt([[0, 1], [2, 3]], 0.5), m.valueAt([[0, 1], [2, 3]], 0.5, false), "
+                          "m.valueAt([[0, 1], [2, 3]], 9), m.valueAt([[5, 1]], 4)]")
+        self.assertEqual(got[0], 2)                  # half way: half the move
+        self.assertLess(got[1], got[2])              # S-shaped: slow out of a price, faster in the middle
+        self.assertEqual(got[3:], [3, None])         # after the newest price: flat; before the first: nothing
+
+    def test_candles_open_where_the_last_closed(self):
+        got = self.run_js("m.candles([[0, 1], [1, 3], [2, 2], [5, 4], [6, 1], [20, 9]], 0, 10, 5)")
+        self.assertEqual(got, [{"t": 0, "o": 1, "h": 3, "l": 1, "c": 2}, {"t": 5, "o": 2, "h": 4, "l": 1, "c": 1}])
