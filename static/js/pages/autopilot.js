@@ -323,13 +323,13 @@ async function candidatesTab(host, d) {
     };
     const stateLabel = { active: '<span class="badge badge-green">В составе</span>', bench: '<span class="badge badge-gold">На скамейке</span>',
       retired: '<span class="badge badge-gray">Выбыл</span>', banned: '<span class="badge badge-red">Исключён</span>' };
-    $("#c-table").innerHTML = rows.length ? `<table class="table"><thead><tr><th>Игрок</th><th>Тип</th>${th("n", "Ставок")}${th("wr", "Выигрыши")}${th("lb", "Надёжно")}${th("roi", "Доходность")}${th("new", "Новых 14 дн")}${th("slip", "Проскальз.")}${th("score", "Балл")}<th>Отбор</th><th></th></tr></thead><tbody>
+    $("#c-table").innerHTML = rows.length ? `<table class="table table-tight"><thead><tr><th>Игрок</th><th>Тип</th>${th("n", "Ставок")}${th("wr", "Выигрыши")}${th("lb", "Надёжно")}${th("roi", "Доходность")}${th("new", "Новых 14 дн")}${th("slip", "Проскальз.")}${th("score", "Балл")}<th>Отбор</th><th></th></tr></thead><tbody>
       ${rows.map((r) => `<tr><td><a class="trader-cell" href="/traders/${r.wallet}">${avatar(r.wallet, r.image, r.name, 26)}<span>${esc(playerName(r))}</span></a></td>
         <td class="small">${esc(r.kind_label)}</td><td class="num">${num(r.n)}</td><td class="num ${tone(r.wr, d.settings.min_wr / 100, 0.55)}">${p100(r.wr)}</td>
         <td class="num">${p100(r.lb)}</td><td class="num ${tone(r.roi, 0.0001, 0)}">${sp100(r.roi)}</td><td class="num">${num(r.new_14d)}</td>
         <td class="num">${r.slip == null ? "—" : cents(r.slip)}</td><td class="num"><b>${Math.round(r.score)}</b></td>
         <td class="small">${r.state ? stateLabel[r.state] : r.passed ? '<span class="badge badge-green">Проходит</span>' : `<span class="muted" title="${esc(r.failed.join(", "))}">${esc(r.failed.slice(0, 2).join(", "))}${r.failed.length > 2 ? "…" : ""}</span>`}</td>
-        <td class="num nowrap"><button class="btn btn-sm" data-detail="${r.wallet}">Подробнее</button>${!r.state ? ` <button class="btn btn-sm" data-act="bench" data-w="${r.wallet}">На скамейку</button>` : ""}</td></tr>`).join("")}</tbody></table>`
+        <td class="num nowrap"><button class="btn btn-sm" data-detail="${r.wallet}" title="Подробнее">${icon("info", 14)}<span class="btn-label">Подробнее</span></button>${!r.state ? ` <button class="btn btn-sm" data-act="bench" data-w="${r.wallet}" title="На скамейку">${icon("plus", 14)}<span class="btn-label">На скамейку</span></button>` : ""}</td></tr>`).join("")}</tbody></table>`
       : `<div class="pad">${emptyBox(res.scout.profiled ? "Никто не проходит отбор" : "Кандидаты ещё проверяются", res.scout.profiled ? "Снимите флажок «Только прошедшие отбор», чтобы увидеть всех, или ослабьте пороги в настройках." : "Фоновый поиск читает рейтинги Polymarket и историю игроков. Первые результаты появятся через несколько минут.")}</div>`;
   } catch (e) {
     $("#c-table").innerHTML = errorBox(e, false);
