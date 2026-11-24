@@ -114,7 +114,9 @@ def future(d, T):
         else:
             r, decided = copy_r(b["entry"], b["exit"], d["slip"], b["state"] == "resolved" or b["exit"] in (0.0, 1.0)), True
         out.append({"r": r, "decided": decided, "entry": b["entry"], "cond": b["condition"], "oidx": b["oidx"],
-                    "days": ((b["end"] or b["opened"]) - b["opened"]) / DAY, "cost": b["entry"] * b["size"]})
+                    "days": ((b["end"] or b["opened"]) - b["opened"]) / DAY, "cost": b["entry"] * b["size"],
+                    "token": b["token"], "opened": b["opened"], "exit": b["mark"] if b["state"] == "open" else b["exit"],
+                    "resolved": b["state"] == "resolved" or b["exit"] in (0.0, 1.0)})
     return out
 
 
@@ -316,7 +318,15 @@ LOGICS = {
 
 
 def main():
-    global PRE
+    now = prepare()
+    result = {"now": now, "universe": UNIVERSE, "wallets": len(PRE), "windows_days_before_now": WINDOWS, "logics": {}}
+    run_logics(result)
+
+
+def prepare(universe=None):
+    """Per-wallet facts for every window into PRE (4 processes); returns the audit's `now`."""
+    global PRE, UNIVERSE
+    UNIVERSE = universe or UNIVERSE
     store.init(DB)  # also moves bets of an older database into packed records
     db = store.connect(DB)
     now = float(db.execute("SELECT v FROM audit_meta WHERE k='now'").fetchone()[0])
@@ -343,7 +353,10 @@ def main():
     for v in PRE.values():  # logics index per-window facts directly
         for days, x in v["per"].items():
             v[days] = x
-    result = {"now": now, "universe": UNIVERSE, "wallets": len(PRE), "windows_days_before_now": WINDOWS, "logics": {}}
+    return now
+
+
+def run_logics(result):
     for name, fn in LOGICS.items():
         per, pooled = [], []
         for days in WINDOWS:
