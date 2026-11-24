@@ -1,12 +1,11 @@
-// Live event charts, as on polymarket.com: a crypto "Up or Down" round (the coin price against the round's target),
-// a match (one line per team with its name and chance at the end of the line) and a market with several outcomes.
-// Prices arrive over /api/live (server-sent events) and numbers change by rolling digits (roll.js).
+// Live parts of an event page, as on polymarket.com: the crypto "Up or Down" round (the coin price against the
+// round's target) and the one connection that brings prices (/api/live, server-sent events). Probability lines are
+// drawn by probchart.js; numbers change by rolling digits (roll.js).
 import { api, esc } from "./core.js";
 import { fitHeight } from "./chart.js";
 import { roll, rollHtml } from "./roll.js";
 
 const GRID = "rgba(148,163,184,.08)", TEXT = "#8696b0";
-export const TEAM_COLORS = ["#2dd4bf", "#f97316"];
 
 // ------------------------------------------------------------------ one live connection per page
 let feed = null;
@@ -19,6 +18,10 @@ export function stopLive() {
   timers.clear();
   for (const c of charts) c.remove();
   charts.clear();
+}
+/** Something with remove() (a chart, a probChart) that goes away with the page. */
+export function keep(c) {
+  charts.add(c);
 }
 export function every(ms, fn) {
   const t = setInterval(fn, ms);
@@ -56,99 +59,6 @@ function base(el, opts = {}) {
   });
   charts.add(chart);
   return chart;
-}
-
-// ------------------------------------------------------------------ probability lines (match, several outcomes)
-const pct = (p) => Math.round(p * 100) + "%";
-/**
- * lines: [{name, color, points: [[t, p 0..1]], visible}]; returns {add(i, p), setVisible(i, on)}.
- * Live points join the last bucket of the history (its typical spacing), so the time axis keeps its scale.
- */
-export function probChart(host, lines, { height = 320, intraday = true, gapRight = 0.3, tags = true } = {}) {
-  const L = window.LightweightCharts;
-  host.innerHTML = `<div class="lv-plot" style="height:${fitHeight(height)}px"><div class="lv-tags"></div></div>`;
-  const plot = host.firstElementChild, tagsBox = plot.firstElementChild;
-  if (!L || !lines.some((l) => l.points.length)) {
-    plot.innerHTML = '<div class="chart-empty">Нет истории цен за выбранный период</div>';
-    return { add() {}, setVisible() {} };
-  }
-  const longest = Math.max(...lines.map((l) => l.points.length));
-  const chart = base(plot, {
-    localization: { locale: "ru-RU", priceFormatter: (v) => Math.round(v * 100) + "%" },
-    timeScale: { borderVisible: false, timeVisible: intraday, secondsVisible: false, rightOffset: 4 },
-  });
-  const items = lines.map((l) => {
-    // strictly increasing times: Polymarket's history may repeat the last moment, which the chart library rejects
-    const pts = [...new Map(l.points.filter((p) => p[1] != null).map((p) => [p[0], p])).values()].sort((a, b) => a[0] - b[0]);
-    const s = chart.addSeries(L.LineSeries, { color: l.color, lineWidth: 2.5, priceLineVisible: false, lastValueVisible: false,
-      // the pulsing "now" dot; an empty line has no last value to pulse (the chart library fails on it every frame)
-      lastPriceAnimation: pts.length && l.visible !== false ? L.LastPriceAnimationMode.Continuous : L.LastPriceAnimationMode.Disabled,
-      crosshairMarkerRadius: 4, visible: l.visible !== false });
-    s.setData(pts.map(([time, value]) => ({ time, value })));
-    const gaps = pts.slice(1).map((p, i) => p[0] - pts[i][0]).sort((a, b) => a - b);
-    return { s, l, last: pts[pts.length - 1] || null, step: Math.max(1, gaps[Math.floor(gaps.length / 2)] || 60), on: l.visible !== false };
-  });
-  // room on the right for the names and percentages next to the "now" dots (fitContent would drop it)
-  // the whole history across the width, plus room on the right for the names and percentages next to the "now" dots
-  const slots = new Set(items.flatMap((it) => it.l.points.map((p) => p[0]))).size;   // the time axis holds every line's moments
-  const fit = () => {
-    const gap = Math.round(slots * gapRight) + 4, w = plot.clientWidth - chart.priceScale("right").width();
-    if (w > 0) chart.timeScale().applyOptions({ minBarSpacing: 0.05, barSpacing: Math.max(0.05, w / (slots + gap)), rightOffset: gap });
-    chart.timeScale().scrollToRealTime();
-  };
-  fit();
-  new ResizeObserver(() => requestAnimationFrame(fit)).observe(plot);
-  const place = () => {
-    if (!tags) return;
-    const placed = items.filter((it) => it.on && it.last).map((it) => ({ it, y: it.s.priceToCoordinate(it.last[1]), x: chart.timeScale().timeToCoordinate(it.last[0]) }))
-      .filter((p) => p.y != null && p.x != null).sort((a, b) => a.y - b.y);
-    for (let i = 1; i < placed.length; i++) if (placed[i].y - placed[i - 1].y < 46) placed[i].y = placed[i - 1].y + 46;
-    // pushed below the chart (several outcomes near 0%): move the stack back up, keeping the spacing
-    const bottom = plot.clientHeight - 56;
-    for (let i = placed.length - 1; i >= 0; i--) {
-      const limit = i === placed.length - 1 ? bottom : placed[i + 1].y - 46;
-      if (placed[i].y > limit) placed[i].y = limit;
-    }
-    const seen = new Set();
-    for (const { it, y, x } of placed) {
-      let tag = tagsBox.querySelector(`[data-n="${CSS.escape(it.l.name)}"]`);
-      if (!tag) {
-        tag = document.createElement("div");
-        tag.className = "lv-tag";
-        tag.dataset.n = it.l.name;
-        tag.innerHTML = `<small>${esc(it.l.name)}</small><b>${rollHtml(pct(it.last[1]))}</b>`;
-        tagsBox.appendChild(tag);
-      } else roll(tag.querySelector("b"), pct(it.last[1]));
-      tag.style.color = it.l.color;
-      tag.style.top = y + "px";
-      // right of the "now" dot when there is room before the price axis, otherwise left of it
-      const room = plot.clientWidth - chart.priceScale("right").width() - 6;
-      tag.style.left = (x + 10 + tag.offsetWidth <= room ? x + 10 : Math.max(0, x - 10 - tag.offsetWidth)) + "px";
-      seen.add(tag);
-    }
-    for (const t of tagsBox.children) if (!seen.has(t)) t.remove();
-  };
-  chart.timeScale().subscribeVisibleTimeRangeChange(() => requestAnimationFrame(place));
-  new ResizeObserver(() => requestAnimationFrame(place)).observe(plot);
-  requestAnimationFrame(place);
-  return {
-    add(i, p) {
-      const it = items[i];
-      if (!it || p == null) return;
-      const now = Math.floor(Date.now() / 1000);
-      const t = !it.last ? now : now - it.last[0] < it.step ? it.last[0] : it.last[0] + Math.max(it.step, Math.floor((now - it.last[0]) / it.step) * it.step);
-      it.s.update({ time: t, value: p });
-      if (!it.last) it.s.applyOptions({ lastPriceAnimation: L.LastPriceAnimationMode.Continuous });
-      it.last = [t, p];
-      place();
-    },
-    setVisible(i, on) {
-      if (!items[i]) return;
-      items[i].on = on;
-      items[i].s.applyOptions({ visible: on, lastPriceAnimation: on && items[i].last ? L.LastPriceAnimationMode.Continuous : L.LastPriceAnimationMode.Disabled });
-      place();
-    },
-  };
 }
 
 // ------------------------------------------------------------------ crypto round

@@ -4,7 +4,8 @@
 import { $, $$, ago, api, avatar, cents, compact, date, delta, errorBox, esc, go, icon, loadSession, pct, route, short,
   signedUsd, starBtn, state, thumb, toast, unwrap, usd, withQuery, yesNo, shares as fmtShares } from "../core.js";
 import { PALETTE } from "../chart.js";
-import { cryptoRound, liveFeed, probChart, stopLive } from "../livechart.js";
+import { cryptoRound, liveFeed, stopLive } from "../livechart.js";
+import { probChart } from "../probchart.js";
 import { roll, rollHtml } from "../roll.js";
 import { eventCandidates } from "./home.js";
 import { tradesTable } from "./trader.js";
@@ -132,12 +133,6 @@ async function loadLines(e, list, win, range = "", visible = () => true) {
   }));
 }
 
-// hours on the time axis when the lines span less than three days (dates alone would repeat: "23 23 24 24")
-function intraday(lines) {
-  const spans = lines.map((l) => (l.points.length > 1 ? l.points[l.points.length - 1][0] - l.points[0][0] : 0));
-  return Math.max(0, ...spans) < 3 * 86400;
-}
-
 function changeOf(e, line) {
   const c = e.contracts.find((x) => x.condition === line.condition);
   if (c?.change24h == null) return "";
@@ -163,7 +158,11 @@ async function linesTab(host, e, cands, v) {
   outcomes($("#outcomes"), e, cands);
   const lines = await loadLines(e, v.lines, win);
   if (!$("#plot")) return;
-  const pc = probChart($("#plot"), lines, { height: 300, intraday: intraday(lines), tags: !single });
+  // one line: the header shows the chance at the moment under the pointer, and the current one again after
+  const headNum = single ? $(".lv-single [data-p]") : null;
+  const current = () => e.contracts.find((c) => c.condition === first.condition)?.outcomes[first.index]?.price;
+  const pc = probChart($("#plot"), lines, { height: 300, tags: !single,
+    onHover: headNum ? (vals) => roll(headNum, pct(vals ? vals[0] : current())) : null });
   chart = { price: (tok, p) => lines.forEach((l, i) => l.token === tok && pc.add(i, p)) };
 }
 
@@ -206,7 +205,7 @@ async function drawChart(e, top, win, start, end, hidden, showAll) {
   const range = start ? `&start=${toTs(start)}&end=${toTs(end, true) || Math.floor(Date.now() / 1000)}` : "";
   const series = await loadLines(e, top, win, range, (i) => !hidden.has(i) && (i < 4 || showAll));
   if (!plot.isConnected) return;
-  const pc = probChart(plot, series, { height: 320, intraday: intraday(series) });
+  const pc = probChart(plot, series, { height: 320 });
   // a chosen past range does not grow with live prices
   chart = { price: (tok, p) => !start && series.forEach((l, i) => l.token === tok && pc.add(i, p)) };
   for (const b of $$("#legend .lg")) {
