@@ -614,10 +614,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def live(self, query):
         """Server-sent live prices for an open event page (no sign-in needed): outcome prices from the order book
-        stream ("price") and, on a crypto round, the coin price from Chainlink ("crypto")."""
+        stream ("price") and, on a crypto round, the coin price from Chainlink ("crypto") and the round's buys
+        ("trade": up or down, dollars)."""
         toks = list(dict.fromkeys(t for t in q1(query, "tokens").split(",") if pm.TOKEN.fullmatch(t)))[:40]
         sym = q1(query, "crypto").lower()
         sym = sym if sym in crypto.SYMBOLS else ""
+        rnd = q1(query, "round")
+        rnd = rnd if crypto.parse(rnd) and crypto.parse(rnd)["symbol"] == sym else ""   # the round's trades ("+ $5")
         if not toks and not sym:
             return self.json(400, {"error": "Нужны исходы или монета"})
         with _live_lock:
@@ -631,10 +634,11 @@ class Handler(BaseHTTPRequestHandler):
             books.STREAM.listeners.append(_on_books)
         books.watch(toks, ttl=120)
         if sym:
-            crypto.want()
+            crypto.want(rnd or None)
         q = bus.subscribe(maxsize=512)
         self.close_connection = True
         sent = {}
+        trade_second = [0, 0]
 
         def push(kind, data):
             self.wfile.write(f"event: {kind}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n".encode())
@@ -665,6 +669,15 @@ class Handler(BaseHTTPRequestHandler):
                     push("price", data)
                 elif kind == "crypto" and data.get("s") == sym:
                     push("crypto", data)
+                elif kind == "trade" and rnd and data.get("e") == rnd:
+                    # at a round's start there are ten buys a second; the page shows a few floating up, so at most
+                    # TRADES_PER_SECOND of them are sent
+                    now_s = int(time.monotonic())
+                    if now_s != trade_second[0]:
+                        trade_second[:] = [now_s, 0]
+                    if trade_second[1] < TRADES_PER_SECOND:
+                        trade_second[1] += 1
+                        push("trade", data)
                 now = time.monotonic()
                 if now - last_tick >= 2:          # catches anything the throttle held back, and keeps the line alive
                     refresh()
@@ -673,7 +686,7 @@ class Handler(BaseHTTPRequestHandler):
                 if now - last_watch >= 30:
                     books.watch(toks, ttl=120)
                     if sym:
-                        crypto.want()
+                        crypto.want(rnd or None)
                     last_watch = now
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, OSError):
@@ -718,7 +731,8 @@ class Handler(BaseHTTPRequestHandler):
 
 USER_EVENTS = {"notify", "autopilot", "copy", "fill", "account", "prices"}
 LIVE_TOKENS = {}             # outcome token -> open event pages showing it live
-LIVE_MAX = 300               # open live connections at most (each holds a server thread)
+LIVE_MAX = 300
+TRADES_PER_SECOND = 5     # round buys sent to one page each second ("+ $5" floating up)               # open live connections at most (each holds a server thread)
 _live_lock = threading.Lock()
 _live_count = [0]
 _book_sent = {}

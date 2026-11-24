@@ -7,7 +7,7 @@
 ## Запуск и проверка
 - Только Python 3.11+, без сторонних пакетов: `python app.py` → http://127.0.0.1:8787 (`--db`, `--port`, `--no-worker`).
 - Docker: `docker compose up -d --build` (том `kontur-data`).
-- Тесты: `PYTHONPATH=.:tests python -m unittest tests.test_trading tests.test_autopilot tests.test_data tests.test_speed tests.test_views` (140 тестов, без сети).
+- Тесты: `PYTHONPATH=.:tests python -m unittest tests.test_trading tests.test_autopilot tests.test_data tests.test_speed tests.test_views` (143 теста, без сети).
 - Замер скорости: `PYTHONPATH=. python research/bench_perf.py` (сеть, сервер, база, поток сделок).
 - Переменные: `KONTUR_DB`, `HOST`, `PORT`, `KONTUR_SCOUT_THREADS` (6), `KONTUR_SCOUT_GAP` (0.06 с), `KONTUR_STATS_THREADS` (4), `KONTUR_STATS_GAP` (0.06 с).
 
@@ -19,7 +19,7 @@
 | `kontur/ws.py` | WebSocket-клиент на stdlib (TLS, прокси, буфер кадров при таймаутах, сжатие permessage-deflate) |
 | `kontur/stream.py` | Живой поток сделок RTDS → копирование за ~1 с; исполнители по лидерам (порядок сделок сохраняется) |
 | `kontur/books.py` | Живые стаканы (CLOB WS) — только для лимитных заявок и открытого тикета; `books.get` — из памяти, предзагруженный или по сети; позиции переоцениваются через `pm.midpoints` |
-| `kontur/crypto.py` | Криптораунды «вверх или вниз»: живые цены Chainlink (RTDS `crypto_prices_chainlink`, по запросу), данные раунда (цель, история: идущий — последние минуты, завершённый — целиком; прошлые раунды; `live` — идущий сейчас) с polymarket.com/api; `/api/crypto-round`, живой канал страницы события `/api/live` (SSE: `price` из стаканов — `books.shown`, `crypto`) |
+| `kontur/crypto.py` | Криптораунды «вверх или вниз»: живые цены Chainlink (RTDS `crypto_prices_chainlink`, по запросу), данные раунда (цель, история: идущий — последние минуты, завершённый — целиком; прошлые раунды; `live` — идущий сейчас) с polymarket.com/api; `/api/crypto-round`, живой канал страницы события `/api/live` (SSE: `price` из стаканов — `books.shown`, `crypto`, `trade` — покупки раунда из RTDS `activity/trades` с фильтром `event_slug` без пробелов, не больше 5 в секунду) |
 | `kontur/packs.py` | Ставки игроков: одна сжатая запись (zlib, по столбцам) на кошелёк в `scout_packs`; перенос старой `scout_bets` при запуске |
 | `kontur/bus.py` | Шина событий внутри процесса (для SSE): `account` (движение денег), `prices` (счета с изменившейся ценой), `copy`, `fill`, `autopilot`, `notify`; страница перерисовывается без мигания — `quietDraw` в `static/js/app.js`, триггеры и таймеры — `layout.js` |
 | `kontur/views.py` | Какой график у страницы события, как решает Polymarket: `round` (криптораунд), `asset` (цена монеты), `single` (одна линия), `match` (цвета команд, ничья серая), `multi` (negRisk, `seriesColor` → палитра), `none` (независимые вопросы — только список); проверка на 41 событии исследования — `tests/data/events_24nov2026.json.gz` |

@@ -5,6 +5,9 @@ second. It is opened only while someone looks at a round page (`want`) and close
 the last two hours stay in memory, so a page opened later gets the history at once. Prices reach open pages over
 /api/live (bus event "crypto").
 
+The same connection carries the trades of the rounds being looked at (RTDS activity/trades, filtered by the round's
+event slug as polymarket.com does), so a round page shows the buys floating up ("+ $5", bus event "trade").
+
 Round data (target price, history, past rounds) comes from the same endpoints polymarket.com uses for its chart.
 """
 
@@ -33,6 +36,8 @@ KEEP = 2 * 3600            # seconds of live prices kept per coin
 IDLE_CLOSE = 600           # close the stream this long after the last viewer
 STALE_AFTER = 20
 MAX_POINTS = 900           # a round's history is thinned to this many points (a day has 86 400 seconds)
+ROUND_TRADES_FOR = 90      # seconds a round's trades stay subscribed after the last viewer asked (pages re-ask every 30)
+MIN_TRADE = 1.0            # dollars: smaller buys are not shown
 LOG = logging.getLogger("kontur.crypto")
 
 
@@ -56,12 +61,15 @@ class PriceStream(threading.Thread):
         self.lock = threading.Lock()
         self.prices = {s: deque(maxlen=KEEP + 60) for s in SYMBOLS}   # (second, price)
         self.wanted_until = 0.0
+        self.rounds = {}              # round slug -> monotonic time its trades are wanted until
         self.wake = threading.Event()
         self.connected = False
-        self.stats = {"connects": 0, "messages": 0, "errors": 0, "error": ""}
+        self.stats = {"connects": 0, "messages": 0, "trades": 0, "errors": 0, "error": ""}
 
-    def want(self):
+    def want(self, round_slug=None):
         self.wanted_until = time.monotonic() + IDLE_CLOSE
+        if round_slug and parse(round_slug):
+            self.rounds[round_slug] = time.monotonic() + ROUND_TRADES_FOR
         self.wake.set()
 
     def series(self, symbol, start, end):
@@ -83,14 +91,46 @@ class PriceStream(threading.Thread):
                 return
             q.append((t, value))
 
+    def _follow_rounds(self, ws, subscribed):
+        """Subscribe to the trades of newly watched rounds and drop the ones nobody looks at any more. Only this
+        thread writes to the socket (it also reads from it)."""
+        now = time.monotonic()
+        for slug in [s for s, until in list(self.rounds.items()) if until <= now]:
+            self.rounds.pop(slug, None)
+            if slug in subscribed:
+                subscribed.discard(slug)
+                ws.send(json.dumps({"action": "unsubscribe", "subscriptions": [trades_subscription(slug)]}))
+        new = [s for s in list(self.rounds) if s not in subscribed]
+        if new:
+            ws.send(json.dumps({"action": "subscribe", "subscriptions": [trades_subscription(s) for s in new]}))
+            subscribed.update(new)
+
+    def _trade(self, p):
+        """A buy in a watched round -> bus "trade" {e: slug, o: up|down, u: dollars, t: seconds}."""
+        slug = str(p.get("eventSlug") or "")
+        if slug not in self.rounds or str(p.get("side") or "").upper() != "BUY":
+            return
+        size, price = pm.num(p.get("size")), pm.num(p.get("price"))
+        outcome = str(p.get("outcome") or "").lower()
+        if not size or price is None or outcome not in ("up", "down"):
+            return
+        usd = size * price
+        if usd < MIN_TRADE:
+            return                      # the other half of a matched pair ($0.05 at 0.1¢) says nothing
+        ts = pm.num(p.get("timestamp")) or time.time()
+        self.stats["trades"] += 1
+        bus.publish("trade", {"e": slug, "o": outcome, "u": round(usd, 2), "t": int(ts / 1000 if ts > 1e12 else ts)})
+
     def _session(self):
         ws = WebSocket(URL, timeout=15)
         ws.settimeout(2)
         ws.send(json.dumps({"action": "subscribe", "subscriptions": [{"topic": "crypto_prices_chainlink", "type": "*"}]}))
         self.connected, last_rx, last_ping = True, time.monotonic(), time.monotonic()
         self.stats["connects"] += 1
+        subscribed = set()
         try:
             while time.monotonic() < self.wanted_until:
+                self._follow_rounds(ws, subscribed)
                 if time.monotonic() - last_ping >= 5:
                     ws.send("PING")
                     last_ping = time.monotonic()
@@ -104,10 +144,16 @@ class PriceStream(threading.Thread):
                 if not msg or msg[0] != "{":
                     continue
                 try:
-                    p = json.loads(msg).get("payload") or {}
+                    d = json.loads(msg)
                 except ValueError:
                     continue
+                if not isinstance(d, dict):
+                    continue
+                p = d.get("payload") or {}
                 self.stats["messages"] += 1
+                if d.get("topic") == "activity":
+                    self._trade(p)
+                    continue
                 if isinstance(p.get("data"), list):          # the snapshot sent on subscribe: the last minute
                     sym = str(p.get("symbol") or "").split("/")[0]
                     for x in p["data"]:
@@ -147,14 +193,19 @@ STREAM = None
 _start_lock = threading.Lock()
 
 
-def want():
-    """Someone looks at a round: keep (or start) the live prices."""
+def trades_subscription(slug):
+    # the filter is a JSON string and RTDS only understands it written without spaces (as polymarket.com sends it)
+    return {"topic": "activity", "type": "trades", "filters": json.dumps({"event_slug": slug}, separators=(",", ":"))}
+
+
+def want(round_slug=None):
+    """Someone looks at a round: keep (or start) the live prices, and the round's trades when it is given."""
     global STREAM
     with _start_lock:
         if STREAM is None:
             STREAM = PriceStream()
             STREAM.start()
-    STREAM.want()
+    STREAM.want(round_slug)
 
 
 def status():

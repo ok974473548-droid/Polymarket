@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
-from kontur import crypto, views
+from kontur import bus, crypto, views
 from kontur import db as store
 from kontur import polymarket as pm
 
@@ -185,6 +185,47 @@ class CryptoRound(unittest.TestCase):
         self.assertFalse(r["finished"])
         self.assertIn("historySeed=true", next(u for u in self.urls if "/crypto/price-history" in u))
         self.assertEqual(r["live"], f"btc-updown-5m-{self.start}")
+
+    def test_round_trades_subscription_written_without_spaces(self):
+        sub = crypto.trades_subscription("btc-updown-5m-1795523100")
+        self.assertEqual(sub, {"topic": "activity", "type": "trades", "filters": '{"event_slug":"btc-updown-5m-1795523100"}'})
+
+    def test_round_buys_become_floating_trades(self):
+        stream = crypto.PriceStream()
+        slug = f"btc-updown-5m-{self.start}"
+        stream.rounds[slug] = time.monotonic() + 60
+        q = bus.subscribe()
+        try:
+            base = {"eventSlug": slug, "timestamp": 1795540082}
+            stream._trade({**base, "side": "BUY", "outcome": "Up", "size": 45, "price": 0.999})
+            stream._trade({**base, "side": "BUY", "outcome": "Down", "size": 45, "price": 0.001})   # the other half: $0.05
+            stream._trade({**base, "side": "SELL", "outcome": "Down", "size": 30, "price": 0.5})    # sales are not shown
+            stream._trade({**base, "eventSlug": "eth-updown-5m-1", "side": "BUY", "outcome": "Up", "size": 9, "price": 0.5})
+            got = []
+            while not q.empty():
+                kind, data, _ = q.get_nowait()
+                if kind == "trade":
+                    got.append(data)
+        finally:
+            bus.unsubscribe(q)
+        self.assertEqual(got, [{"e": slug, "o": "up", "u": 44.95, "t": 1795540082}])
+
+    def test_watched_rounds_subscribed_and_dropped(self):
+        stream = crypto.PriceStream()
+        sent = []
+        ws = type("WS", (), {"send": lambda self, msg: sent.append(json.loads(msg))})()
+        subscribed = set()
+        stream.want("btc-updown-5m-1795523100")
+        stream._follow_rounds(ws, subscribed)
+        stream._follow_rounds(ws, subscribed)                  # nothing new: nothing sent again
+        self.assertEqual([m["action"] for m in sent], ["subscribe"])
+        self.assertEqual(subscribed, {"btc-updown-5m-1795523100"})
+        stream.rounds["btc-updown-5m-1795523100"] = time.monotonic() - 1   # nobody looks any more
+        stream._follow_rounds(ws, subscribed)
+        self.assertEqual(sent[-1]["action"], "unsubscribe")
+        self.assertEqual((subscribed, stream.rounds), (set(), {}))
+        stream.want("not-a-round")                               # only round slugs are followed
+        self.assertEqual(stream.rounds, {})
 
     def test_the_same_coins_as_the_chart_choice(self):
         self.assertIs(crypto.SYMBOLS, views.ROUND_SYMBOLS)
