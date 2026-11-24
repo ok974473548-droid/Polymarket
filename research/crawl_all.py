@@ -6,11 +6,12 @@ import threading
 import time
 
 from kontur import db as store
-from kontur import scout
+from kontur import packs, scout
 
 DB = sys.argv[1]
 scout.GAP = 0.06
 NOW = time.time()
+store.init(DB)  # also moves bets of an older database into packed records
 db0 = store.connect(DB)
 db0.execute("CREATE TABLE IF NOT EXISTS audit_meta(k TEXT PRIMARY KEY, v TEXT)")
 db0.execute("INSERT OR IGNORE INTO audit_meta VALUES('now', ?)", (str(NOW),))
@@ -44,11 +45,7 @@ def work():
                 err = str(exc)[:200]
                 time.sleep(3)
         with store.tx(db):
-            db.execute("DELETE FROM scout_bets WHERE wallet=?", (w,))
-            db.executemany("""INSERT OR REPLACE INTO scout_bets(wallet, token, condition, oidx, outcome, title, event_slug, entry, size,
-                              opened, closed, exit, state, mark, end_ts, short) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                           [(w, b["token"], b["condition"], b["oidx"], b["outcome"], b["title"], b["event_slug"], b["entry"],
-                             b["size"], b["opened"], b["closed"], b["exit"], b["state"], b["mark"], b["end"], b["short"]) for b in bets])
+            packs.save(db, w, bets)
             db.execute("INSERT OR REPLACE INTO audit_done VALUES(?,?,?,?)", (w, len(bets), int(partial), err))
         with lock:
             cnt[0] += 1

@@ -7,6 +7,8 @@ system proxy settings (HTTPS_PROXY / NO_PROXY or the OS settings, as urllib read
 
 import base64
 import http.client
+import json
+import re
 import socket
 import ssl
 import threading
@@ -21,6 +23,21 @@ _ctx = ssl.create_default_context()
 _lock = threading.Lock()
 _idle = {}                  # host -> [(connection, last_used)]
 STATS = {"requests": 0, "reused": 0, "opened": 0, "bytes": 0, "bytes_plain": 0}
+ROUTES = {}                 # "host/route" -> [requests, bytes on the wire, bytes after decompression]
+_ID = re.compile(r"/(0x[0-9a-fA-F]{8,}|[0-9]{6,}|[^/]*-[^/]*-[^/]*|[^/]{40,})")
+
+
+def top_routes(n=12):
+    """Heaviest endpoints by bytes on the wire: [route, requests, wire bytes, plain bytes]."""
+    with _lock:
+        items = sorted(ROUTES.items(), key=lambda kv: -kv[1][1])[:n]
+    return [[k, *v] for k, v in items]
+
+
+def route_of(host, path):
+    """Short name of an endpoint for traffic statistics: ids and slugs are collapsed."""
+    short = host.split(".")[0].replace("-api", "")
+    return short + _ID.sub("/*", path.split("?", 1)[0])
 
 
 class NetError(OSError):
@@ -110,6 +127,17 @@ def get(url, *, headers=None, timeout=15, limit=16 * 1024 * 1024):
 
     A reused connection that the server has already closed is retried once on a fresh one.
     """
+    return request("GET", url, headers=headers, timeout=timeout, limit=limit)
+
+
+def post_json(url, payload, *, headers=None, timeout=15, limit=16 * 1024 * 1024):
+    """POST a JSON body (read-only queries such as batch prices) over the same pooled connections."""
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    return request("POST", url, body=body, headers={"Content-Type": "application/json", **(headers or {})},
+                   timeout=timeout, limit=limit)
+
+
+def request(method, url, *, body=None, headers=None, timeout=15, limit=16 * 1024 * 1024):
     u = urlsplit(url)
     if u.scheme != "https":
         raise ValueError("Поддерживается только https")
@@ -125,7 +153,7 @@ def get(url, *, headers=None, timeout=15, limit=16 * 1024 * 1024):
                 conn = _open(host, port, timeout)
             elif conn.sock is not None:
                 conn.sock.settimeout(timeout)
-            conn.request("GET", path, headers=hdrs)
+            conn.request(method, path, body=body, headers=hdrs)
             resp = conn.getresponse()
             declared = resp.getheader("Content-Length")
             if declared and declared.isdigit() and int(declared) > limit:
@@ -153,5 +181,9 @@ def get(url, *, headers=None, timeout=15, limit=16 * 1024 * 1024):
             STATS["reused"] += int(reused)
             STATS["bytes"] += raw_len
             STATS["bytes_plain"] += len(body)
+            r = ROUTES.setdefault(route_of(host, u.path or "/"), [0, 0, 0])
+            r[0] += 1
+            r[1] += raw_len
+            r[2] += len(body)
         return resp.status, resp.headers, body
     raise NetError("Соединение оборвалось")

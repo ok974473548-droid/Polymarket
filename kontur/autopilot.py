@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from . import copytrade
 from . import db as store
 from . import notify
+from . import packs
 from . import polymarket as pm
 from . import scout
 from . import trading
@@ -392,7 +393,7 @@ def _active_problem(db, uid, player, s, share, now):
         if share > 0 and st["pnl"] <= -share * s["max_drawdown_pct"] / 100:
             return f"Убыток копий ${-st['pnl']:,.2f} — {(-st['pnl'] / share) * 100:.0f}% доли игрока", st
     cand = scout.candidate(db, player["wallet"])
-    last_bet = db.execute("SELECT MAX(opened) FROM scout_bets WHERE wallet=?", (player["wallet"],)).fetchone()[0]
+    last_bet = packs.latest(db, player["wallet"])
     last = max(x for x in (st["last_copy"], last_bet, player["active_since"]) if x)
     if now - last >= s["inactive_days"] * DAY:
         return f"Нет новых ставок {int((now - last) / DAY)} дн.", st
@@ -702,8 +703,8 @@ def player(db, uid, wallet):
     if cand and cand["metrics"]:
         out["metrics"] = cand["metrics"]
         out["verdict"] = scout.judge(cand["metrics"], cand["kind"], s)
-    recent = store.rows(db.execute("""SELECT title, outcome, event_slug, entry, exit, state, mark, opened, closed, size FROM scout_bets
-                                      WHERE wallet=? ORDER BY opened DESC LIMIT 25""", (wallet,)))
+    keys = ("title", "outcome", "event_slug", "entry", "exit", "state", "mark", "opened", "closed", "size")
+    recent = [{k: b[k] for k in keys} for b in sorted(scout.stored_bets(db, wallet), key=lambda b: -b["opened"])[:25]]
     out["recent_bets"] = recent
     out["copies"] = _copies(db, uid, wallet)[-50:][::-1] if p else []
     return out

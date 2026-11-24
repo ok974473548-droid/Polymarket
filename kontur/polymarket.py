@@ -349,24 +349,81 @@ def tags(db, *, offset=0, limit=50):
     return cached(db, url, 3600, load)
 
 
-def event_tags(db, event_slug):
-    """Tag slugs of an event, cached for a week (used to group a trader's positions by category)."""
-    row = db.execute("SELECT tags, at FROM event_tags WHERE event_slug=?", (event_slug,)).fetchone()
-    if row and time.time() - row["at"] < 7 * 86400:
-        return json.loads(row["tags"])
-    try:
-        raw = fetch(GAMMA + "/events/slug/" + slug(event_slug), gap=0.15)
-        found = [text(t.get("slug"), 120) for t in raw.get("tags") or [] if isinstance(t, dict)]
-    except (UpstreamError, LookupError, ValueError):
-        found = json.loads(row["tags"]) if row else []
-        if row:
-            return found
+TAGS_TTL = 7 * 86400
+
+
+def _store_tags(db, event_slug, found):
     db.execute("INSERT INTO event_tags VALUES(?,?,?) ON CONFLICT(event_slug) DO UPDATE SET tags=excluded.tags, at=excluded.at",
                (event_slug, json.dumps(found), time.time()))
-    return found
+
+
+def event_tags(db, event_slug):
+    """Tag slugs of an event, cached for a week (used to group a trader's positions by category)."""
+    return events_tags(db, [event_slug]).get(event_slug, [])
+
+
+def events_tags(db, slugs):
+    """Tag slugs of many events at once: cached ones from the database, the rest 20 per request without
+    their markets (`include_markets=false`: an event without its markets weighs ~5 KB instead of 30+ KB)."""
+    out, missing, stale = {}, [], {}
+    now = time.time()
+    for s in dict.fromkeys(x for x in slugs if x):
+        row = db.execute("SELECT tags, at FROM event_tags WHERE event_slug=?", (s,)).fetchone()
+        if row and now - row["at"] < TAGS_TTL:
+            out[s] = json.loads(row["tags"])
+        else:
+            missing.append(s)
+            if row:
+                stale[s] = json.loads(row["tags"])
+    for i in range(0, len(missing), 20):
+        part = [slug(s) for s in missing[i:i + 20]]
+        try:
+            rows = fetch(GAMMA + "/events?" + urlencode([("slug", s) for s in part] + [("include_markets", "false"), ("limit", 50)]),
+                         gap=0.15)
+        except (UpstreamError, LookupError, ValueError):
+            rows = []
+        got = {r.get("slug"): r for r in rows if isinstance(r, dict)} if isinstance(rows, list) else {}
+        for s in part:
+            if s in got:
+                found = [text(t.get("slug"), 120) for t in got[s].get("tags") or [] if isinstance(t, dict)]
+            else:  # not in the batch answer: the single request decides, exactly as before
+                try:
+                    raw = fetch(GAMMA + "/events/slug/" + s, gap=0.15)
+                    found = [text(t.get("slug"), 120) for t in raw.get("tags") or [] if isinstance(t, dict)]
+                except (UpstreamError, LookupError, ValueError):
+                    if s in stale:
+                        out[s] = stale[s]
+                        continue
+                    found = []
+            _store_tags(db, s, found)
+            out[s] = found
+    return out
 
 
 # ---------------------------------------------------------------- CLOB
+
+def midpoints(tokens):
+    """Mid prices of many outcome tokens in one small request (POST /midpoints, 100 per call): ~45 bytes a token
+    instead of a whole order book. Tokens the CLOB has no mid for are simply absent."""
+    out = {}
+    toks = [token(t) for t in dict.fromkeys(tokens)]
+    for i in range(0, len(toks), 100):
+        try:
+            status, _, body = net.post_json(CLOB + "/midpoints", [{"token_id": t} for t in toks[i:i + 100]], timeout=10)
+        except net.NetError as exc:
+            raise UpstreamError("Источник недоступен: проверьте подключение к интернету") from exc
+        if status != 200:
+            raise UpstreamError(f"Источник ответил HTTP {status}")
+        try:
+            data = json.loads(body)
+        except ValueError as exc:
+            raise UpstreamError("Источник вернул некорректный JSON") from exc
+        for t, v in (data.items() if isinstance(data, dict) else []):
+            p = num(v)
+            if p is not None and 0 <= p <= 1:
+                out[str(t)] = p
+    return out
+
 
 def book(tok):
     """Current order book of one outcome token: asks ascending, bids descending."""
@@ -463,10 +520,11 @@ def _position(r):
 
 
 def positions_page(*, user="", cond="", status="OPEN", sort="CURRENT_VALUE", direction="DESC", limit=100, cursor="",
-                   event_id="", title="", gap=0.0):
+                   event_id="", title="", start=None, gap=0.0):
+    """One page of positions. start: only positions whose last event is at or after this time (epoch seconds)."""
     params = {"user": address(user) if user else "", "condition": condition(cond) if cond else "",
               "status": status, "sort_by": sort, "sort_direction": direction, "limit": limit, "cursor": cursor,
-              "event_id": event_id, "title": title[:100]}
+              "event_id": event_id, "title": title[:100], "start": int(start) if start else None}
     raw = fetch(data_url("positions", params), gap=gap)
     rows = [_position(r) for r in raw.get("data") or [] if isinstance(r, dict)]
     return {"rows": rows, "next": (raw.get("pagination") or {}).get("next_cursor") if (raw.get("pagination") or {}).get("has_more") else None}

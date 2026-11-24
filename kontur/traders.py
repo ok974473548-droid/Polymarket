@@ -6,9 +6,11 @@ each tab (Leaderboard, Sports, Crypto, Politics). Results refresh once a day; Pn
 come straight from the leaderboard every 15 minutes.
 """
 
+import hashlib
 import json
 import os
 import time
+import zlib
 
 from . import db as store
 from . import polymarket as pm
@@ -66,10 +68,10 @@ def ensure_board(db, category, period="all"):
     return name
 
 
-def _all_positions(wallet, status):
+def _all_positions(wallet, status, start=None):
     rows, cursor, pages = [], "", 0
     while pages < POSITION_PAGES[status]:
-        page = pm.positions_page(user=wallet, status=status, sort="TIMESTAMP", limit=1000, cursor=cursor, gap=GAP)
+        page = pm.positions_page(user=wallet, status=status, sort="TIMESTAMP", limit=1000, cursor=cursor, start=start, gap=GAP)
         rows.extend(page["rows"])
         pages += 1
         cursor = page["next"]
@@ -110,18 +112,72 @@ def _series_stats(points):
     return pnl15, eff, streak * sign
 
 
+SYNC_MARGIN = 86400          # re-read a day of closed positions on top: the Data API indexes with a delay
+CLOSED_CAP = POSITION_PAGES["CLOSED"] * 1000   # a full read sees at most this many (the newest) closed positions
+
+
+def _token_hash(tok):
+    return int.from_bytes(hashlib.blake2b(str(tok).encode(), digest_size=8).digest(), "big", signed=True)
+
+
+def _closed_load(db, wallet):
+    row = db.execute("SELECT synced, capped, data FROM wallet_closed WHERE wallet=?", (wallet,)).fetchone()
+    if not row:
+        return None
+    d = json.loads(zlib.decompress(row[2]))
+    return row[0], bool(row[1]), {h: (p, e) for h, p, e in zip(d["h"], d["p"], d["e"])}
+
+
+def _closed_save(db, wallet, synced, capped, closed):
+    items = sorted(closed.items(), key=lambda kv: -(kv[1][1] or 0))
+    blob = zlib.compress(json.dumps({"h": [k for k, _ in items], "p": [v[0] for _, v in items], "e": [v[1] for _, v in items]},
+                                    separators=(",", ":")).encode(), 9)
+    db.execute("""INSERT INTO wallet_closed(wallet, synced, capped, n, data) VALUES(?,?,?,?,?) ON CONFLICT(wallet) DO UPDATE
+                  SET synced=excluded.synced, capped=excluded.capped, n=excluded.n, data=excluded.data""",
+               (wallet, synced, int(capped), len(items), blob))
+
+
+def closed_positions(db, wallet, open_rows, now=None):
+    """Total P&L of every closed position (token hash -> (pnl, last event)), and whether the history was capped.
+
+    The first time all closed positions are read (up to the same page limit as before); later only those whose last
+    event came after the previous sync, minus a day for the Data API's indexing delay. Closed positions do not
+    change, so the statistics are the same as with a full read; a position bought again leaves the closed set.
+    """
+    now = now or time.time()
+    prev = _closed_load(db, wallet)
+    if prev:
+        synced, capped, closed = prev
+        rows, more = _all_positions(wallet, "CLOSED", start=int(synced - SYNC_MARGIN))
+        if more:  # more changed than one full read covers: read everything again
+            prev = None
+    if not prev:
+        rows, capped = _all_positions(wallet, "CLOSED")
+        closed = {}
+    for r in rows:
+        closed[_token_hash(r.get("token_id"))] = (r["total_pnl"], pm.num(r.get("last_event_at")))
+    for r in open_rows:
+        closed.pop(_token_hash(r.get("token_id")), None)
+    cap = CLOSED_CAP
+    if len(closed) > cap:  # a full read keeps only the newest `cap` closed positions
+        closed = dict(sorted(closed.items(), key=lambda kv: -(kv[1][1] or 0))[:cap])
+        capped = True
+    _closed_save(db, wallet, now, capped, closed)
+    return closed, capped
+
+
 def compute_wallet(db, wallet):
     """Full statistics of one wallet. Large wallets are capped and marked partial."""
     wallet = pm.address(wallet)
     networth = pm.value(db, wallet, gap=GAP)["data"]
     stats = pm.user_stats(db, wallet, gap=GAP)["data"] or {}
     open_rows, open_capped = _all_positions(wallet, "OPEN")
-    closed_rows, closed_capped = _all_positions(wallet, "CLOSED")
-    every = open_rows + closed_rows
-    gains = sum(r["total_pnl"] for r in every if (r["total_pnl"] or 0) > 0)
-    losses = sum(r["total_pnl"] for r in every if (r["total_pnl"] or 0) < 0)
-    wins = sum(1 for r in every if (r["total_pnl"] or 0) > 0)
-    total = len(every)
+    closed, closed_capped = closed_positions(db, wallet, open_rows)
+    pnls = [r["total_pnl"] for r in open_rows] + [p for p, _ in closed.values()]
+    gains = sum(p for p in pnls if (p or 0) > 0)
+    losses = sum(p for p in pnls if (p or 0) < 0)
+    wins = sum(1 for p in pnls if (p or 0) > 0)
+    total = len(pnls)
     points = pm.user_pnl(db, wallet, interval="1m", fidelity="1d", gap=GAP)["data"] or []
     pnl15, eff, streak = _series_stats(points)
     base = networth if networth and networth > 1000 else None
@@ -280,7 +336,7 @@ def compute_categories(db, wallet, limit_events=150):
     for r in rows:
         if r.get("event_slug") and r["event_slug"] not in slugs:
             slugs.append(r["event_slug"])
-    tagmap = {s: pm.event_tags(db, s) for s in slugs[:limit_events]}
+    tagmap = pm.events_tags(db, slugs[:limit_events])
     groups = {}
     for r in rows:
         for cat in set(tagmap.get(r.get("event_slug"), [])) & set(pm.LEADER_CATEGORIES[1:]):

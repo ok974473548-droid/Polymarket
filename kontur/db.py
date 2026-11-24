@@ -1,8 +1,11 @@
 """SQLite storage. One file, created on first start; later versions add tables idempotently."""
 
+import hashlib
 import sqlite3
 import time
 from pathlib import Path
+
+from . import packs
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users(
@@ -156,6 +159,16 @@ CREATE TABLE IF NOT EXISTS copy_events(
   at REAL NOT NULL
 );
 
+-- 1.3.0: what copy events show about an outcome (market title, outcome name, event, picture), stored once per token.
+CREATE TABLE IF NOT EXISTS outcomes(
+  id INTEGER PRIMARY KEY,
+  token TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL DEFAULT '',
+  outcome TEXT NOT NULL DEFAULT '',
+  event_slug TEXT NOT NULL DEFAULT '',
+  image TEXT NOT NULL DEFAULT ''
+);
+
 -- Personal lists and messages.
 CREATE TABLE IF NOT EXISTS watchlist(
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -248,24 +261,20 @@ CREATE TABLE IF NOT EXISTS scout_wallets(
   score REAL,
   error TEXT NOT NULL DEFAULT ''
 );
-CREATE TABLE IF NOT EXISTS scout_bets(
-  wallet TEXT NOT NULL,
-  token TEXT NOT NULL,
-  condition TEXT NOT NULL,
-  oidx INTEGER,
-  outcome TEXT NOT NULL DEFAULT '',
-  title TEXT NOT NULL DEFAULT '',
-  event_slug TEXT NOT NULL DEFAULT '',
-  entry REAL NOT NULL,
-  size REAL NOT NULL,
-  opened REAL NOT NULL,
-  closed REAL,
-  exit REAL,
-  state TEXT NOT NULL,
-  mark REAL,
-  end_ts REAL,
-  short INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY(wallet, token)
+-- Closed positions of a rated trader for incremental statistics (1.3.0): token hash -> total P&L, last event.
+CREATE TABLE IF NOT EXISTS wallet_closed(
+  wallet TEXT PRIMARY KEY,
+  synced REAL NOT NULL,
+  capped INTEGER NOT NULL DEFAULT 0,
+  n INTEGER NOT NULL DEFAULT 0,
+  data BLOB NOT NULL
+);
+-- A wallet's scouted bets, packed column by column into one zlib record (kontur/packs.py; was scout_bets).
+CREATE TABLE IF NOT EXISTS scout_packs(
+  wallet TEXT PRIMARY KEY,
+  n INTEGER NOT NULL,
+  latest REAL,
+  data BLOB NOT NULL
 );
 CREATE TABLE IF NOT EXISTS ap_players(
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -325,11 +334,15 @@ MIGRATIONS = [
     ("copy_events", "source", "TEXT NOT NULL DEFAULT 'poll'"),
     ("copy_events", "leader_ts", "REAL"),
     ("copy_events", "detected", "REAL"),
+    # 1.3.0: an 8-byte hash of the fill key instead of its ~150-character text, and a link to `outcomes`
+    ("copy_events", "key_hash", "INTEGER"),
+    ("copy_events", "outcome_id", "INTEGER"),
 ]
 
 # Indexes for the hot queries (created after the column migrations above).
 INDEXES = [
-    "CREATE INDEX IF NOT EXISTS copy_events_key ON copy_events(copy_trade_id, trade_key)",
+    "DROP INDEX IF EXISTS copy_events_key",  # 1.2.0 index on the text key; replaced by the hash below
+    "CREATE INDEX IF NOT EXISTS copy_events_hash ON copy_events(copy_trade_id, key_hash)",
     "CREATE INDEX IF NOT EXISTS copy_events_account ON copy_events(account_id, id)",
     "CREATE INDEX IF NOT EXISTS copy_events_at ON copy_events(at)",
     "CREATE INDEX IF NOT EXISTS notifications_user ON notifications(user_id, id)",
@@ -371,11 +384,26 @@ def init(path):
             have = {r[1] for r in db.execute(f"PRAGMA table_info({table})")}
             if column not in have:
                 db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        _hash_copy_keys(db)
         for sql in INDEXES:
             db.execute(sql)
+        if packs.migrate(db):        # 1.3.0: bets moved from one row per bet into packed records
+            db.execute("VACUUM")     # give the freed space back to the disk
         db.execute("PRAGMA optimize")
     finally:
         db.close()
+
+
+def key_hash(key):
+    """Signed 64-bit hash of a copied fill's key (copytrade.trade_key), stored instead of the text."""
+    return int.from_bytes(hashlib.blake2b(key.encode(), digest_size=8).digest(), "big", signed=True)
+
+
+def _hash_copy_keys(db):
+    """1.2.0 rows kept the text key: hash it and free the text (once)."""
+    rows = db.execute("SELECT id, trade_key FROM copy_events WHERE trade_key!='' AND key_hash IS NULL").fetchall()
+    if rows:
+        db.executemany("UPDATE copy_events SET key_hash=?, trade_key='' WHERE id=?", [(key_hash(k), i) for i, k in rows])
 
 
 class tx:

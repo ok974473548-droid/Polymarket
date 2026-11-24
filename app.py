@@ -212,7 +212,7 @@ def get_routes(db, path, query, user):
                 "wallets": db.execute("SELECT COUNT(*), SUM(stats_at IS NOT NULL) FROM wallets").fetchone()[:],
                 "jobs": {k: v for w in WORKERS for k, v in w.errors.items()},
                 "trades_stream": stream.status(), "books_stream": books.status(), "copy_delay": copy_delay(db),
-                "network": dict(net.STATS), "live_clients": bus.listeners()}
+                "network": dict(net.STATS), "routes": net.top_routes(), "live_clients": bus.listeners()}
     # ------------------------------------------------ personal
     if path == "/api/me":
         user = need(user)

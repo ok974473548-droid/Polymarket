@@ -18,6 +18,7 @@ import time
 from datetime import datetime, timezone
 
 from . import db as store
+from . import packs
 from . import polymarket as pm
 
 # Minimum gap between scouting calls to one host, shared by all scouting threads (~16 requests/s).
@@ -137,29 +138,59 @@ def bet_from_position(r, now):
     return bet
 
 
-def crawl(wallet, since, now=None):
-    """Positions of a wallet active since `since`, newest first, both statuses."""
+SYNC_MARGIN = 86400          # re-read a day of closed positions on top: the Data API indexes with a delay
+
+
+def crawl(wallet, since, now=None, prev=None, prev_at=None, prev_partial=False):
+    """Positions of a wallet active since `since`, newest first, both statuses.
+
+    With `prev` (the bets stored at `prev_at`): open positions are read in full as before, closed ones only if
+    their last event is after prev_at minus a day; closed positions do not change, so the result is the same
+    as a full crawl, for a fraction of the traffic. A position bought again (open now) leaves the closed set.
+    """
     now = now or time.time()
-    bets, partial = [], False
+    incremental = prev is not None and bool(prev_at)
+    bets, partial, open_tokens = [], False, set()
+    closed_rows = 0
     for status in ("CLOSED", "OPEN"):
         cursor, pages = "", 0
+        start = int(prev_at - SYNC_MARGIN) if incremental and status == "CLOSED" else None
         while True:
             page = pm.positions_page(user=wallet, status=status, sort="TIMESTAMP", direction="DESC", limit=PAGE,
-                                     cursor=cursor, gap=GAP)
+                                     cursor=cursor, start=start, gap=GAP)
             rows = page["rows"]
             for r in rows:
+                if status == "OPEN":
+                    open_tokens.add(str(r.get("token_id") or ""))
                 b = bet_from_position(r, now)
                 if b and b["opened"] >= since - 30 * DAY:
                     bets.append(b)
             pages += 1
+            closed_rows += len(rows) if status == "CLOSED" else 0
             cursor = page["next"]
             oldest = min((pm.num(r.get("last_event_at")) or now for r in rows), default=0)
             if not cursor or not rows or oldest < since:
                 break
             if pages >= MAX_PAGES[status]:
+                if incremental and status == "CLOSED":
+                    # more changed than a full crawl would read: fall back to a full crawl
+                    return crawl(wallet, since, now)
                 partial = True
                 break
-    return bets, partial
+    if not incremental:
+        return bets, partial
+    merged = {b["token"]: b for b in prev if b["state"] == "closed" and b["token"] not in open_tokens
+              and b["opened"] >= since - 30 * DAY}
+    for b in bets:  # fresh closed, then open/resolved: the newest record of a token wins, as in a full crawl
+        merged[b["token"]] = b
+    out = list(merged.values())
+    closed = sorted((b for b in out if b["state"] == "closed"), key=lambda b: -(b["closed"] or 0))
+    cap = MAX_PAGES["CLOSED"] * PAGE
+    if len(closed) > cap or prev_partial:  # a full crawl keeps only the newest `cap` closed positions
+        keep = {id(b) for b in closed[:cap]}
+        out = [b for b in out if b["state"] != "closed" or id(b) in keep]
+        partial = partial or prev_partial or len(closed) > cap
+    return out, partial
 
 
 def measure_slip(trades, now=None, samples=12):
@@ -418,7 +449,13 @@ def profile_wallet(db, wallet, now=None):
     """Crawl a wallet, store its bets (for directional or roster wallets) and its metrics."""
     now = now or time.time()
     since = now - CRAWL_DAYS * DAY
-    bets, partial = crawl(wallet, since, now)
+    prev_row = db.execute("SELECT profiled, metrics FROM scout_wallets WHERE wallet=?", (wallet,)).fetchone()
+    prev = packs.load(db, wallet) if prev_row and prev_row[0] else []
+    if prev:  # bets kept from the last profile: only what changed since then is downloaded
+        prev_partial = bool(json.loads(prev_row[1] or "{}").get("partial"))
+        bets, partial = crawl(wallet, since, now, prev=prev, prev_at=prev_row[0], prev_partial=prev_partial)
+    else:
+        bets, partial = crawl(wallet, since, now)
     trades = pm.trades_page(user=wallet, limit=100, taker_only=False, gap=GAP)["rows"]
     m = metrics(bets, now=now)
     kind, facts = behaviour(bets, trades, m, now)
@@ -435,13 +472,7 @@ def profile_wallet(db, wallet, now=None):
     m["partial"] = partial
     keep = promising or in_roster
     with store.tx(db):
-        db.execute("DELETE FROM scout_bets WHERE wallet=?", (wallet,))
-        if keep:
-            db.executemany("""INSERT OR REPLACE INTO scout_bets(wallet, token, condition, oidx, outcome, title, event_slug, entry, size,
-                              opened, closed, exit, state, mark, end_ts, short) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                           [(wallet, b["token"], b["condition"], b["oidx"], b["outcome"], b["title"], b["event_slug"], b["entry"],
-                             b["size"], b["opened"], b["closed"], b["exit"], b["state"], b["mark"], b["end"], b["short"])
-                            for b in bets])
+        packs.save(db, wallet, bets if keep else [])
         name = next((t.get("pseudonym") or t.get("name") for t in trades if t.get("pseudonym") or t.get("name")), "")
         db.execute("""UPDATE scout_wallets SET profiled=?, kind=?, facts=?, metrics=?, score=?, error='', priority=0,
                       name=CASE WHEN name='' THEN ? ELSE name END WHERE wallet=?""",
@@ -450,8 +481,7 @@ def profile_wallet(db, wallet, now=None):
 
 
 def stored_bets(db, wallet):
-    return store.rows(db.execute("""SELECT token, condition, oidx, outcome, title, event_slug, entry, size, opened, closed, exit, state,
-                                    mark, end_ts AS end, short FROM scout_bets WHERE wallet=?""", (wallet,)))
+    return packs.load(db, wallet)
 
 
 def candidate(db, wallet):

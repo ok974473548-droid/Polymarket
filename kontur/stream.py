@@ -11,10 +11,13 @@ import logging
 import queue
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
+from . import books
 from . import copytrade
 from . import db as store
 from . import polymarket as pm
+from . import trading
 from .ws import WebSocket, WsError
 
 URL = "wss://ws-live-data.polymarket.com"
@@ -22,6 +25,7 @@ PING_EVERY = 5
 STALE_AFTER = 20          # seconds without messages -> reconnect (the feed carries dozens of fills a second)
 LEADERS_EVERY = 2.0       # how often the followed wallets are re-read from the database
 WORKERS = 3
+PREFETCH = ThreadPoolExecutor(6, thread_name_prefix="kontur-prefetch")
 LOG = logging.getLogger("kontur.stream")
 
 
@@ -56,7 +60,8 @@ class TradeStream(threading.Thread):
         self.connected = False
         self.last_rx = 0.0
         self.lags = collections.deque(maxlen=500)   # seconds from the leader's fill to our receipt
-        self.stats = {"connects": 0, "messages": 0, "matched": 0, "copied": 0, "errors": 0, "error": "", "since": None}
+        self.stats = {"connects": 0, "messages": 0, "matched": 0, "copied": 0, "errors": 0, "error": "", "since": None,
+                      "wire": 0, "plain": 0}
         self.workers = [threading.Thread(target=self._work, args=(q,), name=f"kontur-copy-{i}", daemon=True)
                         for i, q in enumerate(self.queues)]
 
@@ -97,6 +102,7 @@ class TradeStream(threading.Thread):
             row = self.complete(row)
         except (pm.UpstreamError, LookupError, ValueError):
             pass  # the copy is then recorded as failed with the reason, as before
+        self._prefetch(row)
         cts = store.rows(db.execute("""SELECT c.*, a.user_id AS _uid FROM copy_trades c JOIN accounts a ON a.id=c.account_id
                                        WHERE lower(c.leader)=? AND c.paused=0 AND a.paused=0 AND c.created <= ?""",
                                     (row["proxy_wallet"], row["timestamp"] + 5)))
@@ -106,6 +112,24 @@ class TradeStream(threading.Thread):
             if copytrade.handle(db, ct, row, uid, infos=infos, source="stream", detected=seen_at):
                 self.stats["copied"] += 1
 
+    def _prefetch(self, row):
+        """Read the market terms and the book at the same time (two network calls in parallel, not in a row)."""
+        tok, cond = row.get("token_id"), row.get("condition_id")
+        if not tok or not cond:
+            return
+        try:
+            cached = trading.market_info_cached(cond, tok)
+        except ValueError:
+            return  # malformed ids: the copy records the error itself
+        jobs = [PREFETCH.submit(books.prefetch, tok)]
+        if not cached:
+            jobs.append(PREFETCH.submit(trading.market_info, cond, tok))
+        for j in jobs:
+            try:
+                j.result(timeout=15)
+            except Exception:  # noqa: BLE001 - the copy itself fetches again and records any error
+                pass
+
     # ---------------------------------------------------------------- stream
     def _refresh_leaders(self, db):
         self.leaders = followed(db)
@@ -113,6 +137,7 @@ class TradeStream(threading.Thread):
     def _session(self, db):
         ws = WebSocket(URL, timeout=15)
         ws.settimeout(2)
+        self._ws = ws
         ws.send(json.dumps({"action": "subscribe", "subscriptions": [{"topic": "activity", "type": "trades"}]}))
         self.connected, self.last_rx = True, time.monotonic()
         self.stats["connects"] += 1
@@ -159,6 +184,9 @@ class TradeStream(threading.Thread):
         finally:
             self.connected = False
             ws.close()
+            self.stats["wire"] += ws.rx_wire
+            self.stats["plain"] += ws.rx_plain
+            self._ws = None
 
     def run(self):
         for w in self.workers:
@@ -187,7 +215,12 @@ class TradeStream(threading.Thread):
         lags = sorted(self.lags)
         return {"connected": self.connected and time.monotonic() - self.last_rx <= STALE_AFTER, "leaders": len(self.leaders),
                 "queue": sum(q.qsize() for q in self.queues), "lag_median": round(lags[len(lags) // 2], 2) if lags else None,
-                "lag_p90": round(lags[int(len(lags) * 0.9)], 2) if lags else None, **self.stats}
+                "lag_p90": round(lags[int(len(lags) * 0.9)], 2) if lags else None, **self.stats, **self._live_bytes()}
+
+    def _live_bytes(self):
+        ws = getattr(self, "_ws", None)
+        return {"wire": self.stats["wire"] + (ws.rx_wire if ws else 0), "plain": self.stats["plain"] + (ws.rx_plain if ws else 0),
+                "compressed": bool(ws and ws.deflate)}
 
 
 STREAM = None

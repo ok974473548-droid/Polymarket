@@ -31,7 +31,8 @@ class BookStream(threading.Thread):
         self.gen = 0
         self.connected = False
         self.last_rx = 0.0
-        self.stats = {"connects": 0, "messages": 0, "updates": 0, "errors": 0, "error": "", "since": None}
+        self.stats = {"connects": 0, "messages": 0, "updates": 0, "errors": 0, "error": "", "since": None,
+                      "wire": 0, "plain": 0}
         self.listeners = []
 
     # ---------------------------------------------------------------- public
@@ -57,8 +58,10 @@ class BookStream(threading.Thread):
     def status(self):
         with self.lock:
             live = sum(1 for b in self.books.values() if b["gen"] == self.gen)
+            ws = getattr(self, "_ws", None)
             return {"connected": self.connected and time.monotonic() - self.last_rx <= STALE_AFTER, "watched": len(self.want),
-                    "books": live, **self.stats}
+                    "books": live, **self.stats, "wire": self.stats["wire"] + (ws.rx_wire if ws else 0),
+                    "plain": self.stats["plain"] + (ws.rx_plain if ws else 0)}
 
     # ---------------------------------------------------------------- stream
     def _apply(self, ev):
@@ -119,6 +122,7 @@ class BookStream(threading.Thread):
     def _session(self):
         ws = WebSocket(URL, timeout=15)
         ws.settimeout(2)
+        self._ws = ws
         with self.lock:
             self.gen += 1
             self.sent = set()
@@ -168,6 +172,9 @@ class BookStream(threading.Thread):
             with self.lock:
                 self.connected = False
             ws.close()
+            self.stats["wire"] += ws.rx_wire
+            self.stats["plain"] += ws.rx_plain
+            self._ws = None
 
     def run(self):
         delay = 1.0
@@ -210,13 +217,38 @@ def fresh(tok):
     return STREAM.fresh(tok) if STREAM is not None else None
 
 
-def get(tok):
-    """Live book from memory when trustworthy, otherwise a REST fetch; the token is watched from now on."""
+_prefetched = {}             # token -> (monotonic time, book) fetched ahead by a copy that is being prepared
+_prefetch_lock = threading.Lock()
+PREFETCH_TTL = 1.5
+
+
+def prefetch(tok):
+    """Fetch a book over REST now, for a `get` that follows within PREFETCH_TTL seconds (copies fetch the book
+    while the market terms are being read, instead of one after the other)."""
+    bk = pm.book(tok)
+    with _prefetch_lock:
+        if len(_prefetched) > 200:
+            _prefetched.clear()
+        _prefetched[str(tok)] = (time.monotonic(), bk)
+    return bk
+
+
+def get(tok, watch_ttl=None):
+    """Book from the live stream when trustworthy, a just-prefetched one, or a REST fetch.
+
+    watch_ttl: keep the token on the live stream for that many seconds (the order ticket a person is looking at).
+    """
     bk = fresh(tok)
     if bk:
         return bk
-    bk = pm.book(tok)
-    watch([tok], ttl=600)
+    with _prefetch_lock:
+        hit = _prefetched.pop(str(tok), None)
+    if hit and time.monotonic() - hit[0] <= PREFETCH_TTL:
+        bk = hit[1]
+    else:
+        bk = pm.book(tok)
+    if watch_ttl:
+        watch([tok], ttl=watch_ttl)
     return bk
 
 

@@ -10,6 +10,7 @@ from kontur import db as store
 from kontur import scout
 
 DB = sys.argv[1]
+store.init(DB)  # also moves bets of an older database into packed records
 db = store.connect(DB)
 NOW = float(db.execute("SELECT v FROM audit_meta WHERE k='now'").fetchone()[0])
 DAY = 86400
@@ -183,8 +184,9 @@ if pairs:
     out["all_pairs_roi_after"] = pct(statistics.mean(p[1] for p in pairs))
 
 # ---------------------------------------------------------------- 4. data quality on full data
-q = lambda sql, *a: db.execute(sql, a).fetchone()[0]  # noqa: E731
-out["bets_total"] = q("SELECT COUNT(*) FROM scout_bets")
-out["open_past_end_7d"] = q("SELECT COUNT(*) FROM scout_bets WHERE state='open' AND end_ts IS NOT NULL AND end_ts < ?", NOW - 7 * DAY)
-out["open_past_end_mark_0_or_1"] = q("SELECT COUNT(*) FROM scout_bets WHERE state='open' AND end_ts < ? AND (mark<=0.01 OR mark>=0.99)", NOW - 7 * DAY)
+every = [b for bets in BETS.values() for b in bets]
+past_end = [b for b in every if b["state"] == "open" and b["end"] is not None and b["end"] < NOW - 7 * DAY]
+out["bets_total"] = len(every)
+out["open_past_end_7d"] = len(past_end)
+out["open_past_end_mark_0_or_1"] = sum(1 for b in past_end if b["mark"] is not None and (b["mark"] <= 0.01 or b["mark"] >= 0.99))
 print(json.dumps(out, ensure_ascii=False, indent=1, default=str))

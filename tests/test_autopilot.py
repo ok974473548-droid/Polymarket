@@ -4,7 +4,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from kontur import autopilot, copytrade, scout, trading
+from kontur import autopilot, copytrade, packs, scout, trading
 from kontur import db as store
 from kontur import polymarket as pm
 from test_trading import COND, YES, Base
@@ -111,10 +111,7 @@ def store_candidate(db, wallet, wins=45, losses=12, kind="directional", recent=3
     m["slip_measured"] = 0.01
     db.execute("INSERT OR REPLACE INTO scout_wallets(wallet, name, image, sources, added, profiled, kind, facts, metrics, score) VALUES(?,?,?,?,?,?,?,?,?,?)",
                (wallet, name or wallet[-4:], "", "[]", NOW, NOW, kind, "{}", json.dumps(m), scout.score(m)))
-    db.executemany("""INSERT OR REPLACE INTO scout_bets(wallet, token, condition, oidx, outcome, title, event_slug, entry, size, opened,
-                      closed, exit, state, mark, end_ts, short) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                   [(wallet, b["token"], b["condition"], 0, "Yes", b["title"], "ev", b["entry"], b["size"], b["opened"], b["closed"],
-                     b["exit"], b["state"], None, None, b["short"]) for b in bets])
+    packs.save(db, wallet, [{**b, "oidx": 0, "outcome": "Yes", "event_slug": "ev", "mark": None, "end": None} for b in bets])
     return m
 
 

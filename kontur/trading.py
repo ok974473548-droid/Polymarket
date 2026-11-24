@@ -124,6 +124,12 @@ def market_info(cond, tok):
     return info
 
 
+def market_info_cached(cond, tok):
+    with _info_lock:
+        hit = _info_cache.get((pm.condition(cond), pm.token(tok)))
+    return bool(hit and time.monotonic() - hit[0] < INFO_TTL)
+
+
 def _market_info(cond, tok):
     raw = pm.markets_by_condition([cond]).get(cond)
     if not raw:
@@ -213,7 +219,7 @@ def quote(db, uid, body):
     """Preview a fill on the current book without changing anything (used by the order ticket)."""
     spec = _spec({**body, "amount": body.get("amount") or 1, "shares": body.get("shares") or 1})
     info = market_info(spec["cond"], spec["token"])
-    bk = books.get(spec["token"])
+    bk = books.get(spec["token"], watch_ttl=120)   # the ticket re-quotes as the person types: keep this book live
     levels = bk["asks"] if spec["side"] == "buy" else bk["bids"]
     cap = spec.get("price") if spec["type"] == "limit" else spec["cap"]
     legs = _take(levels, side=spec["side"], budget=spec.get("amount"), shares=spec.get("shares"), cap=cap,

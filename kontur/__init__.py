@@ -1,2 +1,2 @@
 """Контур рынка — Polymarket analytics with virtual trading and copy trading."""
-VERSION = "1.2.0"
+VERSION = "1.3.0"

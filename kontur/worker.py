@@ -79,9 +79,10 @@ def _due_without_stream(name, every):
 
 
 def job_watch(db):
-    """Keep the live book stream subscribed to every open position and resting order."""
-    tokens = [r[0] for r in db.execute("""SELECT token_id FROM orders WHERE status='open'
-                                          UNION SELECT token_id FROM positions WHERE status='open' AND shares>0.000001""")]
+    """Keep the live book stream subscribed to the outcomes with resting limit orders (they need depth and an
+    instant reaction). Positions are valued from batch mid prices instead: a busy market sends its whole book
+    after every trade, which for a few dozen positions is gigabytes a day."""
+    tokens = [r[0] for r in db.execute("SELECT DISTINCT token_id FROM orders WHERE status='open'")]
     books.watch(tokens, ttl=120)
 
 
@@ -94,16 +95,33 @@ def job_orders(db):
         trading.match_resting(db, _books(tokens))
 
 
+def _mid(bk):
+    bid = bk["bids"][0][0] if bk["bids"] else None
+    ask = bk["asks"][0][0] if bk["asks"] else None
+    return (bid + ask) / 2 if bid is not None and ask is not None else bid if bid is not None else ask
+
+
 def job_marks(db):
-    if not _due_without_stream("marks", 60):
-        return
+    """Value open positions at the mid price: books already in memory, then one batch request of mids
+    (~45 bytes a token instead of a whole book), and a full book only where the CLOB has no mid."""
     tokens = [r[0] for r in db.execute("""SELECT token_id FROM positions WHERE status='open' AND shares>0.000001
-                                          GROUP BY token_id ORDER BY MIN(COALESCE(price_at,0)) LIMIT 200""")]
-    marks = {}
-    for tok, bk in _books(tokens).items():
-        bid = bk["bids"][0][0] if bk["bids"] else None
-        ask = bk["asks"][0][0] if bk["asks"] else None
-        marks[tok] = (bid + ask) / 2 if bid is not None and ask is not None else bid if bid is not None else ask
+                                          GROUP BY token_id ORDER BY MIN(COALESCE(price_at,0)) LIMIT 500""")]
+    marks, rest = {}, []
+    for tok in tokens:
+        bk = books.fresh(tok)
+        if bk:
+            marks[tok] = _mid(bk)
+        else:
+            rest.append(tok)
+    if rest:
+        try:
+            mids = pm.midpoints(rest)
+        except (pm.UpstreamError, ValueError):
+            mids = {}
+        marks.update(mids)
+        missing = [t for t in rest if t not in mids]
+        for tok, bk in _books(missing[:40]).items():
+            marks[tok] = _mid(bk)
     trading.mark_prices(db, marks)
 
 
@@ -183,7 +201,9 @@ def job_tags(db):
         if state.get("finished") and time.time() - state["finished"] < 86400:
             return
         state = {"running": True, "cursor": None, "pages": 0, "counts": {}, "labels": {}}
-    params = {"active": "true", "closed": "false", "limit": 100, "order": "volume24hr", "ascending": "false"}
+    # only the tags are needed: events without their markets weigh ~75 times less (30 MB -> 0.4 MB a page)
+    params = {"active": "true", "closed": "false", "limit": 100, "order": "volume24hr", "ascending": "false",
+              "include_markets": "false"}
     if state["cursor"]:
         params["after_cursor"] = state["cursor"]
     raw = pm.fetch(pm.GAMMA + "/events/keyset?" + urlencode(params), gap=0.5)

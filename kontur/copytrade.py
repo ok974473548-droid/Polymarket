@@ -226,27 +226,54 @@ def listing(db, uid, aid):
     return [_public(db, r) for r in store.rows(db.execute("SELECT * FROM copy_trades WHERE account_id=? ORDER BY id DESC", (aid,)))]
 
 
+EVENT_FIELDS = ("id", "copy_trade_id", "account_id", "leader", "status", "reason", "side", "leader_price", "leader_size",
+                "amount", "shares", "price", "order_id", "leader_tx", "at", "source", "leader_ts", "detected")
+
+
 def events(db, uid, aid, status="", limit=200):
     _copy_account(db, uid, aid, allow_autopilot=True)
-    sql, params = "SELECT * FROM copy_events WHERE account_id=?", [aid]
+    # Market texts come from `outcomes` (1.3.0); older rows keep their own copy.
+    sql = (f"SELECT {', '.join('e.' + f for f in EVENT_FIELDS)}, "
+           + ", ".join(f"CASE WHEN e.outcome_id IS NULL THEN e.{c} ELSE COALESCE(o.{c}, '') END AS {c}"
+                       for c in ("title", "outcome", "event_slug", "image"))
+           + " FROM copy_events e LEFT JOIN outcomes o ON o.id=e.outcome_id WHERE e.account_id=?")
+    params = [aid]
     if status in {"filled", "skipped", "failed"}:
-        sql += " AND status=?"
+        sql += " AND e.status=?"
         params.append(status)
-    return store.rows(db.execute(sql + " ORDER BY id DESC LIMIT ?", (*params, limit)))
+    return store.rows(db.execute(sql + " ORDER BY e.id DESC LIMIT ?", (*params, limit)))
+
+
+def outcome_id(db, trade):
+    """Id of the outcome's texts in `outcomes`, added or completed on the way (None without a token)."""
+    tok = str(trade.get("token_id") or "")
+    if not tok:
+        return None
+    vals = (str(trade.get("title") or "")[:300], str(trade.get("outcome") or "")[:120], str(trade.get("event_slug") or "")[:240],
+            str(trade.get("icon") or "")[:600])
+    db.execute("""INSERT INTO outcomes(token, title, outcome, event_slug, image) VALUES(?,?,?,?,?)
+                  ON CONFLICT(token) DO UPDATE SET
+                    title=CASE WHEN outcomes.title='' THEN excluded.title ELSE outcomes.title END,
+                    outcome=CASE WHEN outcomes.outcome='' THEN excluded.outcome ELSE outcomes.outcome END,
+                    event_slug=CASE WHEN outcomes.event_slug='' THEN excluded.event_slug ELSE outcomes.event_slug END,
+                    image=CASE WHEN outcomes.image='' THEN excluded.image ELSE outcomes.image END""", (tok, *vals))
+    return db.execute("SELECT id FROM outcomes WHERE token=?", (tok,)).fetchone()[0]
 
 
 # ---------------------------------------------------------------- engine
 
 def _record(db, ct, status, reason, trade, *, source="poll", detected=None, **extra):
+    oid = outcome_id(db, trade)
+    texts = ("", "", "", "") if oid else (trade.get("title") or "", trade.get("outcome") or "", trade.get("event_slug") or "",
+                                          trade.get("icon") or "")
     db.execute("""INSERT INTO copy_events(copy_trade_id, account_id, leader, status, reason, side, title, outcome, event_slug,
-                  image, leader_price, leader_size, amount, shares, price, order_id, leader_tx, at, trade_key, source,
+                  image, leader_price, leader_size, amount, shares, price, order_id, leader_tx, at, key_hash, outcome_id, source,
                   leader_ts, detected)
-                  VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-               (ct["id"], ct["account_id"], ct["leader"], status, reason, (trade.get("side") or "").lower(),
-                trade.get("title") or "", trade.get("outcome") or "", trade.get("event_slug") or "", trade.get("icon") or "",
+                  VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               (ct["id"], ct["account_id"], ct["leader"], status, reason, (trade.get("side") or "").lower(), *texts,
                 trade.get("price"), trade.get("size"), extra.get("amount"), extra.get("shares"), extra.get("price"),
-                extra.get("order_id"), trade.get("transaction_hash") or "", time.time(), trade_key(trade), source,
-                pm.num(trade.get("timestamp")), detected))
+                extra.get("order_id"), trade.get("transaction_hash") or "", time.time(), store.key_hash(trade_key(trade)), oid,
+                source, pm.num(trade.get("timestamp")), detected))
     bus.publish("copy", {"account_id": ct["account_id"], "status": status})
     if ct["notify"] and status != "skipped":
         uid = db.execute("SELECT user_id FROM accounts WHERE id=?", (ct["account_id"],)).fetchone()[0]
@@ -364,7 +391,8 @@ def handle(db, ct, trade, uid, *, infos=None, source="poll", detected=None):
     key = trade_key(trade)
     infos = {} if infos is None else infos
     with _lock_for(ct["id"]):
-        if db.execute("SELECT 1 FROM copy_events WHERE copy_trade_id=? AND trade_key=? LIMIT 1", (ct["id"], key)).fetchone():
+        if db.execute("SELECT 1 FROM copy_events WHERE copy_trade_id=? AND key_hash=? LIMIT 1",
+                      (ct["id"], store.key_hash(key))).fetchone():
             return False
         tok, cond = str(trade.get("token_id") or ""), str(trade.get("condition_id") or "").lower()
         try:

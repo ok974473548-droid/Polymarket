@@ -306,6 +306,7 @@ LOGICS = {
 
 def main():
     global PRE
+    store.init(DB)  # also moves bets of an older database into packed records
     db = store.connect(DB)
     now = float(db.execute("SELECT v FROM audit_meta WHERE k='now'").fetchone()[0])
     _init(now)

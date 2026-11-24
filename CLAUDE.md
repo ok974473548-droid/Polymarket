@@ -7,7 +7,7 @@
 ## Запуск и проверка
 - Только Python 3.11+, без сторонних пакетов: `python app.py` → http://127.0.0.1:8787 (`--db`, `--port`, `--no-worker`).
 - Docker: `docker compose up -d --build` (том `kontur-data`).
-- Тесты: `PYTHONPATH=.:tests python -m unittest tests.test_trading tests.test_autopilot tests.test_data tests.test_speed` (88 тестов, без сети).
+- Тесты: `PYTHONPATH=.:tests python -m unittest tests.test_trading tests.test_autopilot tests.test_data tests.test_speed` (103 теста, без сети).
 - Замер скорости: `PYTHONPATH=. python research/bench_perf.py` (сеть, сервер, база, поток сделок).
 - Переменные: `KONTUR_DB`, `HOST`, `PORT`, `KONTUR_SCOUT_THREADS` (6), `KONTUR_SCOUT_GAP` (0.06 с), `KONTUR_STATS_THREADS` (4), `KONTUR_STATS_GAP` (0.06 с).
 
@@ -15,17 +15,19 @@
 | Файл | Что делает |
 |---|---|
 | `app.py` | HTTP-сервер на stdlib (HTTP/1.1 keep-alive, TCP_NODELAY, gzip, статика из памяти с ETag/304, пул соединений с базой), маршруты `/api/*`, события `/api/stream` (SSE), прокси картинок |
-| `kontur/net.py` | HTTPS-клиент: постоянные соединения по хосту, gzip, системный прокси |
-| `kontur/ws.py` | WebSocket-клиент на stdlib (TLS, прокси, буфер кадров при таймаутах) |
+| `kontur/net.py` | HTTPS-клиент: постоянные соединения по хосту, gzip, системный прокси, GET и POST JSON, учёт байтов по маршрутам (`ROUTES`) |
+| `kontur/ws.py` | WebSocket-клиент на stdlib (TLS, прокси, буфер кадров при таймаутах, сжатие permessage-deflate) |
 | `kontur/stream.py` | Живой поток сделок RTDS → копирование за ~1 с; исполнители по лидерам (порядок сделок сохраняется) |
-| `kontur/books.py` | Живые стаканы (CLOB WS) в памяти; `books.get` — из памяти или по сети |
+| `kontur/books.py` | Живые стаканы (CLOB WS) — только для лимитных заявок и открытого тикета; `books.get` — из памяти, предзагруженный или по сети; позиции переоцениваются через `pm.midpoints` |
+| `kontur/packs.py` | Ставки игроков: одна сжатая запись (zlib, по столбцам) на кошелёк в `scout_packs`; перенос старой `scout_bets` при запуске |
 | `kontur/bus.py` | Шина событий внутри процесса (для SSE) |
 | `kontur/polymarket.py` | Клиенты Gamma / Data API v2 / CLOB, темп запросов по хостам, пауза для всех при 429, кэш |
-| `kontur/scout.py` | Поиск и оценка игроков для автопилота: ставки из позиций, копия с задержкой и комиссией, метрики, тип поведения, отбор, балл, проверка на истории |
+| `kontur/scout.py` | Поиск и оценка игроков для автопилота: ставки из позиций (догрузка: закрытые — только новые, `start`), копия с задержкой и комиссией, метрики, тип поведения, отбор, балл, проверка на истории |
 | `kontur/autopilot.py` | Состав, скамейка, испытание, замены, копии автопилота, настройки |
 | `kontur/copytrade.py`, `trading.py` | Копирование (`handle` — одна сделка, ключ `trade_key` общий для потока и Data API, без дублей); заявки, проход по стакану, комиссии, позиции |
 | `kontur/worker.py` | Фоновые задачи (fast / slow), пулы потоков `JobPool`: поиск игроков (`ScoutPool`), статистика трейдеров (`WalletPool`) |
-| `kontur/traders.py`, `news.py`, `watchlist.py`, `notify.py`, `auth.py`, `db.py` | Трейдеры и рейтинги, новости, избранное, уведомления, вход, база SQLite |
+| `kontur/traders.py` | Рейтинги и статистика трейдеров; закрытые позиции догружаются и хранятся картой «хэш токена → итог» (`wallet_closed`) |
+| `kontur/news.py`, `watchlist.py`, `notify.py`, `auth.py`, `db.py` | Новости, избранное, уведомления, вход, база SQLite (справочник исходов `outcomes` для журнала копий) |
 | `static/` | Интерфейс (JS без сборки) |
 | `research/` | Скрипты проверки модели автопилота и итоги прогона |
 | `AUTOPILOT.md` | Устройство автопилота |
@@ -33,6 +35,7 @@
 ## Договорённости
 - Polymarket Data API — только v2; он отдаёт сделки с опозданием в минуты, поэтому копирование идёт из потока RTDS, опрос — запасной.
 - Без сторонних пакетов: сеть, WebSocket, сервер — на стандартной библиотеке.
+- Вес данных: запрашивать только нужное (`include_markets=false`, `start`, пакетные запросы), сжимать (gzip, permessage-deflate, zlib), не хранить повторы; любое облегчение сверять с полным вариантом на живых данных.
 - Всё «на момент now», без заглядывания в будущее; проверка на истории — только по данным на дату отбора.
 - Расчёты не меняются молча: при смене формулы — тест «было → стало» и строка в README.
 - Версия — `kontur/__init__.py` и заголовок README; история — разделы «Новое в …» в README.

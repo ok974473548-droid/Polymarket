@@ -1,7 +1,8 @@
 """Minimal WebSocket client on the standard library (RFC 6455, client side).
 
 Enough for Polymarket's public streams: TLS, the system HTTPS proxy (CONNECT), masking, ping/pong,
-fragmented messages, close, read timeouts that keep partial frames. No third-party packages.
+fragmented messages, close, read timeouts that keep partial frames, and permessage-deflate (RFC 7692):
+when the server agrees, every message arrives compressed. No third-party packages.
 """
 
 import base64
@@ -10,6 +11,7 @@ import socket
 import ssl
 import struct
 import threading
+import zlib
 from urllib.parse import urlsplit
 
 from . import net
@@ -48,21 +50,38 @@ def _read_headers(sock):
     return data.decode("latin-1")
 
 
+def _deflate_params(reply):
+    """Agreed permessage-deflate parameters from the handshake reply, or None."""
+    for line in reply.split("\r\n"):
+        name, _, value = line.partition(":")
+        if name.strip().lower() == "sec-websocket-extensions" and "permessage-deflate" in value:
+            params = {p.strip().split("=")[0].lower() for p in value.split(";")}
+            return {"reset": "server_no_context_takeover" in params}
+    return None
+
+
 class WebSocket:
-    def __init__(self, url, *, timeout=15, headers=None):
+    def __init__(self, url, *, timeout=15, headers=None, compress=True):
         u = urlsplit(url)
         if u.scheme not in ("ws", "wss"):
             raise ValueError("Нужен адрес ws:// или wss://")
         self.host, self.secure = u.hostname, u.scheme == "wss"
         self.port = u.port or (443 if self.secure else 80)
         self.path = (u.path or "/") + ("?" + u.query if u.query else "")
+        self._init_state()
+        self.sock = self._open(timeout, headers or {}, compress)
+
+    def _init_state(self, deflate=None):
         self._send_lock = threading.Lock()
         self._buf = bytearray()   # bytes received but not yet parsed into frames (survives timeouts)
-        self._parts, self._kind = [], None
-        self.sock = self._open(timeout, headers or {})
+        self._parts, self._kind, self._packed = [], None, False
+        self.deflate = deflate    # None, or {"reset": bool} when the server compresses messages
+        self._inflater = zlib.decompressobj(-zlib.MAX_WBITS)
+        self.rx_wire = 0          # bytes received from the socket
+        self.rx_plain = 0         # message bytes after decompression
         self.closed = False
 
-    def _open(self, timeout, headers):
+    def _open(self, timeout, headers, compress=True):
         proxy = _proxy_for(self.host) if self.secure else None
         if proxy:
             raw = socket.create_connection(proxy[:2], timeout=timeout)
@@ -78,12 +97,15 @@ class WebSocket:
         sock = ssl.create_default_context().wrap_socket(raw, server_hostname=self.host) if self.secure else raw
         key = base64.b64encode(os.urandom(16)).decode()
         extra = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
+        if compress:  # we only ask the server to compress; our own small messages go uncompressed
+            extra += "Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n"
         sock.sendall((f"GET {self.path} HTTP/1.1\r\nHost: {self.host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                       f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n{extra}\r\n").encode())
         reply = _read_headers(sock)
         if " 101" not in reply.split("\r\n", 1)[0]:
             sock.close()
             raise WsError("Сервер отказал в WebSocket: " + reply.split("\r\n", 1)[0])
+        self.deflate = _deflate_params(reply) if compress else None
         return sock
 
     def settimeout(self, seconds):
@@ -137,7 +159,7 @@ class WebSocket:
         del buf[:i + n]
         if mask:
             payload = _mask(payload, mask)
-        return b1 & 0x80, b1 & 0x0F, payload
+        return b1 & 0x80, b1 & 0x0F, payload, b1 & 0x40
 
     def recv(self):
         """Next text message (str). Answers pings itself; raises WsError when the stream ends.
@@ -151,8 +173,9 @@ class WebSocket:
                 if not chunk:
                     raise WsError("Соединение закрыто сервером")
                 self._buf += chunk
+                self.rx_wire += len(chunk)
                 continue
-            fin, opcode, payload = frame
+            fin, opcode, payload, rsv1 = frame
             if opcode == OP_PING:
                 self._send(OP_PONG, payload)
                 continue
@@ -162,15 +185,31 @@ class WebSocket:
                 self.closed = True
                 raise WsError("Сервер закрыл поток")
             if opcode in (OP_TEXT, OP_BIN):
-                self._parts, self._kind = [payload], opcode
+                self._parts, self._kind, self._packed = [payload], opcode, bool(rsv1)
+                if rsv1 and self.deflate is None:
+                    raise WsError("Сжатое сообщение без согласованного сжатия")
             elif opcode == OP_CONT:
                 self._parts.append(payload)
                 if sum(len(x) for x in self._parts) > MAX_MESSAGE:
                     raise WsError("Слишком большое сообщение")
             if fin and self._kind is not None:
                 data = b"".join(self._parts)
-                self._parts, self._kind = [], None
+                if self._packed:
+                    data = self._inflate(data)
+                self._parts, self._kind, self._packed = [], None, False
+                self.rx_plain += len(data)
                 return data.decode("utf-8", "replace")
+
+    def _inflate(self, data):
+        try:
+            out = self._inflater.decompress(data + b"\x00\x00\xff\xff", MAX_MESSAGE)
+        except zlib.error as exc:
+            raise WsError("Повреждённое сжатое сообщение") from exc
+        if self._inflater.unconsumed_tail:
+            raise WsError("Слишком большое сообщение")
+        if self.deflate and self.deflate["reset"]:
+            self._inflater = zlib.decompressobj(-zlib.MAX_WBITS)
+        return out
 
     def close(self):
         if self.closed:
