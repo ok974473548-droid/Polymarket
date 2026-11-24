@@ -902,7 +902,14 @@ select.input-sm { padding-right: 26px; }
 .tx-links { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 13px; }
 .tx-links a { display: inline-flex; align-items: center; gap: 6px; }
 .tx-table .c-a, .tx-table .c-b, .tx-table .c-c { white-space: nowrap; }
-.tx-table .c-c small { font-weight: 400; opacity: .8; }
+.tx-ev > span:not(.thumb) { display: block; overflow: visible; -webkit-line-clamp: unset; }
+.tx-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.tx-sub { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 4px; font-size: 12px; color: var(--muted); }
+.tx-money { display: block; font-variant-numeric: tabular-nums; }
+.tx-money.strong { font-weight: 700; }
+.tx-note { display: block; margin-top: 2px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tx-table .c-price { color: var(--text2); font-variant-numeric: tabular-nums; }
+.tx-row.is-closed .tx-title { color: var(--text2); }
 @media (max-width: 760px) {
   .tx-table, .tx-table tbody { display: block; }
   .tx-table thead { display: none; }
@@ -912,18 +919,20 @@ select.input-sm { padding-right: 26px; }
   .tx-table tr.tx-row.open { background: rgba(59, 130, 246, .06); border-bottom-color: transparent; }
   .tx-table .c-who { order: 1; flex: 1 1 0; }
   .tx-table .c-time { order: 2; }
+  .tx-table .c-price { order: 2; font-size: 12.5px; }
   .tx-table .c-status { order: 3; }
   .tx-table .c-mkt { order: 4; flex: 0 0 100%; }
-  .tx-table .c-side { order: 5; flex: none; }
   .tx-table .c-a { order: 6; flex: 1 1 0; }
   .tx-table .c-b { order: 7; flex: 1 1 0; }
   .tx-table .c-c { order: 8; flex: 1 1 0; }
   .tx-table .c-more { order: 9; flex: none; width: auto; }
+  .tx-table .c-a, .tx-table .c-b, .tx-table .c-c { align-self: flex-start; }
+  .tx-bets .c-b { flex-grow: 1.3; }
+  .tx-bets .c-more { order: 3; }   /* bets: the details button sits in the top line, the money gets the whole bottom line */
+  .tx-note .up, .tx-note .down { white-space: nowrap; }
   .tx-table td[data-label] { white-space: normal; }
   .tx-table td[data-label]::before { content: attr(data-label); display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 1px; line-height: 1.25; }
-  .tx-table .tx-verb { display: none; }
-  .tx-table .c-side { max-width: 118px; }
-  .tx-table .c-side .side { height: auto; min-height: 22px; white-space: normal; line-height: 1.25; padding: 3px 9px; }
+  .tx-table .tx-sub .side { height: auto; min-height: 20px; white-space: normal; line-height: 1.25; padding: 2px 9px; }
   .tx-table .ev-cell { min-width: 0; max-width: none; }
   .tx-table .c-who .trader-cell { display: flex; max-width: 100%; }
   .tx-table .c-who .trader-cell > span:not(.av) { min-width: 0; max-width: none; }

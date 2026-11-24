@@ -343,12 +343,12 @@ async function betsTab(host) {
   const status = ["open", "closed"].includes(q.get("status")) ? q.get("status") : "";
   host.innerHTML = `<div class="filters-row"><div class="seg">${[["", "Все"], ["open", "Открытые"], ["closed", "Закрытые"]].map(([k, l]) =>
     `<a href="${withQuery({ status: k || null })}" class="${status === k ? "cur" : ""}" data-keep-scroll>${l}</a>`).join("")}</div>
-    <span class="muted small">Результат — прибыль или убыток копии: по цене рынка для открытых, по факту для закрытых. Нажмите на строку — подробности.</span></div>
+    <span class="muted small">Стоимость — по цене рынка сейчас, под ней — результат. К выигрышу — сколько вернётся, если исход сыграет. Нажмите на строку — подробности.</span></div>
     <div class="tablewrap" id="b-table"><div class="sk-block tall"></div></div>`;
   try {
     const rows = await api("/api/autopilot/bets?status=" + status);
     const box = $("#b-table");
-    box.innerHTML = rows.length ? betsTable(rows) : `<div class="pad">${emptyBox("Ставок пока нет", "Копии появятся, когда игроки из состава сделают новые ставки.")}</div>`;
+    box.innerHTML = rows.length ? betsTable(rows, status) : `<div class="pad">${emptyBox("Ставок пока нет", "Копии появятся, когда игроки из состава сделают новые ставки.")}</div>`;
     bindRows(box, loadExit(rows));
   } catch (e) {
     $("#b-table").innerHTML = errorBox(e, false);
@@ -360,7 +360,7 @@ async function activityTab(host, d) {
   const status = ["filled", "skipped", "failed"].includes(q.get("status")) ? q.get("status") : "";
   host.innerHTML = `<div class="filters-row"><div class="seg">${[["", "Все"], ["filled", "Скопировано"], ["skipped", "Пропущено"], ["failed", "Ошибка"]].map(([k, l]) =>
     `<a href="${withQuery({ status: k || null })}" class="${status === k ? "cur" : ""}" data-keep-scroll>${l}</a>`).join("")}</div>
-    <span class="muted small">Каждая сделка игроков из состава: сколько потратил игрок и сколько вложили мы. Нажмите на строку — подробности.</span></div><div class="tablewrap" id="act"><div class="sk-block tall"></div></div>`;
+    <span class="muted small">Каждая сделка игроков из состава: сколько вложил игрок и сколько мы. Нажмите на строку — подробности.</span></div><div class="tablewrap" id="act"><div class="sk-block tall"></div></div>`;
   try {
     const rows = await api("/api/autopilot/events?status=" + status);
     const box = $("#act");

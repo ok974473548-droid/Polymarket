@@ -72,32 +72,40 @@ const playerCell = (wallet, name) => {
   const label = !name || /^0x[0-9a-f]{40}/i.test(name) ? short(wallet) : name; // Polymarket's default names are the address itself
   return `<a class="trader-cell" href="/traders/${esc(wallet)}" title="${esc(name || wallet)}">${avatar(wallet, "", name, 22)}<span>${esc(label)}</span></a>`;
 };
-const marketCell = (r, size, href) => `<a class="ev-cell" href="${href}">${thumb(r.image, size)}<span>${esc(r.title || "Рынок")}</span></a>`;
+const marketCell = (r, size, href, sub = "") =>
+  `<a class="ev-cell tx-ev" href="${href}">${thumb(r.image, size)}<span><span class="tx-title">${esc(r.title || "Рынок")}</span>${sub ? `<small class="tx-sub">${sub}</small>` : ""}</span></a>`;
+const outcomePill = (o) => `<span class="pill ${/^no$/i.test(o || "") ? "pill-red" : "pill-green"}">${esc(yesNo(o) || "—")}</span>`;
+// Money with a quiet second line: "$13,72" / "к выигрышу $28,00".
+const money = (main, sub = "", cls = "") => `<span class="tx-money ${cls}">${main}</span>${sub ? `<small class="tx-note">${sub}</small>` : ""}`;
 
 // ------------------------------------------------------------------ activity: every leader trade and what we did
 // opts: who ("Игрок" | "Трейдер"), filled ("Скопировано" | "Исполнено"), settings(r) -> html of a link or button, slip (text of the price tolerance)
 export function activityTable(rows, opts) {
   const who = opts.who || "Игрок";
   const whoLow = who.toLowerCase();
-  return `<table class="table tx-table tx-activity"><thead><tr><th>Время</th><th>${who}</th><th>Сделка</th><th>Рынок</th>
-    <th class="num">У ${who === "Игрок" ? "игрока" : "трейдера"}</th><th class="num">Копия</th><th>Итог</th><th class="c-more"><span class="sr">Подробности</span></th></tr></thead><tbody>
+  const whose = who === "Игрок" ? "игрока" : "трейдера";
+  return `<table class="table tx-table tx-activity"><thead><tr><th>Время</th><th>${who}</th><th>Рынок и сделка</th>
+    <th class="num">У ${whose}</th><th class="num">У нас</th><th>Итог</th><th class="c-more"><span class="sr">Подробности</span></th></tr></thead><tbody>
     ${rows.map((r) => {
       const buy = r.side === "buy";
       const out = (r.outcome && yesNo(r.outcome)) || "";
       const lead = r.leader_size != null && r.leader_price != null ? r.leader_size * r.leader_price : null;
-      const ours = r.status === "filled" && r.amount != null ? r.amount : null;
+      const filled = r.status === "filled" && r.amount != null;
       const why = r.status === "filled" ? null : reasonShort(r);
       const badge = r.status === "filled" ? `<span class="badge badge-green">${opts.filled || "Скопировано"}</span>`
         : `<span class="badge ${r.status === "failed" ? "badge-red" : "badge-gray"}" title="${esc(r.reason || "")}">${esc(why.label)}</span>`;
+      const side = `<span class="side ${buy ? "buy" : "sell"}">${buy ? "Купил" : "Продал"}${out ? ` «${esc(out)}»` : ""}</span>`;
+      // A buy: money in and what it pays if the outcome wins ($1 a share). A sale: money received.
+      const leadCell = lead == null ? "—" : money(usd(lead), buy ? `к выигрышу ${usd(r.leader_size)}` : "получено");
+      const ourCell = !filled ? '<span class="muted">—</span>' : money(usd(r.amount), buy ? `к выигрышу ${usd(r.shares)}` : "получено", "strong");
       return `<tr class="tx-row" data-key="ev${r.id}">
         <td class="c-time nowrap small" title="${dateTime(r.at)}">${when(r.at)}</td>
         <td class="c-who">${playerCell(r.leader, "")}</td>
-        <td class="c-side"><span class="side ${buy ? "buy" : "sell"}">${buy ? "Купил" : "Продал"}${out ? ` «${esc(out)}»` : ""}</span></td>
-        <td class="c-mkt">${marketCell(r, 24, `/event/${esc(r.event_slug)}`)}</td>
-        <td class="num c-a" data-label="${who} ${buy ? "потратил" : "получил"}">${lead == null ? "—" : `<small class="muted tx-verb">${buy ? "потратил" : "получил"}</small> ${usd(lead)}`}</td>
-        <td class="num c-b" data-label="Мы ${buy ? "вложили" : "получили"}">${ours == null ? '<span class="muted">—</span>' : `<small class="muted tx-verb">${buy ? "вложили" : "получили"}</small> <b>${usd(ours)}</b>`}</td>
+        <td class="c-mkt">${marketCell(r, 28, `/event/${esc(r.event_slug)}`, side)}</td>
+        <td class="num c-a" data-label="У ${whose}">${leadCell}</td>
+        <td class="num c-b" data-label="У нас">${ourCell}</td>
         <td class="c-status">${badge}</td>${toggleCell}</tr>
-        <tr class="tx-detail" hidden><td colspan="8">${activityDetail(r, { ...opts, whoLow, lead, buy, out })}</td></tr>`;
+        <tr class="tx-detail" hidden><td colspan="7">${activityDetail(r, { ...opts, whoLow, lead, buy, out })}</td></tr>`;
     }).join("")}</tbody></table>`;
 }
 
@@ -107,7 +115,8 @@ function activityDetail(r, o) {
     ${kv("Действие", `${verb}${o.out ? ` «${esc(o.out)}»` : ""}`)}
     ${kv("Акций", r.leader_size != null ? fmtShares(r.leader_size) : "—")}
     ${kv("Цена", cents(r.leader_price))}
-    ${kv(o.buy ? "Потратил" : "Получил", usd(o.lead), "tx-total")}
+    ${kv(o.buy ? "Вложил" : "Получил", usd(o.lead), "tx-total")}
+    ${o.buy && r.leader_size != null ? kv("К выигрышу", usd(r.leader_size)) : ""}
     ${r.leader_ts ? kv("Время", dateTime(r.leader_ts)) : ""}</div></section>`;
   let ours;
   if (r.status === "filled") {
@@ -117,7 +126,8 @@ function activityDetail(r, o) {
       ${kv("Средняя цена", cents(r.price))}
       ${kv("Сумма по цене", usd(gross))}
       ${kv("Комиссия", r.fee != null ? usd(r.fee) : "—")}
-      ${kv(o.buy ? "Всего вложили" : "Получили на счёт", usd(r.amount), "tx-total")}</div></section>`;
+      ${kv(o.buy ? "Всего вложили" : "Получили на счёт", usd(r.amount), "tx-total")}
+      ${o.buy ? kv("К выигрышу", usd(r.shares)) : ""}</div></section>`;
   } else {
     const plan = r.amount != null ? kv("Собирались вложить", usd(r.amount)) : r.shares != null ? kv("Собирались продать", fmtShares(r.shares) + " акций") : "";
     ours = `<section><h4>Наша копия</h4><div class="tx-kv">${kv("Копия", r.status === "failed" ? "не получилась" : "не делалась")}${plan}</div></section>`;
@@ -149,25 +159,32 @@ function activityDetail(r, o) {
 }
 
 // ------------------------------------------------------------------ autopilot bets: our money in each copy
-export function betsTable(rows) {
-  return `<table class="table tx-table tx-bets"><thead><tr><th>Открыта</th><th>Игрок</th><th>Рынок</th><th class="num">Вложено</th>
-    <th class="num">Стоимость сейчас</th><th class="num">Результат</th><th>Статус</th><th class="c-more"><span class="sr">Подробности</span></th></tr></thead><tbody>
+export function betsTable(rows, status = "") {
+  // As the portfolio positions: entry -> current price, money in, value now (result under it), what it pays if it wins.
+  // Closed copies: the value is what came back, the last column is the outcome.
+  const closedOnly = status === "closed";
+  return `<table class="table tx-table tx-bets"><thead><tr><th>Рынок</th><th>Игрок</th><th class="num">Ср. → ${closedOnly ? "выход" : "текущая"}</th>
+    <th class="num">Вложено</th><th class="num">${closedOnly ? "Получено" : "Стоимость"}</th><th class="num">${closedOnly ? "Итог" : "К выигрышу"}</th>
+    <th class="c-more"><span class="sr">Подробности</span></th></tr></thead><tbody>
     ${rows.map((r) => {
       const open = r.status === "open";
       const res = r.result;
-      const status = open ? '<span class="badge badge-gray">Открыта</span>'
-        : r.resolved ? ((r.pnl || 0) > 0 ? '<span class="badge badge-green">Выигрыш</span>' : '<span class="badge badge-red">Проигрыш</span>')
+      const resLine = res == null ? "" : `<span class="${res >= 0 ? "up" : "down"}">${signedUsd(res)} (${pctOf(res, r.cost)})</span>`;
+      const exit = open ? r.price : r.bought ? r.proceeds / r.bought : null;
+      const nowCell = open ? money(r.value == null ? "—" : usd(r.value), resLine) : money(usd(r.proceeds), resLine);
+      const sold = open && r.proceeds > 1e-6 ? `продано на ${usd(r.proceeds)}` : ""; // keeps the row's sum readable: value + sold - in
+      const last = open ? money(usd(r.shares)) : r.resolved
+        ? ((r.pnl || 0) > 0 ? '<span class="badge badge-green">Выигрыш</span>' : '<span class="badge badge-red">Проигрыш</span>')
         : `<span class="badge ${(r.pnl || 0) >= 0 ? "badge-green" : "badge-red"}">Продана</span>`;
-      const now = open ? (r.value == null ? "—" : usd(r.value)) : `<small class="muted tx-verb">получено</small> ${usd(r.proceeds)}`;
-      return `<tr class="tx-row" data-key="bet${r.id}" data-bet="${r.id}">
-        <td class="c-time nowrap small" title="${dateTime(r.opened)}">${when(r.opened)}</td>
+      const sub = `${outcomePill(r.outcome)} ${open ? fmtShares(r.shares) + " акц." : "закрыта " + when(r.closed)}`;
+      return `<tr class="tx-row${open ? "" : " is-closed"}" data-key="bet${r.id}" data-bet="${r.id}">
+        <td class="c-mkt">${marketCell(r, 32, `/event/${esc(r.event_slug)}?contract=${esc(r.condition_id)}`, sub)}</td>
         <td class="c-who">${playerCell(r.wallet, r.player)}</td>
-        <td class="c-mkt">${marketCell({ ...r, title: `${r.title}${r.outcome ? " · " + yesNo(r.outcome) : ""}` }, 26, `/event/${esc(r.event_slug)}?contract=${esc(r.condition_id)}`)}</td>
-        <td class="num c-a" data-label="Вложено">${usd(r.cost)}</td>
-        <td class="num c-b" data-label="${open ? "Стоимость" : "Получено"}">${now}</td>
-        <td class="num c-c ${res == null ? "" : res >= 0 ? "up" : "down"}" data-label="Результат">${res == null ? "—" : `<b>${signedUsd(res)}</b> <small>${pctOf(res, r.cost)}</small>`}</td>
-        <td class="c-status">${status}</td>${toggleCell}</tr>
-        <tr class="tx-detail" hidden><td colspan="8">${betDetail(r)}</td></tr>`;
+        <td class="num c-price nowrap">${cents(r.entry)} → ${cents(exit)}</td>
+        <td class="num c-a" data-label="Вложено">${money(usd(r.cost), sold)}</td>
+        <td class="num c-b" data-label="${open ? "Стоимость" : "Получено"}">${nowCell}</td>
+        <td class="num c-c" data-label="${open ? "К выигрышу" : "Итог"}">${last}</td>${toggleCell}</tr>
+        <tr class="tx-detail" hidden><td colspan="7">${betDetail(r)}</td></tr>`;
     }).join("")}</tbody></table>`;
 }
 
