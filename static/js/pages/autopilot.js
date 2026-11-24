@@ -463,6 +463,19 @@ function checkValue(c) {
   return esc(String(c.value));
 }
 
+// One of the player's own bets: what it cost, entry -> exit price and how it ended (open ones at the current price).
+function recentBet(b) {
+  const open = b.state === "open";
+  const end = open ? b.mark : b.exit;
+  const ret = end != null && b.entry ? (end - b.entry) / b.entry : null;
+  const pct = ret == null ? "" : (ret >= 0 ? "+" : "−") + Math.abs(ret * 100).toFixed(Math.abs(ret) < 0.1 ? 1 : 0).replace(".", ",") + "%";
+  const [label, tone] = open ? ["идёт", ret == null ? "" : ret >= 0 ? "up" : "down"] : end === 1 ? ["выигрыш", "up"] : end === 0 ? ["проигрыш", "down"]
+    : ["продана", ret >= 0 ? "up" : "down"];
+  return `<div class="pb-row"><div class="pb-main"><a href="/event/${esc(b.event_slug)}">${esc(b.title)}</a>
+      <small><span class="pill ${/^no$/i.test(b.outcome || "") ? "pill-red" : "pill-green"}">${esc(yesNo(b.outcome) || "—")}</span> ${dateTime(b.opened).slice(0, -3)} · ${usd(b.entry * b.size, 0)}</small></div>
+    <div class="pb-num"><b>${cents(b.entry)} → ${end == null ? "—" : cents(end)}</b><small class="${tone}">${label}${pct ? " · " + pct : ""}</small></div></div>`;
+}
+
 async function playerDialog(wallet, main = $("#main")) {
   const dl = modal("Оценка игрока", '<div class="sk-block tall"></div>', { wide: true });
   let p;
@@ -500,9 +513,9 @@ async function playerDialog(wallet, main = $("#main")) {
       <div><dt>Открыто сейчас</dt><dd>${m.open_n} <small>${sp100(m.open_r)}</small></dd></div></dl>
     ${months.length ? `<h3 class="sub-h">По месяцам</h3><div class="months">${months.map((x) => `<div title="${x.n} ставок"><i style="height:${Math.max(4, x.wr * 100)}%" class="${x.wr >= 0.7 ? "g" : x.wr >= 0.55 ? "y" : "r"}"></i><b>${p100(x.wr)}</b><small>${x.month.slice(5)}.${x.month.slice(2, 4)}</small></div>`).join("")}</div>` : ""}
     ${f.bets_total ? `<p class="muted small">Тип: на краткосрочных крипторынках ${p100(f.short_share)} ставок, рынков с позициями на обе стороны ${p100(f.both_sides)}, входов дороже $0,95 — ${p100(f.sniper_share)}, сделок в день ${num(f.trades_day, 1)}, продаж ${p100(f.sell_share)}.</p>` : ""}
-    ${p.recent_bets?.length ? `<h3 class="sub-h">Последние ставки игрока</h3><div class="tablewrap"><table class="table"><thead><tr><th>Вход</th><th>Рынок</th><th class="num">Цена</th><th class="num">Итог</th></tr></thead><tbody>
-      ${p.recent_bets.slice(0, 12).map((b) => `<tr><td class="small nowrap">${dateTime(b.opened)}</td><td><a href="/event/${esc(b.event_slug)}">${esc(b.title)}</a> <small class="muted">${esc(yesNo(b.outcome))}</small></td>
-        <td class="num">${cents(b.entry)}</td><td class="num">${b.state === "open" ? `<span class="muted">идёт · ${cents(b.mark)}</span>` : b.exit > b.entry ? `<span class="up">${cents(b.exit)}</span>` : `<span class="down">${cents(b.exit)}</span>`}</td></tr>`).join("")}</tbody></table></div>` : ""}
+    ${p.recent_bets?.length ? `<h3 class="sub-h">Последние ставки игрока</h3>
+      <p class="muted small">Цена за акцию при входе → при выходе. Выход по $1 — исход сыграл, по $0 — проиграл.</p>
+      <div class="pb-list">${p.recent_bets.slice(0, 12).map(recentBet).join("")}</div>` : ""}
     <div class="modal-actions">${p.card ? "" : `<button class="btn" data-act="bench" data-w="${wallet}">${icon("plus", 14)} На скамейку</button>`}
       <a class="btn" href="/traders/${wallet}">${icon("user", 14)} Профиль</a><button class="btn btn-primary" data-close>Закрыть</button></div>`;
   body.addEventListener("click", (e) => {

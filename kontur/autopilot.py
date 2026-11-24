@@ -45,6 +45,36 @@ LIMITS = {
     "inactive_days": (int, 3, 90), "rotation": (bool,), "rotation_margin": (float, 5, 50), "min_tenure_days": (int, 3, 120),
     "max_swaps_per_day": (int, 1, 10), "cooldown_days": (int, 0, 365),
 }
+NAMES = {  # as in the settings dialog, for error messages
+    "active_count": "Игроков в составе",
+    "bench_size": "Мест на скамейке",
+    "copy_pct": "Копия ставки, % доли игрока",
+    "event_cap_pct": "Лимит на одно событие, % бюджета",
+    "min_wr": "Доля выигрышей копий, от",
+    "min_lb": "Надёжная граница (Уилсон), от",
+    "min_bets": "Решённых ставок за 180 дней, от",
+    "min_roi": "Доходность на ставку, от",
+    "min_edge": "Преимущество над ценой, от",
+    "max_top_share": "Доля прибыли от лучшей ставки, до",
+    "min_recent": "Новых ставок за 14 дней, от",
+    "max_slip": "Проскальзывание через 60 с, до",
+    "price_min": "Цена ставки, от",
+    "price_max": "Цена ставки, до",
+    "min_leader_trade": "Сделка игрока, от",
+    "max_days_to_end": "До разрешения рынка, дней",
+    "copy_slip": "Цена копии хуже цены игрока, не больше",
+    "probation_days": "Срок испытания, дней",
+    "probation_min_bets": "Новых ставок за испытание, от",
+    "early_days": "Досрочно — после дней на скамейке",
+    "loss_streak": "Проигрышей подряд",
+    "recent_min_wr": "Доля выигрышей последних 20 копий, ниже",
+    "max_drawdown_pct": "Убыток копий игрока, % его доли",
+    "inactive_days": "Нет новых ставок, дней",
+    "rotation_margin": "Ротация, если сильнее на баллов",
+    "min_tenure_days": "Ротация не раньше, дней в составе",
+    "max_swaps_per_day": "Замен в сутки, не больше",
+    "cooldown_days": "Выбывший может вернуться через, дней",
+}
 LOG_KINDS = {"enable", "disable", "bench", "promote", "bootstrap", "pass", "fail", "replace", "rotate", "retire", "ban",
              "unban", "pin", "unpin", "settings", "release", "done", "manual"}
 
@@ -74,7 +104,8 @@ def update_settings(db, uid, body):
         else:
             v = pm.num(value)
             if v is None or not spec[1] <= v <= spec[2]:
-                raise ValueError(f"Значение «{key}» должно быть от {spec[1]} до {spec[2]}")
+                lo, hi = (f"{x:g}".replace(".", ",") for x in spec[1:3])
+                raise ValueError(f"«{NAMES.get(key, key)}»: допустимо от {lo} до {hi}")
             v = int(round(v)) if spec[0] is int else round(float(v), 4)
         if s.get(key) != v:
             s[key] = v
@@ -229,14 +260,9 @@ def copy_sell(db, uid, ct, trade, info):
                                (uid, ct["leader"], info["token"])))
     if not bet:
         return "skipped", "У автопилота нет копии этой позиции", {}
-    sold = trade.get("size") or 0
-    fraction = 1.0
-    try:
-        page = pm.positions_page(user=ct["leader"], cond=info["condition"], status="OPEN", limit=20)
-        after = sum(r["current_size"] or 0 for r in page["rows"] if str(r.get("token_id")) == info["token"])
-        fraction = min(1.0, sold / (after + sold)) if after + sold > 0 else 1.0
-    except (pm.UpstreamError, LookupError, ValueError):
-        pass
+    # Until 1.4.4 the Data API position was taken as post-sale even when it was not updated yet: a full exit of the
+    # player sold only about half of the copy.
+    fraction = copytrade.sell_fraction(ct["leader"], info, trade)
     have = trading.available_shares(db, ct["account_id"], info["token"])
     shares = round(min(have, bet["shares"] * fraction if fraction < 0.999 else bet["shares"]), 6)
     if shares <= EPS:
@@ -341,7 +367,8 @@ def shadow_stats(db, wallet, since):
             if b["mark"] is not None:
                 open_r.append(scout.copy_result(b["entry"], b["mark"], slip or scout.DEFAULT_SLIP, False)[0])
         else:
-            r, _ = scout.copy_result(b["entry"], b["exit"], slip or scout.DEFAULT_SLIP, b["state"] == "resolved")
+            x, paid = scout.decided_exit(b)
+            r, _ = scout.copy_result(b["entry"], x, slip or scout.DEFAULT_SLIP, paid)
             if abs(r) >= scout.PUSH:
                 decided.append(r)
     wins = sum(1 for r in decided if r > 0)
@@ -708,6 +735,8 @@ def player(db, uid, wallet):
         out["verdict"] = scout.judge(cand["metrics"], cand["kind"], s)
     keys = ("title", "outcome", "event_slug", "entry", "exit", "state", "mark", "opened", "closed", "size")
     recent = [{k: b[k] for k in keys} for b in sorted(scout.stored_bets(db, wallet), key=lambda b: -b["opened"])[:25]]
+    for b in recent:
+        b["exit"] = scout.settled(b["exit"])  # bets stored before 1.4.4 keep the rounding noise: 0.99990 is a payout of $1
     out["recent_bets"] = recent
     out["copies"] = _copies(db, uid, wallet)[-50:][::-1] if p else []
     return out

@@ -129,7 +129,7 @@ def job_settle(db):
     conds = [r[0] for r in db.execute("""SELECT DISTINCT condition_id FROM positions WHERE status='open'
                                          UNION SELECT DISTINCT condition_id FROM orders WHERE status='open'""")]
     for i in range(0, len(conds), 20):
-        markets = pm.markets_by_condition(conds[i:i + 20])
+        markets = pm.markets_by_condition(conds[i:i + 20], closed=True)
         for cond, raw in markets.items():
             if raw.get("closed"):
                 trading.settle(db, cond, raw)

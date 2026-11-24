@@ -387,6 +387,29 @@ class Server(unittest.TestCase):
         self.assertEqual(json.loads(r.read())["version"], app.VERSION)
         self.assertIs(c.sock, sock)
 
+    def test_bad_requests_answer_in_russian(self):
+        c = self.conn()
+        c.request("POST", "/api/auth/login", body=b"not json", headers={"Content-Type": "application/json"})
+        r = c.getresponse()
+        self.assertEqual(r.status, 400)
+        self.assertIn("JSON", json.loads(r.read())["error"])  # was Python's "Expecting value: line 1 column 1"
+        self.assertEqual(app.user_message(ValueError("invalid literal for int() with base 10: 'x'")), "Некорректные данные в запросе")
+        self.assertEqual(app.user_message(ValueError("Рынок закрыт для торговли")), "Рынок закрыт для торговли")
+
+    def test_dropped_connection_is_not_logged(self):
+        srv = app.Server.__new__(app.Server)
+        with patch("socketserver.BaseServer.handle_error") as base:
+            try:
+                raise ConnectionResetError(104, "Connection reset by peer")
+            except ConnectionResetError:
+                srv.handle_error(None, ("127.0.0.1", 1))
+            base.assert_not_called()  # a phone closing its connection is not a server error
+            try:
+                raise KeyError("real bug")
+            except KeyError:
+                srv.handle_error(None, ("127.0.0.1", 1))
+            base.assert_called_once()
+
     def test_keep_alive_requests_are_fast(self):
         # headers and body leave in separate writes: without TCP_NODELAY each request waits ~40 ms for a delayed ACK
         c = self.conn()

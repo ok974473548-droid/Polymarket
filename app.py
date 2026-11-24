@@ -10,6 +10,7 @@ import mimetypes
 import os
 import queue
 import re
+import sys
 import threading
 import time
 from http.cookies import SimpleCookie
@@ -247,6 +248,15 @@ def get_routes(db, path, query, user):
     if path == "/api/notifications":
         return notify.listing(db, need(user)["id"])
     raise HttpError(404, "Нет такого запроса")
+
+
+def user_message(exc):
+    """Our own errors are written in Russian for the person; Python's own (int('x'), a None) are not shown as they are."""
+    text = str(exc)
+    if re.search("[а-яА-ЯёЁ]", text):
+        return text
+    LOG.info("bad request data: %s", text)
+    return "Некорректные данные в запросе"
 
 
 def autopilot_get(db, path, query, uid):
@@ -506,7 +516,10 @@ class Handler(BaseHTTPRequestHandler):
                     raise HttpError(403, "Запрос с другого сайта отклонён")
                 if self.headers.get_content_type() != "application/json":
                     raise HttpError(415, "Нужен JSON")
-                body = json.loads(raw or b"{}")
+                try:
+                    body = json.loads(raw or b"{}")
+                except ValueError:
+                    raise HttpError(400, "Запрос не читается: ожидается JSON") from None
                 if not isinstance(body, dict):
                     raise HttpError(400, "Ожидается объект JSON")
                 result = post_routes(db, path, body, user, self)
@@ -522,7 +535,7 @@ class Handler(BaseHTTPRequestHandler):
         except pm.UpstreamError as exc:
             self.json(502, {"error": str(exc)})
         except (ValueError, TypeError) as exc:
-            self.json(400, {"error": str(exc) or "Некорректный запрос"})
+            self.json(400, {"error": user_message(exc)})
         except Exception:  # noqa: BLE001
             LOG.exception("request failed: %s", path)
             self.json(500, {"error": "Внутренняя ошибка сервера"})
@@ -597,6 +610,16 @@ class Handler(BaseHTTPRequestHandler):
         return self.send(200, file.read_bytes(), ctype, extra)
 
 
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        # A browser or phone dropping a keep-alive connection is normal, not a failure worth a traceback in the log.
+        if isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError, ConnectionAbortedError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Контур рынка")
     parser.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"))
@@ -606,8 +629,7 @@ def main():
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     store.init(args.db)
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
-    server.daemon_threads = True
+    server = Server((args.host, args.port), Handler)
     server.db_path = args.db
     if not args.no_worker:
         for jobs, name in ((FAST, "fast"), (SLOW, "slow")):

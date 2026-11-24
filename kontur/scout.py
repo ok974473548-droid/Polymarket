@@ -104,6 +104,22 @@ def _clamp(x, lo=0.0, hi=1.0):
     return max(lo, min(hi, x))
 
 
+SETTLE_EDGE = 0.0005  # exits this close to $0 / $1 are payouts at resolution (the Data API rounds the average entry price)
+
+
+def settled(x):
+    """An exit price with the rounding noise of a payout removed: 0.99990 -> 1.0 (until 1.4.4 such exits stayed as they were)."""
+    if x is None:
+        return None
+    return 1.0 if x >= 1 - SETTLE_EDGE else 0.0 if x <= SETTLE_EDGE else x
+
+
+def decided_exit(b):
+    """Exit price of a decided bet and whether it was paid out at resolution (no fee on the way out)."""
+    x = settled(b["exit"])
+    return x, b["state"] == "resolved" or x in (0.0, 1.0)
+
+
 # ---------------------------------------------------------------- bets from positions
 
 def bet_from_position(r, now):
@@ -126,7 +142,7 @@ def bet_from_position(r, now):
     if str(r.get("status")).upper() == "CLOSED":
         realized = r.get("realized_pnl") or 0.0
         bet["state"] = "closed"
-        bet["exit"] = _clamp(entry + realized / size)
+        bet["exit"] = settled(_clamp(entry + realized / size))
         bet["closed"] = float(last)
     elif r.get("redeemable"):
         price = r.get("current_price")
@@ -236,7 +252,8 @@ def _decided(bets, slip, start, end):
             continue
         if not PRICE_MIN <= b["entry"] <= PRICE_MAX or b["entry"] * b["size"] < MIN_COST or b["short"]:
             continue
-        r, edge = copy_result(b["entry"], b["exit"], slip, b["state"] == "resolved" or b["exit"] in (0.0, 1.0))
+        x, paid = decided_exit(b)
+        r, edge = copy_result(b["entry"], x, slip, paid)
         if abs(r) < PUSH:
             continue
         out.append({"closed": b["closed"], "opened": b["opened"], "r": r, "edge": edge, "entry": b["entry"],
@@ -562,7 +579,8 @@ def _after(bets, slip, as_of, now):
             r, _ = copy_result(b["entry"], b["mark"], slip, False)
             out.append({"r": r, "decided": False})
         else:
-            r, _ = copy_result(b["entry"], b["exit"], slip, b["state"] == "resolved")
+            x, paid = decided_exit(b)
+            r, _ = copy_result(b["entry"], x, slip, paid)
             if abs(r) >= PUSH:
                 out.append({"r": r, "decided": True})
     return out

@@ -292,9 +292,13 @@ def event_by_slug(db, value):
     return cached(db, url, 30, lambda: event(fetch(url)))
 
 
-def markets_by_condition(conditions):
-    """Fresh (uncached) state of up to 20 markets, used for settlement and order checks."""
-    params = [("condition_ids", c) for c in conditions] + [("limit", 50)]
+def markets_by_condition(conditions, closed=False):
+    """Fresh (uncached) state of up to 20 markets, used for settlement and order checks.
+
+    Gamma returns either open or closed markets here, never both: without closed=true a resolved market is
+    simply missing (until 1.4.4 settlement asked without it and never saw a resolved market).
+    """
+    params = [("condition_ids", c) for c in conditions] + [("limit", 50)] + ([("closed", "true")] if closed else [])
     rows = fetch(GAMMA + "/markets?" + urlencode(params), gap=0.2)
     return {text(r.get("conditionId"), 80).lower(): r for r in rows if isinstance(r, dict)} if isinstance(rows, list) else {}
 
@@ -307,8 +311,12 @@ def market_by_token(tok):
     tok = token(tok)
     if tok in _token_markets:
         return _token_markets[tok]
-    rows = fetch(GAMMA + "/markets?" + urlencode({"clob_token_ids": tok}), gap=0.2)
-    raw = rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], dict) else None
+    raw = None
+    for closed in ((), (("closed", "true"),)):  # Gamma lists a closed market only when asked for closed ones
+        rows = fetch(GAMMA + "/markets?" + urlencode((("clob_token_ids", tok),) + closed), gap=0.2)
+        raw = rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], dict) else None
+        if raw is not None:
+            break
     if raw is None:
         raise LookupError("Рынок этого исхода не найден")
     if len(_token_markets) > 5000:

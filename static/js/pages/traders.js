@@ -127,7 +127,7 @@ async function trio() {
     movers.sort((a, b) => Math.abs(b.c.change24h) - Math.abs(a.c.change24h));
     host.innerHTML = `
       <div class="card stack"><div class="kpi"><div><div class="kpi-val">${icon("trend", 16)} ${usd(v.total24h, 0)}</div><small>Объём Polymarket за 24 ч ${delta(move)}</small></div>${sparkline((v.chart || []).map((p) => p[1]))}</div>
-        <div class="kpi"><div><div class="kpi-val">${icon("vol", 16)} ${home.markets?.count != null ? num(home.markets.count) : "—"}</div><small>Доступные рынки</small></div>${sparkline((home.markets?.series || []).map((p) => p[1]))}</div></div>
+        <div class="kpi"><div><div class="kpi-val">${icon("vol", 16)} ${home.markets?.count != null ? num(home.markets.count) : home.markets?.scanning ? num(home.markets.seen) + "…" : "—"}</div><small>${home.markets?.count == null && home.markets?.scanning ? "Подсчёт рынков идёт" : "Доступные рынки"}</small></div>${sparkline((home.markets?.series || []).map((p) => p[1]))}</div></div>
       <div class="card"><div class="card-head"><h3>${icon("chart", 15)} Рынки в движении</h3><a href="/markets?sort=volume" class="small">Все ${icon("right", 12)}</a></div>
         ${movers.slice(0, 3).map(({ e, c }) => `<a class="mover" href="/event/${esc(e.slug)}?contract=${c.condition}">${thumb(c.image || e.image, 24)}<span>${esc(e.title)}</span><em>${esc(c.label || "Да")}</em>${delta(c.change24h * 100, 1, " п.п.")}</a>`).join("") || '<p class="muted small">Нет данных</p>'}</div>
       <div class="card"><div class="card-head"><h3>Инструменты</h3></div>

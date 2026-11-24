@@ -48,6 +48,20 @@ class MathTests(unittest.TestCase):
         self.assertAlmostEqual(r, edge / (0.61 + fee))
         self.assertLess(scout.copy_result(0.60, 0.0, 0.01, True)[0], -0.99)
 
+    def test_payout_exit_is_exact(self):
+        # A redeemed position: the Data API's average price is rounded (0.602), so entry + realized / size = 0.99990.
+        size = 33.8983
+        won = scout.bet_from_position(pos("CLOSED", 0.602, size, realized=(0.9999049 - 0.602) * size), NOW)
+        self.assertEqual(won["exit"], 1.0)  # until 1.4.4: 0.9999049 (shown as "$1,000" in the player dialog)
+        lost = scout.bet_from_position(pos("CLOSED", 0.36, 59.03, realized=-(0.36 - 0.0002) * 59.03), NOW)
+        self.assertEqual(lost["exit"], 0.0)
+        sold = scout.bet_from_position(pos("CLOSED", 0.60, 100, realized=0.395 * 100), NOW)
+        self.assertAlmostEqual(sold["exit"], 0.995)  # a real sale near $1 is kept
+        # Old stored bets with the noise are settled on use: a payout has no exit fee.
+        x, paid = scout.decided_exit({"state": "closed", "exit": 0.9999049})
+        self.assertEqual((x, paid), (1.0, True))
+        self.assertEqual(scout.decided_exit({"state": "closed", "exit": 0.995}), (0.995, False))
+
     def test_positions_to_bets(self):
         win = scout.bet_from_position(pos("CLOSED", 0.6, 100, realized=40), NOW)
         self.assertEqual((win["state"], win["exit"]), ("closed", 1.0))
@@ -248,6 +262,21 @@ class AutopilotTests(Base):
         fee = self.db.execute("SELECT fees FROM orders WHERE id=?", (extra["order_id"],)).fetchone()[0]
         self.assertGreater(fee, 0)
         self.assertAlmostEqual(ev["fee"], fee)  # the copy's fee comes with the event for the details row
+
+    def test_sell_when_data_api_is_behind_the_stream(self):
+        autopilot.review(self.db, self.uid)
+        leader = self.players("active")[0]
+        (status, reason, _), ct, info = self.copy_buy(leader)
+        self.assertEqual(status, "filled", reason)
+        held = trading.available_shares(self.db, self.aid, YES)
+        # The player sold all 1000 shares; the Data API still shows them (its last event is older than the sale).
+        stale = {"rows": [{"token_id": YES, "current_size": 1000.0, "last_event_at": self.now - 600}], "next": None}
+        sale = {"side": "SELL", "price": 0.38, "size": 1000, "timestamp": self.now}
+        with patch.object(pm, "positions_page", return_value=stale):
+            status, reason, extra = autopilot.copy_sell(self.db, self.uid, ct, sale, info)
+        self.assertEqual(status, "filled", reason)
+        self.assertAlmostEqual(extra["shares"], held, places=4)  # before 1.4.4: half (1000 / (1000 + 1000))
+        self.assertEqual(store.one(self.db.execute("SELECT status FROM ap_bets WHERE wallet=?", (leader,)))["status"], "closed")
 
     def lose(self, leader, count):
         for i in range(count):

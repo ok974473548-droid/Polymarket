@@ -7,7 +7,7 @@
 ## Запуск и проверка
 - Только Python 3.11+, без сторонних пакетов: `python app.py` → http://127.0.0.1:8787 (`--db`, `--port`, `--no-worker`).
 - Docker: `docker compose up -d --build` (том `kontur-data`).
-- Тесты: `PYTHONPATH=.:tests python -m unittest tests.test_trading tests.test_autopilot tests.test_data tests.test_speed` (106 тестов, без сети).
+- Тесты: `PYTHONPATH=.:tests python -m unittest tests.test_trading tests.test_autopilot tests.test_data tests.test_speed` (113 тестов, без сети).
 - Замер скорости: `PYTHONPATH=. python research/bench_perf.py` (сеть, сервер, база, поток сделок).
 - Переменные: `KONTUR_DB`, `HOST`, `PORT`, `KONTUR_SCOUT_THREADS` (6), `KONTUR_SCOUT_GAP` (0.06 с), `KONTUR_STATS_THREADS` (4), `KONTUR_STATS_GAP` (0.06 с).
 

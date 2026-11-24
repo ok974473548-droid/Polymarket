@@ -643,7 +643,8 @@ select.input-sm { padding-right: 26px; }
 .wz-body { display: flex; flex-direction: column; gap: 14px; }
 .wz-nav { display: flex; justify-content: space-between; margin-top: 8px; }
 .wz-pick { display: flex; flex-direction: column; gap: 6px; }
-.wz-top { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; }
+.wz-top { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr)); gap: 6px; }
+.wz-grid > *, .wz-body > *, .wz-top > * { min-width: 0; }
 .wz-trader { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--well); font-size: 13px; text-align: left; }
 .wz-trader > span:not(.av) { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .wz-trader b { font-size: 12px; }
@@ -678,7 +679,7 @@ select.input-sm { padding-right: 26px; }
 }
 @media (max-width: 1100px) {
   .pf-chip { display: none; }
-  .home-grid, .event-layout, .profile, .wz-grid { grid-template-columns: 1fr; }
+  .home-grid, .event-layout, .profile, .wz-grid { grid-template-columns: minmax(0, 1fr); }
   .ev-side, .pside, .wz-summary { position: static; }
   .ft-body { grid-template-columns: 1fr; }
   .trio { grid-template-columns: 1fr 1fr; }
@@ -940,4 +941,26 @@ select.input-sm { padding-right: 26px; }
   .tx-table tr.tx-detail[hidden] { display: none; }
   .tx-table tr.tx-detail > td { display: block; padding: 0 10px 12px; }
   .tx-more { padding: 12px 14px; }
+}
+
+/* 1.4.4: the player's recent bets in the player dialog (a list, readable on a phone) */
+.pb-list { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.pb-row { display: flex; align-items: center; gap: 14px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.pb-row:last-child { border-bottom: 0; }
+.pb-main { flex: 1; min-width: 0; }
+.pb-main a { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13.5px; }
+.pb-main small { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 3px; color: var(--muted); font-size: 12px; }
+.pb-num { flex: none; text-align: right; font-variant-numeric: tabular-nums; }
+.pb-num b { display: block; font-weight: 600; font-size: 13.5px; white-space: nowrap; }
+.pb-num small { display: block; font-size: 12px; margin-top: 2px; }
+
+/* 1.4.4: the traders table fits a phone: trader, win rate and PnL (the rest from 761 px up) */
+@media (max-width: 760px) {
+  .traders-table th:nth-child(4), .traders-table td:nth-child(4), .traders-table th:nth-child(5), .traders-table td:nth-child(5),
+  .traders-table th:nth-child(6), .traders-table td:nth-child(6), .traders-table th:nth-child(8), .traders-table td:nth-child(8),
+  .traders-table th:nth-child(2), .traders-table td:nth-child(2) { display: none; }
+  .traders-table td:nth-child(3) { min-width: 0; }
+  .traders-table .trader-cell { gap: 8px; }
+  .traders-table .trader-cell b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 96px; display: inline-block; vertical-align: middle; }
+  .traders-table th, .traders-table td { padding-left: 6px; padding-right: 6px; }
 }

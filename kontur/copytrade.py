@@ -19,6 +19,7 @@ from . import polymarket as pm
 from . import trading
 
 MIN_COPY = 1.0
+COPY_MAX_AGE = 15 * 60  # a buy older than this (seen late by the polling fallback, e.g. after a restart) is not copied
 
 
 def _day_start():
@@ -109,7 +110,7 @@ def _validate(body):
     if sizing == "fixed":
         amount = pm.num(body.get("amount"))
         if amount is None or amount < 1.1 or amount > 1e7:
-            raise ValueError("Сумма на сделку: минимум $1,1")
+            raise ValueError("Сумма на сделку: от $1,10 до $10 000 000")
         out["amount"] = round(amount, 2)
     else:
         pct = pm.num(body.get("percent"))
@@ -336,23 +337,30 @@ def _copy_buy(db, uid, ct, trade, info):
                           "shares": order["filled"], "price": order["avg"], "order_id": order["id"]}
 
 
+def sell_fraction(leader, info, trade):
+    """Share of the leader's position that a sale took (1.0 when the Data API cannot tell).
+
+    A sale seen on the live stream is usually newer than the Data API position: then the size there is still
+    the pre-sale one. Used by copy profiles and the autopilot alike.
+    """
+    sold = trade.get("size") or 0
+    try:
+        page = pm.positions_page(user=leader, cond=info["condition"], status="OPEN", limit=20)
+    except (pm.UpstreamError, LookupError, ValueError):
+        return 1.0
+    rows = [r for r in page["rows"] if str(r.get("token_id")) == info["token"]]
+    after = sum(r["current_size"] or 0 for r in rows)
+    last = max((pm.num(r.get("last_event_at")) or 0 for r in rows), default=0)
+    stale = bool(rows) and 0 < last < int(trade.get("timestamp") or 0)
+    before = after if stale else after + sold
+    return min(1.0, sold / before) if before > 0 else 1.0
+
+
 def _copy_sell(db, uid, ct, trade, info):
     have = trading.available_shares(db, ct["account_id"], info["token"])
     if have <= 1e-6:
         return "skipped", "В профиле нет этой позиции", {}
-    sold = trade["size"] or 0
-    fraction = 1.0
-    try:
-        page = pm.positions_page(user=ct["leader"], cond=info["condition"], status="OPEN", limit=20)
-        rows = [r for r in page["rows"] if str(r.get("token_id")) == info["token"]]
-        after = sum(r["current_size"] or 0 for r in rows)
-        last = max((pm.num(r.get("last_event_at")) or 0 for r in rows), default=0)
-        # A sale seen on the live stream can be newer than the Data API position: then the size is still pre-sale.
-        stale = bool(rows) and 0 < last < int(trade.get("timestamp") or 0)
-        before = after if stale else after + sold
-        fraction = min(1.0, sold / before) if before > 0 else 1.0
-    except (pm.UpstreamError, LookupError, ValueError):
-        pass
+    fraction = sell_fraction(ct["leader"], info, trade)
     shares = round(have * fraction, 6)
     if shares <= 1e-6:
         return "skipped", "Слишком маленький объём продажи", {}
@@ -400,8 +408,13 @@ def handle(db, ct, trade, uid, *, infos=None, source="poll", detected=None):
             if tok not in infos:
                 infos[tok] = trading.market_info(cond, tok)
             info = infos[tok]
+            age = time.time() - (pm.num(trade.get("timestamp")) or time.time())
             if info["closed"] or not info["accepting"]:
                 status, reason, extra = "skipped", "Рынок уже закрыт", {}
+            elif (trade.get("side") or "").upper() == "BUY" and age > COPY_MAX_AGE:
+                # The price may have gone anywhere since; a late sale is still mirrored (better to exit late than to stay in).
+                ago = f"{int(age // 60)} мин" if age < 7200 else f"{int(age // 3600)} ч"
+                status, reason, extra = "skipped", f"Сделка была {ago} назад — покупку копировать поздно", {}
             elif ct.get("autopilot"):
                 from . import autopilot  # imported here: autopilot builds on this module
                 side = (trade.get("side") or "").upper()

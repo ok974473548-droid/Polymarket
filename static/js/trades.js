@@ -33,6 +33,7 @@ const REASONS = [
   [/маленький объём продажи/, "Мелкая продажа", false],
   [/Рынок уже закрыт/, "Рынок закрыт", false],
   [/выведен из состава/, "Игрок вне состава", false],
+  [/копировать поздно/, "Поздно", false],
 ];
 export function reasonShort(r) {
   for (const [re, label, setting] of REASONS) if (re.test(r.reason || "")) return { label, setting };

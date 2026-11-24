@@ -131,7 +131,7 @@ def market_info_cached(cond, tok):
 
 
 def _market_info(cond, tok):
-    raw = pm.markets_by_condition([cond]).get(cond)
+    raw = pm.markets_by_condition([cond]).get(cond) or pm.markets_by_condition([cond], closed=True).get(cond)
     if not raw:
         raise LookupError("Рынок не найден на Polymarket")
     c = pm.contract(raw)
@@ -449,7 +449,13 @@ def settle(db, cond, raw):
     if not c or not raw.get("closed"):
         return 0
     prices = [o["price"] for o in c["outcomes"]]
-    if any(p is None for p in prices) or not all(p in (0, 1) or abs(p - round(p)) < 1e-6 for p in prices):
+    if any(p is None for p in prices):
+        return 0
+    binary = all(abs(p - round(p)) < 1e-6 for p in prices)
+    # A market voided as 50-50 pays $0.50 a share; only once Polymarket marks it resolved (closed markets show
+    # their last prices until then). Before 1.4.4 such positions stayed open forever.
+    fifty = raw.get("resolutionStatus") == "resolved" and all(abs(p - 0.5) < 1e-6 for p in prices)
+    if not (binary or fifty):
         return 0  # not final yet (disputed or partially resolved)
     count = 0
     by_token = {o["token"]: o["price"] for o in c["outcomes"]}

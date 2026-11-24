@@ -41,8 +41,11 @@ export function pctRaw(v, digits = 1) {
 // Prices of outcome shares, in dollars: $0,34 (three digits near $0 and $1).
 export function cents(p) {
   if (p == null || !isFinite(p)) return "—";
-  const d = (p > 0 && p < 0.01) || (p > 0.99 && p < 1) ? 3 : 2;
-  return "$" + nf(d, d).format(p);
+  // Polymarket prices step by $0.001 near $0 and $1: show the third digit only when there is one (0,995, not 0,990 or 1,000).
+  const r = Math.round(p * 1000) / 1000;
+  if (p > 0 && r === 0) return "<$0,001";
+  const d = (r < 0.04 || r > 0.96) && Math.round(r * 1000) % 10 !== 0 ? 3 : 2;
+  return "$" + nf(d, d).format(r);
 }
 export const price = cents;
 export function shares(v) {

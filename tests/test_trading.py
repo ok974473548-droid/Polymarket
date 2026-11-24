@@ -1,9 +1,10 @@
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kontur import auth, copytrade, trading
+from kontur import auth, copytrade, trading, worker
 from kontur import db as store
 from kontur import polymarket as pm
 
@@ -36,7 +37,9 @@ class Base(unittest.TestCase):
         self.acc = trading.main_account(self.db, self.uid)
         self.market = gamma_market()
         self.book = book()
-        self.p1 = patch.object(pm, "markets_by_condition", side_effect=lambda conds: {COND: self.market})
+        # As Gamma does: open markets without closed=true, closed ones only with it
+        self.p1 = patch.object(pm, "markets_by_condition",
+                               side_effect=lambda conds, closed=False: {COND: self.market} if bool(self.market["closed"]) == closed else {})
         self.p2 = patch.object(pm, "book", side_effect=lambda tok: self.book)
         self.p1.start()
         self.p2.start()
@@ -127,6 +130,30 @@ class TradingTests(Base):
         self.assertEqual(pos["status"], "redeemed")
         self.assertAlmostEqual(pos["realized"], 60)
 
+    def test_settlement_job_sees_resolved_markets(self):
+        self.market = gamma_market(fee=False)
+        trading.place(self.db, self.uid, {"side": "buy", "type": "market", "condition": COND, "token": YES, "amount": 40})
+        self.market = gamma_market(closed=True, prices=("1", "0"))
+        worker.job_settle(self.db)  # until 1.4.4 it asked Gamma without closed=true and never got a resolved market
+        self.assertAlmostEqual(self.balance(), 960 + 100)
+        self.assertEqual(trading.position_rows(self.db, self.acc["id"], "closed")[0]["status"], "redeemed")
+        with self.assertRaisesRegex(ValueError, "закрыт"):  # a closed market is still found, and says so
+            trading._info_cache.clear()
+            trading.place(self.db, self.uid, {"side": "buy", "type": "market", "condition": COND, "token": YES, "amount": 5})
+
+    def test_settlement_of_a_fifty_fifty_market(self):
+        self.market = gamma_market(fee=False)
+        trading.place(self.db, self.uid, {"side": "buy", "type": "market", "condition": COND, "token": YES, "amount": 40})
+        # closed but not resolved yet: last prices 0.5/0.5 are not a payout
+        self.assertEqual(trading.settle(self.db, COND, gamma_market(closed=True, prices=("0.5", "0.5"))), 0)
+        self.assertEqual(trading.position_rows(self.db, self.acc["id"])[0]["shares"], 100)
+        voided = {**gamma_market(closed=True, prices=("0.5", "0.5")), "resolutionStatus": "resolved"}
+        self.assertEqual(trading.settle(self.db, COND, voided), 1)
+        self.assertAlmostEqual(self.balance(), 960 + 50)  # $0.50 a share
+        pos = trading.position_rows(self.db, self.acc["id"], "closed")[0]
+        self.assertEqual(pos["status"], "redeemed")
+        self.assertAlmostEqual(pos["realized"], 10)
+
     def test_quote_matches_place(self):
         q = trading.quote(self.db, self.uid, {"side": "buy", "type": "market", "condition": COND, "token": YES, "amount": 40})
         order = trading.place(self.db, self.uid, {"side": "buy", "type": "market", "condition": COND, "token": YES, "amount": 40})
@@ -179,6 +206,23 @@ class CopyTests(Base):
         self.assertEqual(ev["status"], "filled")
         self.assertAlmostEqual(ev["amount"], 25, places=2)
         self.assertEqual(self.poll(ct["id"]), 0)  # not copied twice
+
+    def test_late_buy_is_not_copied_but_late_sale_is(self):
+        ct = self.make()
+        now = int(time.time())
+        row = store.one(self.db.execute("SELECT * FROM copy_trades WHERE id=?", (ct["id"],)))
+        self.assertTrue(copytrade.handle(self.db, row, self.trade("BUY", 0.4, 1000, now - 3), self.uid, source="poll"))
+        old = now - 9 * 3600  # seen 9 hours late, e.g. the server was down
+        late_buy = self.trade("BUY", 0.4, 1000, old)
+        late_buy["transaction_hash"] = "0xlatebuy"
+        self.assertTrue(copytrade.handle(self.db, row, late_buy, self.uid, source="poll"))
+        late_sale = self.trade("SELL", 0.4, 1000, old)
+        late_sale["transaction_hash"] = "0xlatesale"
+        self.assertTrue(copytrade.handle(self.db, row, late_sale, self.uid, source="poll"))
+        events = {e["leader_tx"]: e for e in copytrade.events(self.db, self.uid, self.profile["id"])}
+        self.assertEqual(events["0xlatebuy"]["status"], "skipped")
+        self.assertIn("поздно", events["0xlatebuy"]["reason"])
+        self.assertEqual(events["0xlatesale"]["status"], "filled")  # the copy still follows the player out
 
     def test_percent_and_price_range(self):
         ct = self.make(sizing="percent", percent=10, amount=None, price_min=0.5)
