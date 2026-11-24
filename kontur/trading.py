@@ -53,6 +53,7 @@ def _move(db, aid, amount, kind, note="", ref=None):
     db.execute("UPDATE accounts SET balance=? WHERE id=?", (new, aid))
     db.execute("INSERT INTO ledger(account_id, kind, amount, balance_after, note, ref, at) VALUES(?,?,?,?,?,?,?)",
                (aid, kind, r6(amount), new, note, ref, time.time()))
+    bus.publish("account", {"account_id": aid})  # open pages of this person refresh their numbers
     return new
 
 
@@ -473,6 +474,7 @@ def settle(db, cond, raw):
             db.execute("""UPDATE positions SET status='redeemed', payout=?, realized=?, last_price=?, cost=0, shares=0, updated=?
                           WHERE account_id=? AND token_id=?""",
                        (amount, r6(pos["realized"] + amount - pos["cost"]), payout, time.time(), pos["account_id"], pos["token_id"]))
+        bus.publish("account", {"account_id": pos["account_id"]})  # a losing position pays nothing but still closes
         count += 1
     return count
 
@@ -575,7 +577,20 @@ def snapshot_equity(db):
 
 
 def mark_prices(db, prices_by_token):
+    """Store new mid prices; returns the accounts whose positions changed in value (their pages refresh live)."""
     now = time.time()
+    moved = []
     for tok, price in prices_by_token.items():
-        if price is not None:
-            db.execute("UPDATE positions SET last_price=?, price_at=? WHERE token_id=? AND status='open'", (price, now, tok))
+        if price is None:
+            continue
+        cur = db.execute("""UPDATE positions SET last_price=?, price_at=? WHERE token_id=? AND status='open'
+                            AND (last_price IS NULL OR abs(last_price - ?) > 1e-9)""", (price, now, tok, price))
+        if cur.rowcount:
+            moved.append(tok)
+        db.execute("UPDATE positions SET price_at=? WHERE token_id=? AND status='open'", (now, tok))
+    accounts = sorted({r[0] for i in range(0, len(moved), 500) for r in db.execute(
+        f"SELECT DISTINCT account_id FROM positions WHERE status='open' AND token_id IN ({','.join('?' * len(moved[i:i + 500]))})",
+        moved[i:i + 500])})
+    if accounts:
+        bus.publish("prices", {"accounts": accounts})
+    return accounts

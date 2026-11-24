@@ -405,3 +405,42 @@ class AccountsTests(unittest.TestCase):
             self.assertEqual(self.db.execute(f"SELECT COUNT(*) FROM {table} WHERE {col}=?", (uid,)).fetchone()[0], 0)
         self.assertIsNone(store.kv_get(self.db, f"ap:{uid}:settings"))
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM ledger").fetchone()[0], 1)  # only the owner's start deposit
+
+
+class LiveEventsTests(unittest.TestCase):
+    """Pages refresh themselves: the server says which accounts changed (1.6.0)."""
+
+    def setUp(self):
+        from kontur import bus
+        self.bus = bus
+        self.dir = tempfile.TemporaryDirectory()
+        path = str(Path(self.dir.name) / "l.sqlite3")
+        store.init(path)
+        self.db = store.connect(path)
+        self.uid = auth.create_user(self.db, "owner", "password123", admin=True)
+        self.aid = trading.main_account(self.db, self.uid)["id"]
+        self.db.execute("""INSERT INTO positions(account_id, token_id, condition_id, shares, cost, bought, last_price, status, updated)
+                           VALUES(?,?,?,10,4,10,0.4,'open',0)""", (self.aid, YES, COND))
+        self.q = bus.subscribe()
+
+    def tearDown(self):
+        self.bus.unsubscribe(self.q)
+        self.db.close()
+        self.dir.cleanup()
+
+    def events(self):
+        out = []
+        while not self.q.empty():
+            out.append(self.q.get_nowait()[:2])
+        return out
+
+    def test_new_prices_name_the_accounts(self):
+        self.assertEqual(trading.mark_prices(self.db, {YES: 0.4}), [])  # same price: nothing to redraw
+        self.assertEqual(self.events(), [])
+        self.assertEqual(trading.mark_prices(self.db, {YES: 0.45, NO: 0.55}), [self.aid])
+        self.assertEqual(self.events(), [("prices", {"accounts": [self.aid]})])
+        self.assertAlmostEqual(trading.position_rows(self.db, self.aid)[0]["price"], 0.45)
+
+    def test_money_moves_are_announced(self):
+        trading.deposit(self.db, self.uid, self.aid, 50)
+        self.assertIn(("account", {"account_id": self.aid}), self.events())

@@ -589,10 +589,15 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(b": ping\n\n")
                     self.wfile.flush()
                     continue
-                if kind == "notify" and data.get("user_id") != user["id"]:
+                if kind in ("notify", "autopilot") and data.get("user_id") != user["id"]:
                     continue
-                if kind in ("copy", "fill") and data.get("account_id") not in accounts:
-                    continue
+                if kind in ("copy", "fill", "account", "prices"):
+                    ids = set(data.get("accounts") or [data.get("account_id")])
+                    if not ids & accounts:
+                        accounts = own_accounts(self.server.db_path, user["id"])  # a profile created since the page opened
+                        if not ids & accounts:
+                            continue
+                    data = {}  # only a hint: which accounts of other people changed is not this page's business
                 self.wfile.write(f"event: {kind}\ndata: {json.dumps(data)}\n\n".encode())
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, OSError):
@@ -627,6 +632,14 @@ class Handler(BaseHTTPRequestHandler):
         if ctype == "image/svg+xml":
             extra.append(("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'"))
         return self.send(200, file.read_bytes(), ctype, extra)
+
+
+def own_accounts(path, uid):
+    db = db_take(path)
+    try:
+        return {r[0] for r in db.execute("SELECT id FROM accounts WHERE user_id=?", (uid,))}
+    finally:
+        db_give(path, db)
 
 
 class Server(ThreadingHTTPServer):

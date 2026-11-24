@@ -983,3 +983,7 @@ select.input-sm { padding-right: 26px; }
   .adm-main { flex-basis: 100%; }
   .adm-num { text-align: left; margin-right: auto; }
 }
+
+/* 1.6.0: live refresh — the page is rebuilt out of sight under a snapshot of itself, then swapped in */
+.main.live-hidden { position: absolute; left: 0; right: 0; visibility: hidden; pointer-events: none; }
+.live-shot { pointer-events: none; }

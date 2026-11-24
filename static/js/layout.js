@@ -198,24 +198,39 @@ async function loadBell(box) {
 let lastSeen = 0;
 let live = null;
 let refreshTimer = 0;
-const LIVE_PAGES = ["portfolio", "copy-trading", "autopilot"];
+const USER_PAGES = ["portfolio", "copy-trading", "autopilot"];
+// Public pages read prices that change all the time: refreshed on a timer while the tab is visible (seconds).
+const PUBLIC_EVERY = { event: 30, "": 60, markets: 60, traders: 60, tags: 60, watchlist: 60 };
+let lastQuiet = Date.now();
 
-function refreshSoon() {
-  // A copy or a fill changed the user's data: redraw the open page (unless the user is typing or in a dialog).
+function refreshSoon(pages = USER_PAGES) {
+  // The person's data changed (a copy, a fill, new prices, a payout, the roster): redraw the open page in place.
   clearTimeout(refreshTimer);
   refreshTimer = setTimeout(() => {
-    if (!LIVE_PAGES.includes(route().parts[0] || "")) return;
-    if (document.hidden || document.querySelector("dialog[open]") || document.activeElement?.matches("input, textarea, select")) return;
-    render();
-  }, 600);
+    updateChip();
+    if (!pages.includes(route().parts[0] || "")) return;
+    lastQuiet = Date.now();
+    state.quietRefresh?.();
+  }, 700);
+}
+
+async function updateChip() {
+  // Portfolio total in the header, without redrawing the header (an open menu stays open).
+  try {
+    await loadSession();
+    const chip = document.querySelector(".pf-chip b");
+    if (chip && state.account) chip.textContent = usd(state.account.total ?? 0);
+  } catch {
+    /* next event */
+  }
 }
 
 function connectLive() {
   if (live || !state.user || !window.EventSource) return;
   live = new EventSource("/api/stream");
   live.addEventListener("notify", () => checkNotifications());
-  live.addEventListener("copy", refreshSoon);
-  live.addEventListener("fill", refreshSoon);
+  for (const kind of ["copy", "fill", "account", "prices"]) live.addEventListener(kind, () => refreshSoon());
+  live.addEventListener("autopilot", () => refreshSoon(["autopilot"]));
   live.onerror = () => {
     if (!state.user && live) {
       live.close();
@@ -223,6 +238,24 @@ function connectLive() {
     }
   };
 }
+
+setInterval(() => {
+  // public pages on a timer; personal pages too when the live connection is down
+  const page = route().parts[0] || "";
+  const every = PUBLIC_EVERY[page] ?? (USER_PAGES.includes(page) && (!live || live.readyState !== 1) ? 30 : null);
+  if (every && Date.now() - lastQuiet >= every * 1000 && !document.hidden) {
+    lastQuiet = Date.now();
+    state.quietRefresh?.();
+  }
+}, 5000);
+
+document.addEventListener("visibilitychange", () => {
+  // back to the tab: catch up at once instead of waiting for the next change
+  if (document.hidden || Date.now() - lastQuiet < 10000) return;
+  lastQuiet = Date.now();
+  updateChip();
+  state.quietRefresh?.();
+});
 
 setInterval(() => {
   connectLive();

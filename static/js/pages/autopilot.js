@@ -72,7 +72,7 @@ export async function autopilotPage(main) {
   ({ roster: rosterTab, bench: benchTab, candidates: candidatesTab, bets: betsTab, activity: activityTab, log: logTab, history: historyTab })[tab](host, d, main);
   refresh = setInterval(() => {
     if (location.pathname !== "/autopilot") return clearInterval(refresh);
-    if (!document.hidden && !document.querySelector("dialog[open]") && ["roster", "bench"].includes(tab)) autopilotPage(main);
+    if (!document.hidden && !document.querySelector("dialog[open]") && ["roster", "bench"].includes(tab)) (state.quietRefresh || (() => autopilotPage(main)))();
   }, 60000);
   host.addEventListener("click", (e) => onPlayerAction(e, main));
 }

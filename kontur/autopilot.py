@@ -9,6 +9,7 @@ import json
 import time
 from datetime import datetime, timezone
 
+from . import bus
 from . import copytrade
 from . import db as store
 from . import notify
@@ -157,6 +158,7 @@ def enable(db, uid, on, budget=None):
 
 def log(db, uid, kind, wallet, text):
     db.execute("INSERT INTO ap_log(user_id, at, kind, wallet, text) VALUES(?,?,?,?,?)", (uid, time.time(), kind, wallet or "", text))
+    bus.publish("autopilot", {"user_id": uid})  # the roster changed: the open autopilot page refreshes
 
 
 def _who(db, wallet):

@@ -7,7 +7,7 @@
 ## Запуск и проверка
 - Только Python 3.11+, без сторонних пакетов: `python app.py` → http://127.0.0.1:8787 (`--db`, `--port`, `--no-worker`).
 - Docker: `docker compose up -d --build` (том `kontur-data`).
-- Тесты: `PYTHONPATH=.:tests python -m unittest tests.test_trading tests.test_autopilot tests.test_data tests.test_speed` (118 тестов, без сети).
+- Тесты: `PYTHONPATH=.:tests python -m unittest tests.test_trading tests.test_autopilot tests.test_data tests.test_speed` (120 тестов, без сети).
 - Замер скорости: `PYTHONPATH=. python research/bench_perf.py` (сеть, сервер, база, поток сделок).
 - Переменные: `KONTUR_DB`, `HOST`, `PORT`, `KONTUR_SCOUT_THREADS` (6), `KONTUR_SCOUT_GAP` (0.06 с), `KONTUR_STATS_THREADS` (4), `KONTUR_STATS_GAP` (0.06 с).
 
@@ -20,7 +20,7 @@
 | `kontur/stream.py` | Живой поток сделок RTDS → копирование за ~1 с; исполнители по лидерам (порядок сделок сохраняется) |
 | `kontur/books.py` | Живые стаканы (CLOB WS) — только для лимитных заявок и открытого тикета; `books.get` — из памяти, предзагруженный или по сети; позиции переоцениваются через `pm.midpoints` |
 | `kontur/packs.py` | Ставки игроков: одна сжатая запись (zlib, по столбцам) на кошелёк в `scout_packs`; перенос старой `scout_bets` при запуске |
-| `kontur/bus.py` | Шина событий внутри процесса (для SSE) |
+| `kontur/bus.py` | Шина событий внутри процесса (для SSE): `account` (движение денег), `prices` (счета с изменившейся ценой), `copy`, `fill`, `autopilot`, `notify`; страница перерисовывается без мигания — `quietDraw` в `static/js/app.js`, триггеры и таймеры — `layout.js` |
 | `kontur/polymarket.py` | Клиенты Gamma / Data API v2 / CLOB, темп запросов по хостам, пауза для всех при 429, кэш |
 | `kontur/scout.py` | Поиск и оценка игроков для автопилота: ставки из позиций (догрузка: закрытые — только новые, `start`), копия с задержкой и комиссией, метрики, тип поведения, отбор, балл, проверка на истории |
 | `kontur/autopilot.py` | Состав, скамейка, испытание, замены, копии автопилота, настройки |
