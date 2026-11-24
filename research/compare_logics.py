@@ -58,7 +58,18 @@ def fee(p, rate=FEE):
     return rate * p * (1 - p)
 
 
+# CMP_SLIP_MODEL=live: the copy is placed ~1 s after the leader (1.2.0+), and pays what live copies paid on average
+# over the leader's price (436 stream copies, Nov 2026): +$0.023 below $0.30, +$0.007 above.
+LIVE_SLIP = os.environ.get("CMP_SLIP_MODEL") == "live"
+
+
+def live_slip(entry):
+    return 0.023 if entry < 0.30 else 0.007
+
+
 def copy_r(entry, exit_price, slip, resolved, rate=FEE):
+    if LIVE_SLIP and slip > 0:
+        slip = live_slip(entry)
     e = min(0.995, max(0.001, entry + slip))
     gain = exit_price - (0.0 if resolved else fee(exit_price, rate)) - e - fee(e, rate)
     return gain / (e + fee(e, rate))
@@ -148,7 +159,7 @@ def skill(d, known, T, kind):
         return None
     by_ev = defaultdict(lambda: [0.0, 0.0, 0])  # excess wins, return sum, count
     for b in st:
-        p = min(0.995, b["entry"] + d["slip"])
+        p = min(0.995, b["entry"] + (live_slip(b["entry"]) if LIVE_SLIP else d["slip"]))
         r = copy_r(b["entry"], b["exit"], d["slip"], b["state"] == "resolved" or b["exit"] in (0.0, 1.0))
         e = by_ev[b["event_slug"] or b["condition"]]
         e[0] += (1.0 if r > 0 else 0.0) - p
@@ -228,7 +239,7 @@ def logic_skill(days, top=None):
         for c in PRE[w]["per"][days]["fut"]:
             if c["days"] > 60:
                 continue
-            p = min(0.99, c["entry"] + PRE[w]["slip"])
+            p = min(0.99, c["entry"] + (live_slip(c["entry"]) if LIVE_SLIP else PRE[w]["slip"]))
             q = min(0.99, p + s["excess"])
             kelly = max(0.0, (q - p) / (1 - p)) * 0.25 if q > p else 0.0
             if kelly <= 0 or s["edge"] <= fee(p):  # expected edge must beat the fee
