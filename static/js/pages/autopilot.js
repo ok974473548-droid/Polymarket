@@ -1,6 +1,7 @@
 // Autopilot: auto-selected roster copied from one budget, bench with probation, automatic replacement.
-import { $, $$, delayCell, delaySummary, ago, api, avatar, cents, confirmBox, dateTime, emptyBox, errorBox, esc, go, icon, loadSession, modal, num, route,
-  short, signedUsd, state, thumb, toast, usd, withQuery, yesNo, shares as fmtShares } from "../core.js";
+import { $, $$, delaySummary, ago, api, avatar, cents, confirmBox, dateTime, emptyBox, errorBox, esc, go, icon, loadSession, modal, num, route,
+  short, signedUsd, state, toast, usd, withQuery, yesNo } from "../core.js";
+import { activityTable, betsTable, bindRows, loadExit } from "../trades.js";
 import { header, needLogin } from "../layout.js";
 
 const TABS = [["roster", "Состав"], ["bench", "Скамейка"], ["candidates", "Кандидаты"], ["bets", "Ставки"], ["activity", "Активность"],
@@ -341,41 +342,35 @@ async function betsTab(host) {
   const q = route().q;
   const status = ["open", "closed"].includes(q.get("status")) ? q.get("status") : "";
   host.innerHTML = `<div class="filters-row"><div class="seg">${[["", "Все"], ["open", "Открытые"], ["closed", "Закрытые"]].map(([k, l]) =>
-    `<a href="${withQuery({ status: k || null })}" class="${status === k ? "cur" : ""}" data-keep-scroll>${l}</a>`).join("")}</div></div><div class="tablewrap" id="b-table"><div class="sk-block tall"></div></div>`;
+    `<a href="${withQuery({ status: k || null })}" class="${status === k ? "cur" : ""}" data-keep-scroll>${l}</a>`).join("")}</div>
+    <span class="muted small">Результат — прибыль или убыток копии: по цене рынка для открытых, по факту для закрытых. Нажмите на строку — подробности.</span></div>
+    <div class="tablewrap" id="b-table"><div class="sk-block tall"></div></div>`;
   try {
     const rows = await api("/api/autopilot/bets?status=" + status);
-    $("#b-table").innerHTML = rows.length ? `<table class="table"><thead><tr><th>Открыта</th><th>Игрок</th><th>Рынок</th><th class="num">Вход</th><th class="num">Сейчас</th><th class="num">Вложено</th><th class="num">Результат</th><th>Статус</th></tr></thead><tbody>
-      ${rows.map((r) => {
-        const res = r.status === "closed" ? r.pnl : r.value != null ? r.value - (r.bought ? r.cost * r.shares / r.bought : 0) : null;
-        return `<tr><td class="small nowrap">${dateTime(r.opened)}</td><td><a class="trader-cell" href="/traders/${r.wallet}">${avatar(r.wallet, "", r.player, 22)}<span>${esc(r.player || short(r.wallet))}</span></a></td>
-        <td><a class="ev-cell" href="/event/${esc(r.event_slug)}?contract=${r.condition_id}">${thumb(r.image, 26)}<span>${esc(r.title)} <small class="muted">${esc(yesNo(r.outcome))}</small></span></a></td>
-        <td class="num">${cents(r.entry)}</td><td class="num">${r.status === "open" ? cents(r.price) : "—"}</td><td class="num">${usd(r.cost)}</td>
-        <td class="num ${(res || 0) >= 0 ? "up" : "down"}">${res == null ? "—" : signedUsd(res)}</td>
-        <td>${r.status === "open" ? '<span class="badge badge-gray">Открыта</span>' : (r.pnl || 0) > 0 ? '<span class="badge badge-green">Выигрыш</span>' : '<span class="badge badge-red">Проигрыш</span>'}</td></tr>`;
-      }).join("")}</tbody></table>` : `<div class="pad">${emptyBox("Ставок пока нет", "Копии появятся, когда игроки из состава сделают новые ставки.")}</div>`;
+    const box = $("#b-table");
+    box.innerHTML = rows.length ? betsTable(rows) : `<div class="pad">${emptyBox("Ставок пока нет", "Копии появятся, когда игроки из состава сделают новые ставки.")}</div>`;
+    bindRows(box, loadExit(rows));
   } catch (e) {
     $("#b-table").innerHTML = errorBox(e, false);
   }
 }
 
-async function activityTab(host) {
+async function activityTab(host, d) {
   const q = route().q;
   const status = ["filled", "skipped", "failed"].includes(q.get("status")) ? q.get("status") : "";
   host.innerHTML = `<div class="filters-row"><div class="seg">${[["", "Все"], ["filled", "Скопировано"], ["skipped", "Пропущено"], ["failed", "Ошибка"]].map(([k, l]) =>
     `<a href="${withQuery({ status: k || null })}" class="${status === k ? "cur" : ""}" data-keep-scroll>${l}</a>`).join("")}</div>
-    <span class="muted small">Каждая сделка игроков из состава: что скопировано и почему пропущено.</span></div><div class="tablewrap" id="act"><div class="sk-block tall"></div></div>`;
+    <span class="muted small">Каждая сделка игроков из состава: сколько потратил игрок и сколько вложили мы. Нажмите на строку — подробности.</span></div><div class="tablewrap" id="act"><div class="sk-block tall"></div></div>`;
   try {
     const rows = await api("/api/autopilot/events?status=" + status);
-    const label = { filled: ["Скопировано", "badge-green"], skipped: ["Пропущено", "badge-gray"], failed: ["Ошибка", "badge-red"] };
-    $("#act").innerHTML = rows.length ? `${delaySummary(rows) ? `<div class="pad-x">${delaySummary(rows)}</div>` : ""}<table class="table"><thead><tr><th>Время</th><th>Игрок</th><th>Сделка</th><th>Рынок</th><th class="num">У игрока</th><th class="num">Копия</th><th class="num">Задержка</th><th>Статус</th></tr></thead><tbody>
-      ${rows.map((r) => `<tr><td class="nowrap small">${dateTime(r.at)}</td><td><a class="trader-cell" href="/traders/${r.leader}">${avatar(r.leader, "", "", 22)}<span>${short(r.leader)}</span></a></td>
-        <td><span class="side ${r.side === "buy" ? "buy" : "sell"}">${r.side === "buy" ? "Покупка" : "Продажа"}</span> ${esc(yesNo(r.outcome))}</td>
-        <td><a class="ev-cell" href="/event/${esc(r.event_slug)}">${thumb(r.image, 24)}<span>${esc(r.title)}</span></a></td>
-        <td class="num small">${r.leader_size != null ? fmtShares(r.leader_size) + " × " + cents(r.leader_price) : "—"}</td>
-        <td class="num small">${r.amount != null ? usd(r.amount) : "—"}${r.price != null ? " · " + cents(r.price) : ""}</td>
-        <td class="num small">${delayCell(r)}</td>
-        <td><span class="badge ${label[r.status][1]}">${label[r.status][0]}</span>${r.reason ? `<small class="muted block">${esc(r.reason)}</small>` : ""}</td></tr>`).join("")}</tbody></table>`
+    const box = $("#act");
+    const slip = d?.settings?.copy_slip;
+    box.innerHTML = rows.length ? `${delaySummary(rows) ? `<div class="pad-x">${delaySummary(rows)}</div>` : ""}${activityTable(rows, {
+      who: "Игрок", filled: "Скопировано", slip: slip != null ? `до ${cents(slip)} за акцию от цены игрока` : "",
+      settings: () => `<button class="btn btn-sm" type="button" data-open-settings>${icon("sliders", 14)} Изменить в настройках</button>` })}`
       : `<div class="pad">${emptyBox("Событий пока нет", "Здесь появятся сделки игроков из состава.")}</div>`;
+    bindRows(box);
+    box.addEventListener("click", (e) => e.target.closest("[data-open-settings]") && $("#ap-settings")?.click());
   } catch (e) {
     $("#act").innerHTML = errorBox(e, false);
   }

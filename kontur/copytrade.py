@@ -236,7 +236,8 @@ def events(db, uid, aid, status="", limit=200):
     sql = (f"SELECT {', '.join('e.' + f for f in EVENT_FIELDS)}, "
            + ", ".join(f"CASE WHEN e.outcome_id IS NULL THEN e.{c} ELSE COALESCE(o.{c}, '') END AS {c}"
                        for c in ("title", "outcome", "event_slug", "image"))
-           + " FROM copy_events e LEFT JOIN outcomes o ON o.id=e.outcome_id WHERE e.account_id=?")
+           + ", r.fees AS fee FROM copy_events e LEFT JOIN outcomes o ON o.id=e.outcome_id"
+             " LEFT JOIN orders r ON r.id=e.order_id WHERE e.account_id=?")
     params = [aid]
     if status in {"filled", "skipped", "failed"}:
         sql += " AND e.status=?"

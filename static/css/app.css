@@ -179,7 +179,7 @@ select.input-sm { padding-right: 26px; }
 .mb-green i { background: var(--green); } .mb-red i { background: var(--red); }
 .val-cell, .pnl-cell { display: inline-flex; align-items: center; gap: 8px; justify-content: flex-end; }
 .side { display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; vertical-align: middle; }
-.side.buy { background: var(--green-bg); color: var(--green); }
+.side.buy { background: var(--green-bg); color: var(--green); height: 22px; padding: 0 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; flex: none; max-width: none; }
 .side.sell { background: var(--red-bg); color: var(--red); }
 .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); display: inline-block; box-shadow: 0 0 0 0 rgba(255, 92, 86, .6); animation: pulse 1.8s infinite; }
 @keyframes pulse { 70% { box-shadow: 0 0 0 7px rgba(255, 92, 86, 0); } 100% { box-shadow: 0 0 0 0 rgba(255, 92, 86, 0); } }
@@ -876,3 +876,59 @@ select.input-sm { padding-right: 26px; }
 
 /* 1.2.0: copy delay summary above the activity table */
 .pad-x { padding: 10px 14px 4px; }
+
+/* 1.4.2: trades and bets in money; details open under the row; on a phone the rows become cards */
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.tx-table .c-more { width: 44px; text-align: right; padding-left: 4px; }
+.tx-row { cursor: pointer; }
+.tx-toggle { display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 9px; border: 1px solid var(--border);
+  background: transparent; color: var(--muted); transition: transform .15s, background .15s, color .15s; }
+.tx-toggle:hover { background: rgba(148, 163, 184, .12); color: var(--text); }
+.tx-row.open > td { background: rgba(59, 130, 246, .06); border-bottom-color: transparent; }
+.tx-row.open .tx-toggle { transform: rotate(180deg); color: var(--text); border-color: rgba(96, 165, 250, .35); }
+.table tbody tr.tx-detail:hover { background: transparent; }
+.tx-detail > td { padding: 0 14px 16px; background: rgba(59, 130, 246, .06); }
+.tx-more { border: 1px solid var(--border); border-radius: 12px; background: rgba(10, 15, 22, .45); padding: 14px 18px; cursor: auto; }
+.tx-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr)); gap: 14px 28px; }
+.tx-cols h4 { margin: 0 0 8px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
+.tx-kv > div { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 5px 0; font-size: 13.5px;
+  border-bottom: 1px dashed rgba(148, 163, 184, .12); }
+.tx-kv > div:last-child { border-bottom: 0; }
+.tx-kv > div > span:first-child { color: var(--text2); }
+.tx-kv b { font-weight: 600; text-align: right; }
+.tx-kv b small { display: block; font-weight: 400; }
+.tx-kv .tx-total b { font-weight: 750; }
+.tx-why p { margin: 0 0 10px; font-size: 13.5px; line-height: 1.55; color: var(--text2); }
+.tx-links { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 13px; }
+.tx-links a { display: inline-flex; align-items: center; gap: 6px; }
+.tx-table .c-a, .tx-table .c-b, .tx-table .c-c { white-space: nowrap; }
+.tx-table .c-c small { font-weight: 400; opacity: .8; }
+@media (max-width: 760px) {
+  .tx-table, .tx-table tbody { display: block; }
+  .tx-table thead { display: none; }
+  /* card: player · time · result / market / side · player's money · our money · details */
+  .tx-table tr.tx-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+  .tx-table tr.tx-row > td { display: block; padding: 0; border: 0; min-width: 0; text-align: left; background: none; }
+  .tx-table tr.tx-row.open { background: rgba(59, 130, 246, .06); border-bottom-color: transparent; }
+  .tx-table .c-who { order: 1; flex: 1 1 0; }
+  .tx-table .c-time { order: 2; }
+  .tx-table .c-status { order: 3; }
+  .tx-table .c-mkt { order: 4; flex: 0 0 100%; }
+  .tx-table .c-side { order: 5; flex: none; }
+  .tx-table .c-a { order: 6; flex: 1 1 0; }
+  .tx-table .c-b { order: 7; flex: 1 1 0; }
+  .tx-table .c-c { order: 8; flex: 1 1 0; }
+  .tx-table .c-more { order: 9; flex: none; width: auto; }
+  .tx-table td[data-label] { white-space: normal; }
+  .tx-table td[data-label]::before { content: attr(data-label); display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 1px; line-height: 1.25; }
+  .tx-table .tx-verb { display: none; }
+  .tx-table .c-side { max-width: 118px; }
+  .tx-table .c-side .side { height: auto; min-height: 22px; white-space: normal; line-height: 1.25; padding: 3px 9px; }
+  .tx-table .ev-cell { min-width: 0; max-width: none; }
+  .tx-table .c-who .trader-cell { display: flex; max-width: 100%; }
+  .tx-table .c-who .trader-cell > span:not(.av) { min-width: 0; max-width: none; }
+  .tx-table tr.tx-detail { display: block; border-bottom: 1px solid var(--border); }
+  .tx-table tr.tx-detail[hidden] { display: none; }
+  .tx-table tr.tx-detail > td { display: block; padding: 0 10px 12px; }
+  .tx-more { padding: 12px 14px; }
+}

@@ -208,6 +208,47 @@ class AutopilotTests(Base):
         self.assertEqual(store.one(self.db.execute("SELECT status FROM ap_bets WHERE wallet=?", (b,)))["status"], "closed")
         self.assertEqual(store.one(self.db.execute("SELECT status FROM ap_bets WHERE wallet=?", (a,)))["status"], "open")
 
+    def test_bet_result_counts_partial_sales(self):
+        # Bought 100 shares for $50, sold 50 for $40, 50 left at the mid price $0.60 (worth $30).
+        bet = {"status": "open", "value": 30.0, "proceeds": 40.0, "cost": 50.0, "pnl": None}
+        # Before 1.4.2 the row showed only the unsold half: 30 - 50 * 50/100 = +5; the $40 from the sale was lost.
+        self.assertAlmostEqual(autopilot.bet_result(bet), 20.0)  # 30 + 40 - 50
+        self.assertAlmostEqual(autopilot.bet_result({**bet, "proceeds": 0.0}), -20.0)  # nothing sold yet: value - cost
+        self.assertIsNone(autopilot.bet_result({**bet, "value": None}))  # no price yet
+        self.assertEqual(autopilot.bet_result({"status": "closed", "value": None, "proceeds": 40.0, "cost": 50.0, "pnl": -10.0}), -10.0)
+
+    def test_copy_stats_count_partial_sales(self):
+        # The same copy as above: bought 100 for $50, sold 50 for $40, 50 left at $0.60.
+        w = "0x" + "e" * 40
+        self.db.execute("""INSERT INTO ap_bets(user_id, account_id, wallet, token_id, condition_id, opened, shares, bought, cost, proceeds)
+                           VALUES(?,?,?,?,?,?,50,100,50,40)""", (self.uid, self.aid, w, "tp", "cp", self.now))
+        self.db.execute("""INSERT INTO positions(account_id, token_id, condition_id, shares, cost, bought, last_price, status, updated)
+                           VALUES(?,?,?,50,25,100,0.6,'open',?)""", (self.aid, "tp", "cp", self.now))
+        st = autopilot.copy_stats(self.db, self.uid, w)
+        # Before 1.4.2: 30 - 25 = +5 (the sale was left out); now the card matches the bets tab row.
+        self.assertAlmostEqual(st["pnl"], 20.0)
+        self.assertAlmostEqual(st["realized"], 15.0)  # 40 received for half of the $50
+        self.assertAlmostEqual(st["pnl"], sum(r["result"] for r in autopilot.bets(self.db, self.uid, wallet=w)))
+
+    def test_bets_and_events_rows(self):
+        autopilot.review(self.db, self.uid)
+        leader = self.players("active")[0]
+        (status, reason, extra), _, _ = self.copy_buy(leader)
+        self.assertEqual(status, "filled", reason)
+        rows = autopilot.bets(self.db, self.uid)
+        self.assertEqual(len(rows), 1)
+        r = rows[0]
+        self.assertFalse(r["resolved"])
+        self.assertAlmostEqual(r["result"], r["value"] - r["cost"], places=6)
+        ct = store.one(self.db.execute("SELECT * FROM copy_trades WHERE leader=? AND account_id=?", (leader, self.aid)))
+        trade = {"side": "BUY", "price": 0.40, "size": 1000, "title": "Will it rain?", "outcome": "Yes", "event_slug": "rain",
+                 "token_id": YES, "condition_id": COND, "transaction_hash": "0xabc", "timestamp": self.now}
+        copytrade._record(self.db, ct, status, reason, trade, **extra)
+        ev = copytrade.events(self.db, self.uid, self.aid)[0]
+        fee = self.db.execute("SELECT fees FROM orders WHERE id=?", (extra["order_id"],)).fetchone()[0]
+        self.assertGreater(fee, 0)
+        self.assertAlmostEqual(ev["fee"], fee)  # the copy's fee comes with the event for the details row
+
     def lose(self, leader, count):
         for i in range(count):
             self.db.execute("""INSERT INTO ap_bets(user_id, account_id, wallet, token_id, condition_id, opened, shares, bought, cost,

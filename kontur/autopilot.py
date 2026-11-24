@@ -308,14 +308,17 @@ def copy_stats(db, uid, wallet, since=None):
         else:
             break
     last = closed[-20:]
-    open_cost = open_value = 0.0
+    open_cost = open_value = partial = 0.0
     for b in bets:
         if b["status"] != "open":
             continue
-        open_cost += b["cost"] * b["shares"] / b["bought"] if b["bought"] else 0
+        held = b["shares"] / b["bought"] if b["bought"] else 0
+        open_cost += b["cost"] * held
+        # Money from a partial sale of a copy that is still open (1.4.2; before, it was left out of the result).
+        partial += (b["proceeds"] or 0.0) - b["cost"] * (1 - held) if b["bought"] else 0
         price = db.execute("SELECT last_price FROM positions WHERE account_id=? AND token_id=?", (aid, b["token_id"])).fetchone()
         open_value += b["shares"] * (price[0] if price and price[0] is not None else 0)
-    realized = sum(b["pnl"] or 0 for b in bets if b["status"] == "closed")
+    realized = sum(b["pnl"] or 0 for b in bets if b["status"] == "closed") + partial
     return {"closed": len(closed), "wins": wins, "losses": len(closed) - wins, "wr": wins / len(closed) if closed else None,
             "streak": streak, "recent_n": len(last), "recent_wr": (sum(1 for b in last if b["pnl"] > 0) / len(last)) if last else None,
             "open": sum(1 for b in bets if b["status"] == "open"), "open_cost": open_cost, "open_value": open_value,
@@ -721,11 +724,25 @@ def bets(db, uid, status="", wallet=""):
     rows = store.rows(db.execute(sql + " ORDER BY b.opened DESC LIMIT 300", params))
     aid = account_id(db, uid)
     for r in rows:
-        price = db.execute("SELECT last_price FROM positions WHERE account_id=? AND token_id=?", (aid, r["token_id"])).fetchone()
-        r["price"] = price[0] if price else None
+        pos = db.execute("SELECT last_price, status FROM positions WHERE account_id=? AND token_id=?", (aid, r["token_id"])).fetchone()
+        r["price"] = pos[0] if pos else None
         r["entry"] = r["cost"] / r["bought"] if r["bought"] else None
         r["value"] = r["shares"] * r["price"] if r["status"] == "open" and r["price"] is not None else None
+        r["resolved"] = r["status"] == "closed" and bool(pos) and pos[1] == "redeemed"
+        r["result"] = bet_result(r)
     return rows
+
+
+def bet_result(r):
+    """Profit or loss of one copy so far: what it brought back (sales, payout) plus what is left at the mid price, minus its cost.
+
+    Until 1.4.2 an open copy showed only its unsold part (value - cost of the shares left): money from a partial sale was lost.
+    """
+    if r["status"] == "closed":
+        return r["pnl"]
+    if r["value"] is None:
+        return None
+    return r["value"] + (r["proceeds"] or 0.0) - r["cost"]
 
 
 def log_rows(db, uid, limit=300):

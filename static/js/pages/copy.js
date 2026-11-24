@@ -1,7 +1,8 @@
 // Copy trading, as on polymarketanalytics.com/copy-trading: profiles with their own balance, Deposit / Transfer
 // from main / Withdraw, Pause all, tabs Copies / Positions / Activity / Settings and a 3-step wizard.
-import { $, $$, delayCell, delaySummary, api, avatar, cents, confirmBox, dateTime, emptyBox, errorBox, esc, go, icon, loadSession, modal, num, route,
-  short, signedUsd, state, thumb, toast, usd, withQuery, yesNo, shares as fmtShares } from "../core.js";
+import { $, $$, delaySummary, api, avatar, cents, confirmBox, dateTime, emptyBox, errorBox, esc, go, icon, loadSession, modal, num, route,
+  short, signedUsd, state, toast, usd, withQuery } from "../core.js";
+import { activityTable, bindRows } from "../trades.js";
 import { header, needLogin } from "../layout.js";
 import { positionsTable } from "./portfolio.js";
 
@@ -207,16 +208,12 @@ async function activityTab(host, p) {
     `<a href="${withQuery({ status: k || null })}" class="${status === k ? "cur" : ""}" data-keep-scroll>${l}</a>`).join("")}</div></div><div class="tablewrap" id="act"><div class="sk-block tall"></div></div>`;
   try {
     const rows = await api(`/api/copy/events?account=${p.id}&status=${status}`);
-    const label = { filled: ["Исполнено", "badge-green"], skipped: ["Пропущено", "badge-gray"], failed: ["Ошибка", "badge-red"] };
-    $("#act").innerHTML = rows.length ? `${delaySummary(rows) ? `<div class="pad-x">${delaySummary(rows)}</div>` : ""}<table class="table"><thead><tr><th>Время</th><th>Трейдер</th><th>Сделка</th><th>Рынок</th><th class="num">Лидер</th><th class="num">Копия</th><th class="num">Задержка</th><th>Статус</th></tr></thead><tbody>
-      ${rows.map((r) => `<tr><td class="nowrap small">${dateTime(r.at)}</td><td><a class="trader-cell" href="/traders/${r.leader}">${avatar(r.leader, "", "", 22)}<span>${short(r.leader)}</span></a></td>
-        <td><span class="side ${r.side === "buy" ? "buy" : "sell"}">${r.side === "buy" ? "Покупка" : "Продажа"}</span> ${esc(yesNo(r.outcome))}</td>
-        <td><a class="ev-cell" href="/event/${esc(r.event_slug)}">${thumb(r.image, 24)}<span>${esc(r.title)}</span></a></td>
-        <td class="num small">${r.leader_size != null ? fmtShares(r.leader_size) + " × " + cents(r.leader_price) : "—"}</td>
-        <td class="num small">${r.amount != null ? usd(r.amount) : "—"}${r.price != null ? " · " + cents(r.price) : ""}</td>
-        <td class="num small">${delayCell(r)}</td>
-        <td><span class="badge ${label[r.status][1]}">${label[r.status][0]}</span>${r.reason ? `<small class="muted block">${esc(r.reason)}</small>` : ""}</td></tr>`).join("")}</tbody></table>`
+    const box = $("#act");
+    box.innerHTML = rows.length ? `${delaySummary(rows) ? `<div class="pad-x">${delaySummary(rows)}</div>` : ""}${activityTable(rows, {
+      who: "Трейдер", filled: "Исполнено",
+      settings: (r) => `<a class="btn btn-sm" href="/copy-trading/new?edit=${r.copy_trade_id}">${icon("sliders", 14)} Изменить настройки копии</a>` })}`
       : '<p class="muted pad">Событий пока нет. Здесь появятся скопированные, пропущенные и неудачные сделки.</p>';
+    bindRows(box);
   } catch (e) {
     $("#act").innerHTML = errorBox(e, false);
   }
