@@ -526,6 +526,10 @@ def _verdict(db, wallet, s, relaxed=False):
     cand = scout.candidate(db, wallet)
     if not cand or not cand["metrics"]:
         return None, None
+    if not scout.current(cand["metrics"]):
+        # counted by an older version and waiting to be recomputed (worker.job_rescore): not judged until then, or
+        # a change of the rules (1.10.0: skill against the price) dropped players for a figure not counted yet
+        return cand, None
     return cand, scout.judge(cand["metrics"], cand["kind"], _relaxed(s) if relaxed else s, _cut(db, relaxed))
 
 
@@ -834,7 +838,7 @@ def action(db, uid, wallet, what):
 def _card(db, uid, p, s, share, now):
     cand = scout.candidate(db, p["wallet"])
     m = (cand or {}).get("metrics") or {}
-    verdict = scout.judge(m, cand["kind"], s, _cut(db)) if m else None
+    verdict = scout.judge(m, cand["kind"], s, _cut(db)) if scout.current(m) else None
     card = {"wallet": p["wallet"], "name": (cand or {}).get("name") or "", "image": (cand or {}).get("image") or "",
             "state": p["state"], "pinned": bool(p["pinned"]), "manual": bool(p["manual"]), "early": bool(p["early"]),
             "since": p["since"], "bench_since": p["bench_since"], "active_since": p["active_since"], "reason": p["reason"],
@@ -844,7 +848,7 @@ def _card(db, uid, p, s, share, now):
                                                   "recent_wr", "slip_live", "slip_live_n")},
                         "skill": m.get("skill")} if m else None,
             "score": verdict["score"] if verdict else None, "passed": verdict["passed"] if verdict else None,
-            "failed": verdict["failed"] if verdict else []}
+            "failed": verdict["failed"] if verdict else [], "recounting": bool(m) and not scout.current(m)}
     if p["state"] in ("active", "retired"):
         st = copy_stats(db, uid, p["wallet"], p["active_since"])
         card["copies"] = st
@@ -919,7 +923,7 @@ def player(db, uid, wallet):
            "facts": (cand or {}).get("facts"), "sources": (cand or {}).get("sources") or [], "metrics": None, "verdict": None}
     if cand and cand["metrics"]:
         out["metrics"] = cand["metrics"]
-        out["verdict"] = scout.judge(cand["metrics"], cand["kind"], s, _cut(db))
+        out["verdict"] = scout.judge(cand["metrics"], cand["kind"], s, _cut(db)) if scout.current(cand["metrics"]) else None
     keys = ("title", "outcome", "event_slug", "entry", "exit", "state", "mark", "opened", "closed", "size")
     recent = [{k: b[k] for k in keys} for b in sorted(scout.stored_bets(db, wallet), key=lambda b: -b["opened"])[:25]]
     for b in recent:

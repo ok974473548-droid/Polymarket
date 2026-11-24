@@ -633,6 +633,29 @@ class NewAutopilotTests(AutopilotTests):
         self.assertNotIn(idle, self.players("active"))
         self.assertEqual(len(self.players("active")), 5)
 
+    def test_profiles_of_an_older_version_are_not_judged(self):
+        autopilot.update_settings(self.db, self.uid, {"selection": "skill"})
+        for i in range(40, 46):
+            store_candidate(self.db, wallet(i), wins=50, losses=12, recent=8)
+        autopilot.update_settings(self.db, self.uid, {"selection": "winrate"})
+        autopilot.review(self.db, self.uid)
+        bench, active = self.players("bench"), self.players("active")
+        self.now += 60
+        for w in bench + active:                    # profiled again by 1.9.0: no skill figures yet
+            m = json.loads(self.db.execute("SELECT metrics FROM scout_wallets WHERE wallet=?", (w,)).fetchone()[0])
+            m.pop("version"); m.pop("skill")
+            self.db.execute("UPDATE scout_wallets SET metrics=?, profiled=? WHERE wallet=?", (json.dumps(m), self.now, w))
+        autopilot.update_settings(self.db, self.uid, {"selection": "skill"})
+        self.now += 60
+        autopilot.review(self.db, self.uid)
+        self.assertEqual(sorted(self.players("bench")), sorted(bench))   # nobody dropped for a figure not counted yet
+        self.assertEqual(sorted(self.players("active")), sorted(active))
+        card = autopilot.overview(self.db, self.uid)["players"]["bench"][0]
+        self.assertTrue(card["recounting"])
+        self.assertIsNone(card["passed"])
+        self.assertGreater(scout.refresh_metrics(self.db), 0)
+        self.assertFalse(autopilot.overview(self.db, self.uid)["players"]["bench"][0]["recounting"])
+
     def test_warnings_for_settings_that_lose_or_lock_money(self):
         self.assertEqual(len(autopilot.warnings(autopilot.settings(self.db, self.uid))), 1)   # win-rate selection at 70%
         autopilot.update_settings(self.db, self.uid, {"selection": "skill"})

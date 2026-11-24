@@ -634,12 +634,18 @@ def copy_slip(measured, live):
     return max(DEFAULT_SLIP, *vals) if vals else None
 
 
+def current(m):
+    """Metrics counted by this version (older ones lack fields the rules use and are not judged until recomputed)."""
+    return bool(m) and m.get("version") == METRICS_VERSION
+
+
 def refresh_metrics(db, limit=200):
     """Recompute stored metrics of an older version from the bets kept for the wallet (no network).
 
-    Wallets whose bets were not kept stay as they are until their next profile."""
+    Players of an autopilot come first. Wallets whose bets were not kept stay as they are until their next profile."""
     done = 0
-    rows = store.rows(db.execute("SELECT wallet, metrics, profiled FROM scout_wallets WHERE metrics IS NOT NULL"))
+    rows = store.rows(db.execute("""SELECT wallet, metrics, profiled FROM scout_wallets WHERE metrics IS NOT NULL
+                                    ORDER BY wallet IN (SELECT wallet FROM ap_players) DESC"""))
     for row in rows:
         old = json.loads(row["metrics"])
         if old.get("version") == METRICS_VERSION:

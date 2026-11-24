@@ -260,7 +260,7 @@ function activeCard(c, s) {
   return `<article class="card pl-card ${c.warnings?.length ? "warn" : ""}">
     <div class="pl-head">${avatar(c.wallet, c.image, c.name, 40)}<div class="pl-id"><a href="/traders/${c.wallet}"><b>${esc(playerName(c))}</b></a>
       <small>${esc(c.kind_label || "")} · в составе ${days(c.active_since)} дн.</small>
-      <div class="pl-badges">${c.pinned ? `<span class="badge badge-gold">${icon("pin", 12)} Закреплён</span>` : ""}${c.early ? '<span class="badge badge-gray">Досрочно</span>' : ""}${c.manual ? '<span class="badge badge-gray">Вручную</span>' : ""}</div></div>
+      <div class="pl-badges">${c.pinned ? `<span class="badge badge-gold">${icon("pin", 12)} Закреплён</span>` : ""}${c.early ? '<span class="badge badge-gray">Досрочно</span>' : ""}${c.manual ? '<span class="badge badge-gray">Вручную</span>' : ""}${c.recounting ? '<span class="badge badge-gray" title="Оценка пересчитывается по новым правилам отбора">Пересчёт</span>' : ""}</div></div>
       ${scoreRing(c.score)}</div>
     <dl class="pl-stats">
       <div><dt>Выигрыши копий по истории</dt><dd>${p100(pr.wr)} <small>надёжно ≥ ${p100(pr.lb)}</small></dd></div>
@@ -283,7 +283,7 @@ function benchCard(c, s) {
   const label = pr.ready ? '<span class="badge badge-green">Готов войти в состав</span>' : pr.early_ok ? '<span class="badge badge-gold">Можно досрочно</span>' : '<span class="badge badge-gray">Испытание</span>';
   return `<article class="card pl-card bench">
     <div class="pl-head">${avatar(c.wallet, c.image, c.name, 40)}<div class="pl-id"><a href="/traders/${c.wallet}"><b>${esc(playerName(c))}</b></a>
-      <small>${esc(c.kind_label || "")} · на скамейке ${days(c.bench_since)} дн.</small><div class="pl-badges">${label}${c.manual ? '<span class="badge badge-gray">Вручную</span>' : ""}</div></div>
+      <small>${esc(c.kind_label || "")} · на скамейке ${days(c.bench_since)} дн.</small><div class="pl-badges">${label}${c.manual ? '<span class="badge badge-gray">Вручную</span>' : ""}${c.recounting ? '<span class="badge badge-gray" title="Оценка пересчитывается по новым правилам отбора">Пересчёт</span>' : ""}</div></div>
       ${scoreRing(c.score)}</div>
     <div class="probation"><div><span>Срок</span><div class="share-bar"><i style="width:${dayPct}%"></i></div><small>${Math.floor(pr.days || 0)} из ${pr.need_days || s.probation_days} дн.</small></div>
       <div><span>Новые ставки</span><div class="share-bar"><i style="width:${betPct}%"></i></div><small>${sh.new || 0} из ${pr.need_bets || s.probation_min_bets}</small></div></div>
@@ -529,7 +529,8 @@ async function playerDialog(wallet, main = $("#main")) {
     $(".modal-body", dl).innerHTML = errorBox(e, false);
     return;
   }
-  const m = p.metrics, v = p.verdict, f = p.facts || {};
+  // a profile counted by an older version has no verdict until it is recomputed (a few minutes after an update)
+  const m = p.metrics, v = p.verdict || { score: null, passed: false, failed: [], checks: [], recounting: true }, f = p.facts || {};
   const body = $(".modal-body", dl);
   if (!m) {
     body.innerHTML = `<div class="pl-head">${avatar(wallet, p.image, p.name, 44)}<div class="pl-id"><b>${esc(p.name || short(wallet))}</b><small>${short(wallet)}</small></div></div>
@@ -539,7 +540,8 @@ async function playerDialog(wallet, main = $("#main")) {
   const months = m.monthly || [];
   body.innerHTML = `<div class="pl-head">${avatar(wallet, p.image, p.name, 44)}<div class="pl-id"><a href="/traders/${wallet}"><b>${esc(p.name || short(wallet))}</b></a>
       <small>${esc(p.kind_label)} · проверен ${ago(p.profiled)}${m.partial ? " · история прочитана частично" : ""}</small></div>${scoreRing(v.score)}</div>
-    <div class="verdict ${v.passed ? "ok" : "no"}">${v.passed ? icon("check", 16) + " Проходит отбор по вашим правилам" : icon("x", 16) + " Не проходит: " + esc(v.failed.join(", ").toLowerCase())}</div>
+    ${v.recounting ? `<div class="verdict">${icon("clock", 16)} Оценка пересчитывается по новым правилам отбора — это займёт несколько минут</div>`
+      : `<div class="verdict ${v.passed ? "ok" : "no"}">${v.passed ? icon("check", 16) + " Проходит отбор по вашим правилам" : icon("x", 16) + " Не проходит: " + esc(v.failed.join(", ").toLowerCase())}</div>`}
     <div class="checks">${v.checks.map((c) => `<div class="${c.ok ? "ok" : "no"}">${icon(c.ok ? "check" : "x", 14)}<span>${esc(c.label)}</span><b>${checkValue(c)}</b><small>${c.key === "type" ? "" : esc(c.need.replace(".", ","))}</small></div>`).join("")}</div>
     <h3 class="sub-h">Копии его ставок за 180 дней</h3>
     <dl class="pl-stats wide">
