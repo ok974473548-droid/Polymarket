@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Облачный сервер работает по HTTPS; свой сервер дома бывает без HTTPS (http://192.168.…:8787) — обычный HTTP разрешён.
+     В интернет сервер стоит открывать только через HTTPS или VPN (см. README). -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

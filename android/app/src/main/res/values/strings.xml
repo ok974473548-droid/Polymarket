@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Контур</string>
+    <string name="setup_title">Подключение к серверу</string>
+    <string name="setup_text">Контур рынка работает на сервере, а это приложение — его экран на телефоне. По умолчанию — облачный сервер. Можно указать свой: например, адрес компьютера в домашней Wi-Fi сети — http://192.168.1.10:8787.</string>
+    <string name="setup_hint">https://….up.railway.app</string>
+    <string name="setup_connect">Подключиться</string>
+    <string name="setup_checking">Проверяем…</string>
+    <string name="error_title">Сервер не отвечает</string>
+    <string name="error_retry">Повторить</string>
+    <string name="error_change">Изменить адрес сервера</string>
+    <string name="shortcut_server">Сменить сервер</string>
+    <string name="channel_name">Копирование и заявки</string>
+    <string name="channel_desc">Скопированные сделки, исполненные заявки, замены игроков в автопилоте</string>
+</resources>

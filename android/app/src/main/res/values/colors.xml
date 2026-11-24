@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Палитра интерфейса Контура 1.4 -->
+    <color name="bg">#0B1015</color>
+    <color name="surface">#151E2B</color>
+    <color name="ink">#E8EAED</color>
+    <color name="muted">#8696B0</color>
+    <color name="brand">#3B82F6</color>
+    <color name="brand_ink">#FFFFFF</color>
+</resources>

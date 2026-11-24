@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutId="change_server"
+        android:shortcutShortLabel="@string/shortcut_server">
+        <intent
+            android:action="com.kontur.market.CHANGE_SERVER"
+            android:targetClass="com.kontur.market.MainActivity"
+            android:targetPackage="com.kontur.market" />
+    </shortcut>
+</shortcuts>
