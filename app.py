@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from kontur import VERSION, auth, autopilot, books, bus, copytrade, net, news, notify, scout, stream, traders, trading, watchlist
+from kontur import VERSION, accounts, auth, autopilot, books, bus, copytrade, net, news, notify, scout, stream, traders, trading, watchlist
 from kontur import db as store
 from kontur import polymarket as pm
 from kontur.worker import FAST, SLOW, ScoutPool, WalletPool, Worker
@@ -152,6 +152,12 @@ def get_routes(db, path, query, user):
         acc = trading.main_account(db, user["id"])
         return {"user": user, "setup": False, "account": trading.summary(db, user["id"], acc["id"]),
                 "unread": db.execute("SELECT COUNT(*) FROM notifications WHERE user_id=? AND read=0", (user["id"],)).fetchone()[0]}
+    if path == "/api/auth/invite":
+        return accounts.check_invite(db, q1(query, "token"))
+    if path == "/api/admin/users":
+        return accounts.users(db, need(user)["id"])
+    if path == "/api/admin/invites":
+        return accounts.invites(db, need(user)["id"])
     if path == "/api/home":
         return home(db)
     if path == "/api/markets":
@@ -296,6 +302,19 @@ def post_routes(db, path, body, user, handler):
     if path == "/api/auth/login":
         handler.new_session = auth.login(db, body, handler.client_address[0])
         return {"ok": True}
+    if path == "/api/auth/register":
+        handler.new_session = accounts.register(db, body)
+        return {"ok": True}
+    if path.startswith("/api/admin/"):
+        uid = need(user)["id"]
+        if path == "/api/admin/invite":
+            return accounts.create_invite(db, uid, body.get("note"), body.get("days") or accounts.INVITE_DAYS)
+        if path == "/api/admin/invite/revoke":
+            return accounts.revoke_invite(db, uid, body.get("id"))
+        if path == "/api/admin/user/block":
+            return accounts.set_blocked(db, uid, body.get("id"), bool(body.get("blocked")))
+        if path == "/api/admin/user/delete":
+            return accounts.delete_user(db, uid, body.get("id"))
     if path == "/api/auth/logout":
         auth.logout(db, handler.session_token)
         handler.new_session = ""

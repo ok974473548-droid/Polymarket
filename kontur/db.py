@@ -22,6 +22,17 @@ CREATE TABLE IF NOT EXISTS sessions(
   created REAL NOT NULL,
   expires REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS invites(
+  id INTEGER PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  note TEXT NOT NULL DEFAULT '',
+  created REAL NOT NULL,
+  expires REAL NOT NULL,
+  used_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  used_at REAL,
+  revoked INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS login_attempts(
   ip TEXT NOT NULL, at REAL NOT NULL
 );
@@ -337,6 +348,9 @@ MIGRATIONS = [
     # 1.3.0: an 8-byte hash of the fill key instead of its ~150-character text, and a link to `outcomes`
     ("copy_events", "key_hash", "INTEGER"),
     ("copy_events", "outcome_id", "INTEGER"),
+    # 1.5.0: several people in one app: a blocked person cannot sign in and their copying stops
+    ("users", "blocked", "INTEGER NOT NULL DEFAULT 0"),
+    ("users", "last_login", "REAL"),
 ]
 
 # Indexes for the hot queries (created after the column migrations above).

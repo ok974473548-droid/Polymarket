@@ -315,3 +315,93 @@ class AuthTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AccountsTests(unittest.TestCase):
+    """Several people in one app: invitations, sign-up, block and delete (1.5.0)."""
+
+    def setUp(self):
+        from kontur import accounts, stream
+        self.accounts, self.stream = accounts, stream
+        self.dir = tempfile.TemporaryDirectory()
+        path = str(Path(self.dir.name) / "a.sqlite3")
+        store.init(path)
+        self.db = store.connect(path)
+        self.admin = auth.create_user(self.db, "owner", "password123", admin=True)
+
+    def tearDown(self):
+        self.db.close()
+        self.dir.cleanup()
+
+    def join(self, name="friend"):
+        inv = self.accounts.create_invite(self.db, self.admin, "друг")
+        token = self.accounts.register(self.db, {"invite": inv["token"], "username": name, "password": "secret123"})
+        return inv, token, auth.user_for(self.db, token)
+
+    def test_invite_works_once(self):
+        inv, token, user = self.join()
+        self.assertEqual(user["username"], "friend")
+        self.assertFalse(user["is_admin"])
+        self.assertAlmostEqual(trading.main_account(self.db, user["id"])["balance"], auth.START_BALANCE)
+        with self.assertRaises(PermissionError):  # the same link again
+            self.accounts.register(self.db, {"invite": inv["token"], "username": "other", "password": "secret123"})
+        with self.assertRaises(LookupError):
+            self.accounts.check_invite(self.db, inv["token"])
+        self.assertEqual(self.accounts.invites(self.db, self.admin)[0]["status"], "used")
+        # only the hash is kept
+        self.assertIsNone(self.db.execute("SELECT 1 FROM invites WHERE token_hash=?", (inv["token"],)).fetchone())
+
+    def test_bad_name_keeps_the_invite_and_revoke_closes_it(self):
+        inv = self.accounts.create_invite(self.db, self.admin)
+        with self.assertRaises(ValueError):  # login already taken: the invitation is not spent
+            self.accounts.register(self.db, {"invite": inv["token"], "username": "owner", "password": "secret123"})
+        self.assertTrue(self.accounts.check_invite(self.db, inv["token"])["ok"])
+        self.accounts.revoke_invite(self.db, self.admin, inv["id"])
+        with self.assertRaises(PermissionError):
+            self.accounts.register(self.db, {"invite": inv["token"], "username": "late", "password": "secret123"})
+        expired = self.accounts.create_invite(self.db, self.admin)
+        self.db.execute("UPDATE invites SET expires=? WHERE id=?", (time.time() - 1, expired["id"]))
+        with self.assertRaises(LookupError):
+            self.accounts.check_invite(self.db, expired["token"])
+
+    def test_only_admin_manages_people(self):
+        _, _, user = self.join()
+        for call in (lambda: self.accounts.create_invite(self.db, user["id"]), lambda: self.accounts.users(self.db, user["id"]),
+                     lambda: self.accounts.set_blocked(self.db, user["id"], self.admin, True)):
+            with self.assertRaises(PermissionError):
+                call()
+        with self.assertRaises(ValueError):
+            self.accounts.set_blocked(self.db, self.admin, self.admin, True)  # not yourself
+        with self.assertRaises(ValueError):
+            self.accounts.delete_user(self.db, self.admin, self.admin)
+
+    def test_block_stops_sign_in_and_copying(self):
+        _, token, user = self.join()
+        prof = copytrade.create_profile(self.db, user["id"], "P")
+        self.db.execute("""INSERT INTO copy_trades(account_id, leader, sizing, amount, created) VALUES(?,?,?,?,?)""",
+                        (prof["id"], "0x" + "a" * 40, "fixed", 10, time.time()))
+        self.assertIn("0x" + "a" * 40, self.stream.followed(self.db))
+        self.accounts.set_blocked(self.db, self.admin, user["id"], True)
+        self.assertIsNone(auth.user_for(self.db, token))
+        with self.assertRaisesRegex(PermissionError, "заблокирована"):
+            auth.login(self.db, {"username": "friend", "password": "secret123"}, "1.2.3.4")
+        self.assertNotIn("0x" + "a" * 40, self.stream.followed(self.db))
+        self.accounts.set_blocked(self.db, self.admin, user["id"], False)
+        self.assertTrue(auth.login(self.db, {"username": "friend", "password": "secret123"}, "1.2.3.4"))
+        self.assertIn("0x" + "a" * 40, self.stream.followed(self.db))
+        listed = {u["username"]: u for u in self.accounts.users(self.db, self.admin)}
+        self.assertEqual(set(listed), {"owner", "friend"})
+        self.assertIsNotNone(listed["friend"]["last_login"])
+        self.assertTrue(listed["owner"]["me"])
+
+    def test_delete_removes_everything(self):
+        _, _, user = self.join()
+        uid = user["id"]
+        copytrade.create_profile(self.db, uid, "P")
+        store.kv_set(self.db, f"ap:{uid}:settings", "{}")
+        self.accounts.delete_user(self.db, self.admin, uid)
+        for table in ("users", "accounts", "sessions"):
+            col = "id" if table == "users" else "user_id"
+            self.assertEqual(self.db.execute(f"SELECT COUNT(*) FROM {table} WHERE {col}=?", (uid,)).fetchone()[0], 0)
+        self.assertIsNone(store.kv_get(self.db, f"ap:{uid}:settings"))
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM ledger").fetchone()[0], 1)  # only the owner's start deposit

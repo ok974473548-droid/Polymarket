@@ -46,6 +46,7 @@ export function header() {
             <a href="/portfolio" role="menuitem">${icon("wallet", 15)} Портфель</a>
             <a href="/copy-trading" role="menuitem">${icon("copy", 15)} Копирование</a>
             <a href="/autopilot" role="menuitem">${icon("pilot", 15)} Автопилот</a>
+            ${u.is_admin ? `<a href="/admin" role="menuitem">${icon("users", 15)} Пользователи</a>` : ""}
             <button role="menuitem" data-password>${icon("key", 15)} Сменить пароль</button>
             <button role="menuitem" class="danger" data-logout>${icon("logout", 15)} Выйти</button>
           </div>
@@ -270,6 +271,7 @@ export function loginDialog(reason = "") {
       <label>Пароль<input name="password" type="password" autocomplete="current-password" required></label>
       <p class="form-error" hidden></p>
       <button class="btn btn-primary btn-block">Войти</button>
+      <p class="muted small">Нет аккаунта? Попросите у администратора ссылку-приглашение.</p>
     </form>`);
   const f = $("#login-form", d);
   f.username.focus();
@@ -357,6 +359,7 @@ function mobileMenu() {
     <a href="/copy-trading">${icon("copy", 18)} Копирование</a><a href="/autopilot">${icon("pilot", 18)} Автопилот</a>
     <a href="/portfolio">${icon("wallet", 18)} Портфель</a><a href="/search">${icon("search", 18)} Поиск</a>
     <a href="/watchlist">${icon("star", 18)} Избранное</a><a href="/tags">${icon("tag", 18)} Теги</a><a href="/api">${icon("api", 18)} API</a>
+    ${u?.is_admin ? `<a href="/admin">${icon("users", 18)} Пользователи</a>` : ""}
     ${u ? `<button data-password>${icon("key", 18)} Сменить пароль</button><button data-logout class="danger">${icon("logout", 18)} Выйти</button>` : `<button data-login>${icon("user", 18)} Войти</button>`}
   </nav>`);
   d.addEventListener("click", (e) => e.target.closest("a, button[data-login], button[data-logout], button[data-password]") && d.close());

@@ -10,9 +10,11 @@ import { copyPage, copyWizard } from "./pages/copy.js";
 import { portfolioPage } from "./pages/portfolio.js";
 import { apiPage } from "./pages/api.js";
 import { autopilotPage } from "./pages/autopilot.js";
+import { adminPage, joinPage } from "./pages/admin.js";
 
 const TITLES = { "": "Аналитика Polymarket", traders: "Трейдеры", markets: "Рынки", "copy-trading": "Копирование", portfolio: "Портфель",
-  watchlist: "Избранное", tags: "Теги", search: "Поиск", api: "API", autopilot: "Автопилот" };
+  watchlist: "Избранное", tags: "Теги", search: "Поиск", api: "API", autopilot: "Автопилот",
+  admin: "Пользователи", join: "Регистрация" };
 let lastPath = "";
 
 function page(main) {
@@ -32,6 +34,8 @@ function page(main) {
     case "portfolio": return portfolioPage(main);
     case "autopilot": return autopilotPage(main);
     case "api": return apiPage(main);
+    case "admin": return adminPage(main);
+    case "join": return joinPage(main);
     default:
       main.innerHTML = `<div class="gate"><h2>Страница не найдена</h2><p>Такого раздела нет.</p><a class="btn btn-primary" href="/">На главную</a></div>`;
   }

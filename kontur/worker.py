@@ -28,8 +28,8 @@ def _today():
 def job_copy(db):
     """Data API polling: the fallback for fills the live stream missed (the API itself lags by minutes)."""
     every = 120 if stream.connected() else 30
-    due = store.rows(db.execute("""SELECT c.* FROM copy_trades c JOIN accounts a ON a.id=c.account_id
-                                   WHERE c.paused=0 AND a.paused=0 AND (c.last_check IS NULL OR c.last_check < ?)
+    due = store.rows(db.execute("""SELECT c.* FROM copy_trades c JOIN accounts a ON a.id=c.account_id JOIN users u ON u.id=a.user_id
+                                   WHERE c.paused=0 AND a.paused=0 AND u.blocked=0 AND (c.last_check IS NULL OR c.last_check < ?)
                                    ORDER BY c.last_check LIMIT 20""", (time.time() - every,)))
     for ct in due:
         try:

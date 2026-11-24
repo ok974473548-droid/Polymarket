@@ -7,7 +7,7 @@
 ## Запуск и проверка
 - Только Python 3.11+, без сторонних пакетов: `python app.py` → http://127.0.0.1:8787 (`--db`, `--port`, `--no-worker`).
 - Docker: `docker compose up -d --build` (том `kontur-data`).
-- Тесты: `PYTHONPATH=.:tests python -m unittest tests.test_trading tests.test_autopilot tests.test_data tests.test_speed` (113 тестов, без сети).
+- Тесты: `PYTHONPATH=.:tests python -m unittest tests.test_trading tests.test_autopilot tests.test_data tests.test_speed` (118 тестов, без сети).
 - Замер скорости: `PYTHONPATH=. python research/bench_perf.py` (сеть, сервер, база, поток сделок).
 - Переменные: `KONTUR_DB`, `HOST`, `PORT`, `KONTUR_SCOUT_THREADS` (6), `KONTUR_SCOUT_GAP` (0.06 с), `KONTUR_STATS_THREADS` (4), `KONTUR_STATS_GAP` (0.06 с).
 
@@ -27,6 +27,7 @@
 | `kontur/copytrade.py`, `trading.py` | Копирование (`handle` — одна сделка, ключ `trade_key` общий для потока и Data API, без дублей); заявки, проход по стакану, комиссии, позиции |
 | `kontur/worker.py` | Фоновые задачи (fast / slow), пулы потоков `JobPool`: поиск игроков (`ScoutPool`), статистика трейдеров (`WalletPool`) |
 | `kontur/traders.py` | Рейтинги и статистика трейдеров; закрытые позиции догружаются и хранятся картой «хэш токена → итог» (`wallet_closed`) |
+| `kontur/accounts.py` | Несколько человек: приглашения (одноразовые ссылки, в базе только хэш), регистрация по ним, список пользователей, блокировка (вход и копирование останавливаются), удаление со всеми данными; страница `/admin` и `/join` — `static/js/pages/admin.js` |
 | `kontur/news.py`, `watchlist.py`, `notify.py`, `auth.py`, `db.py` | Новости, избранное, уведомления, вход, база SQLite (справочник исходов `outcomes` для журнала копий) |
 | `static/` | Интерфейс (JS без сборки). Дизайн — токены в `:root` `static/css/app.css`: `--radius` 16, `--card` (градиент), `--surface-shadow`, `--well`, фирменная пара `--brand`/`--brand-2`/`--brand-grad` (синий → бирюзовый); контейнер `.wrap` до 1 880 px; высота графиков — `fitHeight` в `chart.js`; строки сделок и ставок (деньги, подробности под строкой, карточки на телефоне) — `trades.js` |
 | `research/` | Скрипты проверки модели автопилота и итоги прогона |

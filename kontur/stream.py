@@ -47,7 +47,7 @@ def to_row(p):
 def followed(db):
     """Wallets with an active copy (manual or autopilot) on an active profile."""
     return {r[0].lower() for r in db.execute("""SELECT DISTINCT c.leader FROM copy_trades c JOIN accounts a ON a.id=c.account_id
-                                                WHERE c.paused=0 AND a.paused=0""")}
+                                                JOIN users u ON u.id=a.user_id WHERE c.paused=0 AND a.paused=0 AND u.blocked=0""")}
 
 
 class TradeStream(threading.Thread):
@@ -104,7 +104,8 @@ class TradeStream(threading.Thread):
             pass  # the copy is then recorded as failed with the reason, as before
         self._prefetch(row)
         cts = store.rows(db.execute("""SELECT c.*, a.user_id AS _uid FROM copy_trades c JOIN accounts a ON a.id=c.account_id
-                                       WHERE lower(c.leader)=? AND c.paused=0 AND a.paused=0 AND c.created <= ?""",
+                                       JOIN users u ON u.id=a.user_id
+                                       WHERE lower(c.leader)=? AND c.paused=0 AND a.paused=0 AND u.blocked=0 AND c.created <= ?""",
                                     (row["proxy_wallet"], row["timestamp"] + 5)))
         infos = {}
         for ct in cts:

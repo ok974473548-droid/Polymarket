@@ -964,3 +964,22 @@ select.input-sm { padding-right: 26px; }
   .traders-table .trader-cell b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 96px; display: inline-block; vertical-align: middle; }
   .traders-table th, .traders-table td { padding-left: 6px; padding-right: 6px; }
 }
+
+/* 1.5.0: people in the app (administrator) */
+.adm-users { margin-top: 16px; }
+.adm-list { display: flex; flex-direction: column; }
+.adm-row { display: flex; align-items: center; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.adm-row:last-child { border-bottom: 0; }
+.adm-row.is-blocked .adm-main > b { color: var(--muted); text-decoration: line-through; }
+.adm-main { flex: 1; min-width: 0; }
+.adm-main small { display: block; margin-top: 3px; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+.adm-num { text-align: right; font-variant-numeric: tabular-nums; }
+.adm-num small { display: block; color: var(--muted); font-size: 12px; }
+.adm-acts { display: flex; gap: 6px; flex: none; }
+.inv-link { display: flex; gap: 8px; }
+.inv-link input { flex: 1; min-width: 0; font-size: 13px; }
+@media (max-width: 760px) {
+  .adm-row { flex-wrap: wrap; }
+  .adm-main { flex-basis: 100%; }
+  .adm-num { text-align: left; margin-right: auto; }
+}

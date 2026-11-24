@@ -795,7 +795,9 @@ def run_backtest(db, uid):
 
 def users(db):
     """Users who have an autopilot account."""
-    return [int(r[0].split(":")[1]) for r in db.execute("SELECT key FROM kv WHERE key LIKE 'ap:%:account'")]
+    blocked = {r[0] for r in db.execute("SELECT id FROM users WHERE blocked=1")}
+    return [uid for uid in (int(r[0].split(":")[1]) for r in db.execute("SELECT key FROM kv WHERE key LIKE 'ap:%:account'"))
+            if uid not in blocked]  # a blocked person's autopilot waits until they are unblocked
 
 
 def is_autopilot_account(db, aid):
