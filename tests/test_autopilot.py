@@ -429,6 +429,12 @@ class SkillTests(unittest.TestCase):
         self.assertAlmostEqual(autopilot.expected_return({"skill": {"edge": 0.04}, "roi": 0.3, "n": 100}), 0.04)
         self.assertAlmostEqual(autopilot.expected_return({"skill": None, "roi": 0.2, "n": 40}), 0.1)
         self.assertIsNone(autopilot.expected_return({"skill": None, "roi": None, "n": 0}))
+        # 1.12.1: a long-shot buyer counts at most +25%, and the roster is its median player, not the mean
+        self.assertAlmostEqual(autopilot.expected_return({"skill": {"edge": 1.35}, "roi": 2.0, "n": 150}), 0.25)
+        roster = [1.35, 0.64, 0.14, 0.12, 0.05]                    # was: mean 46%
+        self.assertAlmostEqual(autopilot.roster_return([autopilot.expected_return({"skill": {"edge": e}}) for e in roster]), 0.14)
+        self.assertAlmostEqual(autopilot.roster_return([0.1, 0.2, None]), 0.15)
+        self.assertIsNone(autopilot.roster_return([]))
 
 
 class LiveSlipTests(Base):

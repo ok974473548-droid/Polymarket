@@ -43,7 +43,7 @@ export async function autopilotPage(main) {
       <dl class="ap-kpis">
         <div><dt>Выиграно копий</dt><dd>${p100(st.wr)}</dd><small>${st.closed ? `${st.wins} из ${st.closed} решённых` : "пока нет решённых"}</small></div>
         <div><dt>Ожидаемая доходность копии</dt><dd class="${tone(st.expected_roi, 0.0001, 0)}">${st.expected_roi == null ? "—" : sp100(st.expected_roi)}</dd>
-          <small title="Доля выигрышей во многом задаётся ценой: покупка за $0,85 выигрывает в 85% случаев и ничего не зарабатывает">по истории игроков, после цены, комиссии и сдвига цены${st.expected_wr != null ? ` · выигрышей ${p100(st.expected_wr)}` : ""}</small></div>
+          <small title="Средний игрок состава по своей истории, после цены, комиссии и сдвига цены; один игрок даёт не больше +25%. Прошлое переоценивает будущее: на проверке по истории 1 512 кошельков такой отбор дал от +1,5% (покупка сразу) до +6,3% (по цене игрока) на копию.">медиана по составу · на проверке по истории +1,5…+6,3%</small></div>
         <div><dt>Свободно / в ставках</dt><dd>${usd(a.cash)}</dd><small>${usd(a.positions)} в ${num(st.open)} открытых копиях${st.waiting ? ` · ${num(st.waiting)} ждут цену` : ""}</small></div>
         <div><dt>Доля игрока · копия</dt><dd>${usd(d.share)}</dd><small>одна копия ${usd(copySize)} (${num(s.copy_pct)}% доли)</small></div>
       </dl>

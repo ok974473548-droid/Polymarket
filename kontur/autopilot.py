@@ -21,6 +21,7 @@ from . import trading
 DAY = 86400
 REVIEW_EVERY = 600
 EPS = 1e-6
+EXPECTED_CAP = 0.25         # the most one player adds to the expected return of a copy (1.12.1)
 MANUAL_REMOVE_DAYS = 7      # at least this long a player taken off the bench by hand stays off
 
 SETTINGS = {
@@ -882,7 +883,7 @@ def overview(db, uid):
                       "waiting": db.execute("SELECT COUNT(*) FROM orders WHERE account_id=? AND status='open' AND side='buy'",
                                             (aid,)).fetchone()[0] if aid else 0,
                       "expected_wr": sum(expected) / len(expected) if expected else None,
-                      "expected_roi": sum(returns) / len(returns) if returns else None},
+                      "expected_roi": roster_return(returns)},
             "players": cards, "swaps_today": _swaps_today(db, uid),
             "reviewed": float(store.kv_get(db, f"ap:{uid}:reviewed", "0") or 0) or None, "scout": scout.status(db)}
 
@@ -894,10 +895,24 @@ def expected_return(profile):
     which mostly reflects how expensive the bought outcomes were."""
     sk = profile.get("skill")
     if sk:
-        return sk["edge"]
-    if profile.get("roi") is None or not profile.get("n"):
+        edge = sk["edge"]
+    elif profile.get("roi") is None or not profile.get("n"):
         return None
-    return profile["roi"] * profile["n"] / (profile["n"] + scout.K_SHRINK)
+    else:
+        edge = profile["roi"] * profile["n"] / (profile["n"] + scout.K_SHRINK)
+    # one player counts at most EXPECTED_CAP: a buyer of long shots averages +135% on a few big wins (24.11.2026:
+    # entries at $0.06), which says little about the next copies
+    return min(edge, EXPECTED_CAP)
+
+
+def roster_return(returns):
+    """The roster's expected return per copy: the median player (until 1.12.0 the mean, 21% on 25.11.2026,
+    pulled up by one long-shot buyer; the median was 14%)."""
+    vals = sorted(r for r in returns if r is not None)
+    if not vals:
+        return None
+    mid = len(vals) // 2
+    return vals[mid] if len(vals) % 2 else (vals[mid - 1] + vals[mid]) / 2
 
 
 def player(db, uid, wallet):
