@@ -279,3 +279,27 @@ class RoundChartMath(unittest.TestCase):
     def test_candles_open_where_the_last_closed(self):
         got = self.run_js("m.candles([[0, 1], [1, 3], [2, 2], [5, 4], [6, 1], [20, 9]], 0, 10, 5)")
         self.assertEqual(got, [{"t": 0, "o": 1, "h": 3, "l": 1, "c": 2}, {"t": 5, "o": 2, "h": 4, "l": 1, "c": 1}])
+
+
+@unittest.skipUnless(shutil.which("node"), "node is not installed")
+class StreamLinks(unittest.TestCase):
+    """static/js/stream.js: the player of an event's broadcast (resolutionSource of esports matches, 25.11.2026)."""
+
+    def test_players(self):
+        path = Path(os.path.join(os.path.dirname(__file__), "..", "static", "js", "stream.js")).resolve().as_uri()
+        links = ["https://www.twitch.tv/PGL", "https://kick.com/cct_cs2", "https://www.youtube.com/watch?v=87Q4eGjKbVc",
+                 "https://youtu.be/87Q4eGjKbVc", "https://www.itftennis.com/en/tournament-calendar/", "https://www.twitch.tv/directory", ""]
+        stub = ("globalThis.window = globalThis; globalThis.localStorage = null; globalThis.location = {hostname: 'x', pathname: '/', search: ''}; "
+                "globalThis.document = {addEventListener() {}, querySelector() { return null; }, querySelectorAll() { return []; }}; "
+                "globalThis.addEventListener = () => {}; globalThis.matchMedia = () => ({matches: false, addEventListener() {}}); ")
+        code = (stub + f"import('{path}').then((m) => console.log(JSON.stringify("
+                f"{json.dumps(links)}.map((l) => m.streamOf(l, 'polycontur.up.railway.app')))))")
+        out = subprocess.run(["node", "--input-type=module", "-e", code], capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        got = json.loads(out.stdout)
+        self.assertEqual(got[0]["src"], "https://player.twitch.tv/?channel=PGL&parent=polycontur.up.railway.app&muted=true&autoplay=true")
+        self.assertEqual(got[1]["src"], "https://player.kick.com/cct_cs2?muted=true&autoplay=true")
+        self.assertEqual(got[2]["src"], "https://www.youtube.com/embed/87Q4eGjKbVc?autoplay=1&mute=1&playsinline=1")
+        self.assertEqual(got[3]["channel"], "87Q4eGjKbVc")
+        self.assertEqual(got[4:], [None, None, None])         # a league's site, a Twitch section, nothing
+

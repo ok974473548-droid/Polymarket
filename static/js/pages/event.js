@@ -6,6 +6,7 @@ import { $, $$, ago, api, avatar, cents, compact, date, delta, errorBox, esc, go
 import { PALETTE } from "../chart.js";
 import { cryptoRound, liveFeed, stopLive } from "../livechart.js";
 import { probChart } from "../probchart.js";
+import { bindStream, streamCard } from "../stream.js";
 import { roll, rollHtml } from "../roll.js";
 import { eventCandidates } from "./home.js";
 import { tradesTable } from "./trader.js";
@@ -52,7 +53,7 @@ export async function eventPage(main, slug) {
   const host = $("#ev-main");
   const showAllTags = q.get("alltags") === "1";
   const tags = showAllTags ? e.tags : e.tags.slice(0, 4);
-  host.innerHTML = `<header class="ev-head">${thumb(e.image, 72, "ev-img")}<div class="ev-title">
+  host.innerHTML = `${streamCard(e)}<header class="ev-head">${thumb(e.image, 72, "ev-img")}<div class="ev-title">
       <div class="chips">${tags.map((t) => `<a class="tchip" href="/tags/${esc(t.slug)}">${esc(t.label)}</a>`).join("")}
         ${e.tags.length > 4 ? `<a class="tchip more" href="${withQuery({ alltags: showAllTags ? null : "1" })}" data-keep-scroll>${showAllTags ? "− Меньше" : "+" + (e.tags.length - 4) + " ещё"}</a>` : ""}</div>
       <h1>${esc(e.title)}</h1>
@@ -63,6 +64,7 @@ export async function eventPage(main, slug) {
     <nav class="tabs" aria-label="Разделы события">${TABS.map(([k, l]) =>
       `<a href="${withQuery({ tab: k === "chart" ? null : k, cursor: null })}" class="${tab === k ? "cur" : ""}" data-keep-scroll>${k === "chart" && listOnly ? "Исходы" : l}</a>`).join("")}</nav>
     <div id="ev-tab"></div>`;
+  bindStream(host);
   const tabHost = $("#ev-tab");
   if (tab === "chart") chartTab(tabHost, e, cands);
   else if (tab === "holders") holdersTab(tabHost, e, cands);
