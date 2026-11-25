@@ -43,12 +43,10 @@ export async function autopilotPage(main) {
       <dl class="ap-kpis">
         <div><dt>Выиграно копий</dt><dd>${p100(st.wr)}</dd><small>${st.closed ? `${st.wins} из ${st.closed} решённых` : "пока нет решённых"}</small></div>
         <div><dt>Ожидаемая доходность копии</dt><dd class="${tone(st.expected_roi, 0.0001, 0)}">${st.expected_roi == null ? "—" : sp100(st.expected_roi)}</dd>
-          <small title="Доля выигрышей во многом задаётся ценой: покупка за 85¢ выигрывает в 85% случаев и ничего не зарабатывает">по истории игроков, после цены, комиссии и сдвига цены${st.expected_wr != null ? ` · выигрышей ${p100(st.expected_wr)}` : ""}</small></div>
+          <small title="Доля выигрышей во многом задаётся ценой: покупка за $0,85 выигрывает в 85% случаев и ничего не зарабатывает">по истории игроков, после цены, комиссии и сдвига цены${st.expected_wr != null ? ` · выигрышей ${p100(st.expected_wr)}` : ""}</small></div>
         <div><dt>Свободно / в ставках</dt><dd>${usd(a.cash)}</dd><small>${usd(a.positions)} в ${num(st.open)} открытых копиях${st.waiting ? ` · ${num(st.waiting)} ждут цену` : ""}</small></div>
         <div><dt>Доля игрока · копия</dt><dd>${usd(d.share)}</dd><small>одна копия ${usd(copySize)} (${num(s.copy_pct)}% доли)</small></div>
       </dl>
-      ${(d.warnings || []).length ? `<div class="ap-warn">${icon("alert", 16)}<ul>${d.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>
-        <button class="btn btn-sm" type="button" id="ap-warn-fix">${icon("sliders", 14)} Настройки</button></div>` : ""}
       <p class="ap-status small muted">${icon("clock", 13)} ${d.reviewed ? "Пересмотр состава " + ago(d.reviewed) : "Первый пересмотр начнётся в течение минуты"} ·
         проверено игроков ${num(d.scout.profiled)} из ${num(d.scout.total)} · замен за сутки ${d.swaps_today} из ${s.max_swaps_per_day}
         <button class="link-btn" id="ap-review">Пересмотреть сейчас</button></p></section>
@@ -65,7 +63,6 @@ export async function autopilotPage(main) {
     }
   };
   $("#ap-settings").onclick = () => settingsDialog(d, () => autopilotPage(main));
-  if ($("#ap-warn-fix")) $("#ap-warn-fix").onclick = () => settingsDialog(d, () => autopilotPage(main));
   $("#ap-transfer").onclick = () => transferDialog(a, () => autopilotPage(main));
   $("#ap-review").onclick = async () => {
     await api("/api/autopilot/review", {});
@@ -85,13 +82,13 @@ export async function autopilotPage(main) {
 function intro(main, d) {
   main.innerHTML = `<div class="ap-intro"><span class="gate-ic big">${icon("pilot", 28)}</span>
     <h1>Автопилот копирования</h1>
-    <p>Система сама находит трейдеров Polymarket, чьи ставки выгодно повторять, держит из них состав и меняет тех, кто начал проигрывать. Цель — 70–80% выигранных копий при положительной доходности.</p>
+    <p>Система сама находит трейдеров Polymarket, чьи ставки выгодно повторять, держит из них состав и меняет тех, кто начал проигрывать. Цель — копировать тех, кто выигрывает чаще, чем обещает цена, и только ставки, где выигрыш хотя бы в полтора раза больше вложенного.</p>
     <ol class="ap-steps">
-      <li><b>Отбор по истории</b><span>Для каждого кандидата считается, как часто выиграли бы ваши копии его ставок с задержкой и комиссией. Учитываются и проигрыши, которые Polymarket оставляет «открытыми».</span></li>
+      <li><b>Отбор по истории</b><span>Для каждого кандидата считается, выигрывали бы ваши копии его ставок чаще, чем обещала цена, с задержкой и комиссией, и не удача ли это. Учитываются и проигрыши, которые Polymarket оставляет «открытыми».</span></li>
       <li><b>Испытание на скамейке</b><span>Новые игроки две недели проверяются без денег на своих свежих ставках.</span></li>
       <li><b>Состав и замены</b><span>${d.defaults.active_count} игроков делят общий бюджет. Серия проигрышей, падение доли выигрышей или убыток — и место занимает лучший со скамейки.</span></li></ol>
     <button class="btn btn-primary btn-lg" id="ap-start">${icon("bolt", 16)} Включить автопилот</button>
-    <p class="muted small">Деньги виртуальные. Поиск проверяет тысячи кошельков из рейтингов Polymarket. Игроков с 70%+ выигранных копий немного, поэтому состав заполняется постепенно: первые — через полчаса-час, полностью — за несколько часов.</p></div>`;
+    <p class="muted small">Деньги виртуальные. Поиск проверяет тысячи кошельков из рейтингов Polymarket. Игроков с доказанным умением немного, поэтому состав заполняется постепенно: первые — через полчаса-час, полностью — за несколько часов.</p></div>`;
   $("#ap-start").onclick = () => enableDialog(d, () => autopilotPage(main));
 }
 
@@ -166,13 +163,14 @@ const GROUPS = [
     ["min_wr", "Доля выигрышей копий, от", "%", 1, "winrate"], ["min_lb", "Надёжная граница (Уилсон), от", "%", 1, "winrate"],
     ["min_bets", "Решённых ставок за 180 дней, от", "", 1, "winrate"], ["min_roi", "Доходность на ставку, от", "%", 0.5, "winrate"],
     ["min_edge", "Преимущество над ценой, от", "$", 0.005, "winrate"], ["max_top_share", "Доля прибыли от лучшей ставки, до", "%", 1],
-    ["min_recent", "Новых ставок за 14 дней, от", "", 1], ["max_slip", "Проскальзывание, до", "$", 0.005]]],
+    ["min_recent", "Новых ставок за 14 дней, от", "", 1], ["max_slip", "Проскальзывание, до", "$", 0.005],
+    ["min_copyable", "Ставок игрока с выигрышем от нужного «×», от", "%", 5]]],
   ["Что копировать и как", [
     ["copy_mode", "Как покупать копию", "select"],
     ["limit_wait_min", "Ждать цену игрока, минут", "", 1, "limit"],
     ["copy_slip_pct", "Копия дороже игрока, % цены, не больше", "%", 0.5, "market"],
     ["copy_slip", "Копия дороже игрока, $, не больше", "$", 0.005, "market"],
-    ["price_min", "Цена ставки, от", "$", 0.01], ["price_max", "Цена ставки, до", "$", 0.01],
+    ["min_payout", "Выигрыш при успехе, не меньше", "x", 0.1], ["price_min", "Цена ставки, от", "$", 0.01],
     ["min_leader_trade", "Сделка игрока, от", "$", 1], ["max_days_to_end", "До разрешения рынка, дней (0 — без лимита)", "", 1]]],
   ["Испытание на скамейке", [
     ["probation_days", "Срок испытания, дней", "", 1], ["probation_min_bets", "Новых ставок за испытание, от", "", 1],
@@ -194,6 +192,22 @@ const CHOICES = {
     ["market", "Сразу по рынку", "Покупка сразу, но не дороже допуска: в долларах и в процентах цены игрока (срабатывает меньший)."]],
 };
 
+// The money behind a setting, under its field: what the percentages and the payout mean in dollars now.
+const fee = (p) => 0.05 * p * (1 - p);                 // the copy's fee per share, as kontur/scout.fee_est
+function payoutPrice(times) {                           // the highest price a win still pays `times` the copy at
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2;
+    if (1 / (mid + fee(mid)) >= times) lo = mid; else hi = mid;
+  }
+  return lo;
+}
+const MONEY_HINTS = {
+  copy_pct: (v, d) => `Сейчас одна копия — ${usd((d.share * v) / 100)} (доля игрока ${usd(d.share)})`,
+  event_cap_pct: (v, d) => `Не больше ${usd(((d.account?.total || 0) * v) / 100)} на одно событие`,
+  min_payout: (v) => v > 1 ? `Копия $10 при выигрыше вернёт не меньше ${usd(10 * v)}: копируются покупки до ${cents(payoutPrice(v))} за акцию (с комиссией)` : "",
+};
+
 function settingsDialog(d, done) {
   const s = d.settings;
   const field = ([key, label, unit, step, mode]) => {
@@ -203,11 +217,10 @@ function settingsDialog(d, done) {
       return `<label class="set-choice">${label}<select name="${key}">${CHOICES[key].map(([v, l]) => `<option value="${v}" ${s[key] === v ? "selected" : ""}>${l}</option>`).join("")}</select>
         <small class="muted" data-hint="${key}"></small></label>`;
     }
-    return `<label${dep}>${label}<div class="input-unit">${unit === "$" ? "<i>$</i>" : ""}<input name="${key}" type="number" step="${step}" value="${s[key]}"
-          title="По умолчанию ${d.defaults[key]}">${unit === "%" ? "<i>%</i>" : ""}</div></label>`;
+    return `<label${dep}>${label}<div class="input-unit">${unit === "$" ? "<i>$</i>" : unit === "x" ? "<i>×</i>" : ""}<input name="${key}" type="number" step="${step}" value="${s[key]}"
+          title="По умолчанию ${d.defaults[key]}">${unit === "%" ? "<i>%</i>" : unit === "x" ? "<i>ставки</i>" : ""}</div>${MONEY_HINTS[key] ? `<small class="muted" data-money="${key}"></small>` : ""}</label>`;
   };
   const dl = modal("Настройки автопилота", `<form class="form ap-settings" id="set-form">
-    ${(d.warnings || []).length ? `<div class="ap-warn">${icon("alert", 16)}<ul>${d.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
     ${GROUPS.map(([title, items]) => `<fieldset><legend>${title}</legend><div class="set-grid">${items.map(field).join("")}</div></fieldset>`).join("")}
     <p class="form-error" hidden></p>
     <div class="modal-actions"><button type="button" class="btn" id="set-reset">Сбросить по умолчанию</button><button class="btn btn-primary">Сохранить</button></div></form>`, { wide: true });
@@ -217,8 +230,13 @@ function settingsDialog(d, done) {
     const on = new Set([f.selection.value, f.copy_mode.value]);
     f.querySelectorAll("[data-when]").forEach((el) => (el.hidden = !on.has(el.dataset.when)));
     for (const key of Object.keys(CHOICES)) $(`[data-hint="${key}"]`, f).textContent = CHOICES[key].find((c) => c[0] === f[key].value)?.[2] || "";
+    for (const [key, hint] of Object.entries(MONEY_HINTS)) {
+      const v = Number(String(f[key].value).replace(",", "."));
+      $(`[data-money="${key}"]`, f).textContent = isFinite(v) ? hint(v, d) : "";
+    }
   };
   f.selection.onchange = f.copy_mode.onchange = sync;
+  for (const key of Object.keys(MONEY_HINTS)) f[key].oninput = sync;
   sync();
   const err = (m) => {
     const el = $(".form-error", f);

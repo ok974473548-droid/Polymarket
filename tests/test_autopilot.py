@@ -205,7 +205,7 @@ class AutopilotTests(Base):
         leader = self.players("active")[0]
         (status, reason, _), _, _ = self.copy_buy(leader, price=0.985)
         self.assertEqual(status, "skipped")
-        self.assertIn("вне диапазона", reason)
+        self.assertIn("Малый выигрыш", reason)
         autopilot.update_settings(self.db, self.uid, {"event_cap_pct": 2})
         for _ in range(3):
             res, _, _ = self.copy_buy(leader)
@@ -403,8 +403,10 @@ class SkillTests(unittest.TestCase):
         self.assertLess(fav["skill"]["excess"], dog["skill"]["excess"])
         self.assertLess(dog["skill"]["p"], 0.001)
         self.assertGreater(fav["skill"]["p"], 0.001)
-        winrate = {"selection": "winrate"}
+        winrate = {"selection": "winrate", "min_copyable": 0}
         self.assertTrue(scout.judge(fav, "directional", winrate)["passed"])      # until 1.10.0 the favourite was chosen
+        # since 1.12.0 not even then: at 80¢ a win pays back ×1.24, none of his bets would be copied
+        self.assertIn("copyable", [c["key"] for c in scout.judge(fav, "directional", {"selection": "winrate"})["checks"] if not c["ok"]])
         self.assertFalse(scout.judge(dog, "directional", winrate)["passed"])     # and the skilled player was not
         skill = {"selection": "skill"}
         self.assertFalse(scout.judge(fav, "directional", skill, cut=0.001)["passed"])
@@ -656,20 +658,35 @@ class NewAutopilotTests(AutopilotTests):
         self.assertGreater(scout.refresh_metrics(self.db), 0)
         self.assertFalse(autopilot.overview(self.db, self.uid)["players"]["bench"][0]["recounting"])
 
-    def test_warnings_for_settings_that_lose_or_lock_money(self):
-        self.assertEqual(len(autopilot.warnings(autopilot.settings(self.db, self.uid))), 1)   # win-rate selection at 70%
-        autopilot.update_settings(self.db, self.uid, {"selection": "skill"})
-        self.assertEqual(autopilot.warnings(autopilot.settings(self.db, self.uid)), [])
-        autopilot.update_settings(self.db, self.uid, {"price_max": 0.99, "max_days_to_end": 0, "copy_slip": 0.2,
-                                                      "copy_slip_pct": 50})
-        text = " ".join(autopilot.warnings(autopilot.settings(self.db, self.uid)))
-        self.assertIn("99¢", text)
-        self.assertIn("Без ограничения срока", text)
-        self.assertIn("$0.20", text)
-        ov = autopilot.overview(self.db, self.uid)
-        self.assertEqual(len(ov["warnings"]), 3)
+    def test_copies_only_bets_that_pay_enough(self):
+        autopilot.review(self.db, self.uid)
+        leader = self.players("active")[0]
+        # 1.12.0: a win must pay back at least ×1.5 the copy (until then a $6 copy at 92¢ could win $6.50)
+        (status, reason, _), _, _ = self.copy_buy(leader, price=0.70)
+        self.assertEqual(status, "skipped")
+        self.assertEqual(reason, "Малый выигрыш: по цене $0,70 ставка вернёт ×1,41, нужно от ×1,5")
+        (status, reason, _), _, _ = self.copy_buy(leader, price=0.40)
+        self.assertEqual(status, "filled", reason)
+        autopilot.update_settings(self.db, self.uid, {"min_payout": 3})
+        (status, _, _), _, _ = self.copy_buy(leader, price=0.40)       # ×2.4 is not enough for ×3
+        self.assertEqual(status, "skipped")
+        self.assertAlmostEqual(autopilot.overview(self.db, self.uid)["payout_price"], 0.3224, places=3)
+        with self.assertRaises(ValueError):                             # nothing could be bought at all
+            autopilot.update_settings(self.db, self.uid, {"price_min": 0.4})
         with self.assertRaises(ValueError):
             autopilot.update_settings(self.db, self.uid, {"copy_mode": "fast"})
+
+    def test_players_with_few_bets_that_pay_enough_are_not_selected(self):
+        m = scout.metrics(bets_events(60, 0.85, 55), slip=0.005, now=NOW)
+        self.assertEqual(sum(m["entries"]), m["n"])
+        self.assertEqual(scout.copyable_share(m, scout.payout_price(1.5)), 0.0)
+        mixed = scout.metrics(bets_events(30, 0.85, 27) + bets_events(30, 0.40, 15, prefix="d"), slip=0.005, now=NOW)
+        self.assertAlmostEqual(scout.copyable_share(mixed, scout.payout_price(1.5)), 0.5)
+        check = lambda m, s: next(c for c in scout.gates(m, "directional", s) if c["key"] == "copyable")  # noqa: E731
+        self.assertFalse(check(m, {})["ok"])
+        self.assertTrue(check(mixed, {})["ok"])                         # half of his bets pay ×1.5 or more
+        self.assertTrue(check(mixed, {"min_payout": 2})["ok"])          # ×2 is up to $0.49: the 40¢ bets still count
+        self.assertFalse(check(mixed, {"min_payout": 3})["ok"])         # ×3 is up to $0.32: none
 
 
 if __name__ == "__main__":

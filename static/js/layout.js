@@ -19,6 +19,7 @@ export function header() {
   $("#top").innerHTML = `<div class="wrap top-row">
     <button class="icon-btn nav-burger" data-mobile-menu aria-label="Меню">${icon("menu", 20)}</button>
     ${brand()}
+    <button class="search-trigger" data-search-open aria-label="Поиск рынков и трейдеров">${icon("search", 16)}<span>Поиск рынков и трейдеров</span></button>
     <nav class="main-nav" aria-label="Основная навигация">
       ${NAV.map(([href, label, extra]) => `<a href="${href}" class="${cur === href ? "cur" : ""}">${label}${extra || ""}</a>`).join("")}
       <div class="dropdown more-menu">
@@ -69,8 +70,8 @@ export function footer() {
 
 export function mobileBar() {
   const cur = "/" + (route().parts[0] || "");
-  const items = [["/", "Главная", "home"], ["/traders", "Трейдеры", "users"], ["/autopilot", "Автопилот", "pilot"],
-    ["/portfolio", "Портфель", "wallet"], ["#menu", "Меню", "menu"]];
+  const items = [["/", "Главная", "home"], ["/markets", "Рынки", "chart"], ["/traders", "Трейдеры", "users"],
+    ["/autopilot", "Автопилот", "pilot"], ["/portfolio", "Портфель", "wallet"], ["#menu", "Меню", "menu"]];
   $("#mobile").innerHTML = items.map(([href, label, ic]) => href === "#menu"
     ? `<button data-mobile-menu>${icon(ic, 20)}<span>${label}</span></button>`
     : `<a href="${href}" class="${cur === href ? "cur" : ""}">${icon(ic, 20)}<span>${label}</span></a>`).join("");
@@ -110,9 +111,7 @@ export async function hotStrip() {
 
 // ------------------------------------------------------------ search
 let searchTimer = 0, searchCtl = null;
-function bindSearch() {
-  const input = $("#top-search");
-  const pop = $(".search-pop");
+function bindSearch(input = $("#top-search"), pop = $(".search-pop"), onGo = () => {}) {
   if (!input) return;
   input.addEventListener("input", () => {
     clearTimeout(searchTimer);
@@ -142,6 +141,7 @@ function bindSearch() {
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && input.value.trim()) {
       pop.hidden = true;
+      onGo();
       go("/search?q=" + encodeURIComponent(input.value.trim()));
     }
     if (e.key === "Escape") pop.hidden = true;
@@ -155,8 +155,44 @@ document.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "/" && !/input|textarea|select/i.test(document.activeElement?.tagName || "")) {
     e.preventDefault();
-    $("#top-search")?.focus();
+    const box = $("#top-search");
+    if (box && box.offsetParent) box.focus();
+    else openSearch();
   }
+});
+
+// On a phone or tablet the search opens over the page: a field at the top, results under it as you type.
+function openSearch() {
+  if ($(".search-sheet")) return $("#sheet-search")?.focus();
+  const sheet = document.createElement("div");
+  sheet.className = "search-sheet";
+  sheet.setAttribute("role", "dialog");
+  sheet.setAttribute("aria-label", "Поиск");
+  sheet.innerHTML = `<div class="ss-panel"><div class="ss-bar"><label class="ss-box">${icon("search", 18)}
+      <input id="sheet-search" type="search" enterkeyhint="search" placeholder="Рынки, трейдеры, теги" autocomplete="off" aria-label="Поиск рынков и трейдеров"></label>
+      <button class="ss-cancel" type="button">Отмена</button></div>
+    <div class="ss-pop" hidden></div>
+    <div class="ss-hint">Наберите хотя бы две буквы: название события, имя трейдера, адрес кошелька или тег.
+      <div class="ss-quick"><a href="/markets">${icon("chart", 15)} Все рынки</a><a href="/traders">${icon("users", 15)} Рейтинг трейдеров</a><a href="/tags">${icon("tag", 15)} Теги</a></div></div></div>`;
+  document.body.append(sheet);
+  document.body.classList.add("ss-open");
+  const input = $("#sheet-search", sheet), pop = $(".ss-pop", sheet), hint = $(".ss-hint", sheet);
+  const close = () => {
+    sheet.remove();
+    document.body.classList.remove("ss-open");
+    document.removeEventListener("keydown", esc);
+  };
+  const esc = (e) => e.key === "Escape" && close();
+  document.addEventListener("keydown", esc);
+  bindSearch(input, pop, close);
+  input.addEventListener("input", () => (hint.hidden = input.value.trim().length >= 2));
+  sheet.addEventListener("click", (e) => {
+    if (e.target === sheet || e.target.closest(".ss-cancel, a")) close();
+  });
+  requestAnimationFrame(() => input.focus());
+}
+document.addEventListener("click", (e) => {
+  if (e.target.closest("[data-search-open]")) openSearch();
 });
 
 // ------------------------------------------------------------ dropdowns

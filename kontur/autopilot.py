@@ -29,7 +29,7 @@ SETTINGS = {
     # selection (same keys as scout.DEFAULTS)
     **scout.DEFAULTS,
     # what is copied and how
-    "price_min": 0.02, "price_max": 0.97, "min_leader_trade": 5, "max_days_to_end": 60, "copy_slip": 0.03,
+    "price_min": 0.02, "min_leader_trade": 5, "max_days_to_end": 60, "copy_slip": 0.03,
     # "limit": a limit order at the player's price that waits a few minutes for the price to come back;
     # "market": buy at once within the allowed price move (until 1.10.0 the only way)
     "copy_mode": "limit", "limit_wait_min": 2, "copy_slip_pct": 3,
@@ -43,7 +43,8 @@ LIMITS = {
     "active_count": (int, 3, 20), "bench_size": (int, 0, 12), "copy_pct": (float, 2, 50), "event_cap_pct": (float, 2, 50),
     "min_bets": (int, 15, 300), "min_wr": (float, 50, 95), "min_lb": (float, 40, 90), "min_roi": (float, -10, 50),
     "min_edge": (float, 0, 0.2), "max_top_share": (float, 10, 100), "min_recent": (int, 0, 30), "max_slip": (float, 0.005, 0.1),
-    "price_min": (float, 0.01, 0.5), "price_max": (float, 0.5, 0.99), "min_leader_trade": (float, 1, 1000),
+    "price_min": (float, 0.01, 0.5), "min_leader_trade": (float, 1, 1000),
+    "min_payout": (float, 1.1, 10), "min_copyable": (float, 0, 100),
     "max_days_to_end": (int, 0, 730), "copy_slip": (float, 0.005, 0.2),
     "copy_mode": (str, ("limit", "market")), "limit_wait_min": (int, 1, 30), "copy_slip_pct": (float, 0.5, 50),
     "selection": (str, tuple(scout.SELECTIONS)), "min_skill_edge": (float, 0, 30),
@@ -66,7 +67,8 @@ NAMES = {  # as in the settings dialog, for error messages
     "min_recent": "Новых ставок за 14 дней, от",
     "max_slip": "Проскальзывание через 60 с, до",
     "price_min": "Цена ставки, от",
-    "price_max": "Цена ставки, до",
+    "min_payout": "Выигрыш при успехе, не меньше",
+    "min_copyable": "Ставок с таким выигрышем у игрока, от",
     "min_leader_trade": "Сделка игрока, от",
     "max_days_to_end": "До разрешения рынка, дней",
     "copy_slip": "Цена копии хуже цены игрока, не больше",
@@ -126,8 +128,9 @@ def update_settings(db, uid, body):
         if s.get(key) != v:
             s[key] = v
             changed.append(key)
-    if s["price_min"] >= s["price_max"]:
-        raise ValueError("Нижняя граница цены должна быть меньше верхней")
+    if s["price_min"] >= scout.payout_price(s["min_payout"]):
+        raise ValueError(f"При выигрыше ×{s['min_payout']:g} покупка не дороже ${scout.payout_price(s['min_payout']):.2f}: "
+                         "нижняя граница цены должна быть меньше")
     if body and body.get("reset"):
         s = {**SETTINGS, "enabled": s["enabled"]}
         changed = ["reset"]
@@ -194,26 +197,6 @@ def price_allowance(price, s):
     return min(s["copy_slip"], max(0.01, price * s["copy_slip_pct"] / 100))
 
 
-def warnings(s):
-    """Settings that make copies lose money or lock it up, in plain words (shown above the settings)."""
-    out = []
-    if s["price_max"] > 0.97 + EPS:
-        gain = (1 - s["price_max"]) * 100
-        out.append(f"Покупки до {s['price_max'] * 100:.0f}¢: выигрыш не больше {gain:.0f}¢ на акцию, а при проигрыше теряется вся ставка.")
-    if not s["max_days_to_end"]:
-        out.append("Без ограничения срока: деньги могут застрять на месяцы в рынках, которые решатся нескоро.")
-    elif s["max_days_to_end"] > 120:
-        out.append(f"Рынки до {s['max_days_to_end']} дней: деньги надолго заняты, а игрок за это время может уйти.")
-    if s["copy_mode"] == "market" and s["copy_slip"] > 0.05 + EPS and s["copy_slip_pct"] > 10:
-        out.append(f"Копия может стоить на ${s['copy_slip']:.2f} и на {s['copy_slip_pct']:.0f}% дороже, чем у игрока: "
-                   "в тонких рынках это съедает весь выигрыш.")
-    if s["selection"] == "winrate" and s["min_wr"] >= 65:
-        out.append("Отбор по доле выигрышей выбирает покупателей дорогих исходов: высокая доля выигрышей у них — от цены, а не от умения.")
-    if s["copy_pct"] * s["active_count"] > 400:
-        out.append("Копии крупные относительно бюджета: несколько неудачных ставок подряд заметно уменьшат его.")
-    return out
-
-
 def _open_cost(db, uid, *, wallet=None, event_slug=None):
     """Money in a player's (or an event's) open copies, plus what their waiting limit orders hold."""
     sql = "SELECT COALESCE(SUM(CASE WHEN bought>0 THEN cost*shares/bought ELSE 0 END),0) FROM ap_bets WHERE user_id=? AND status='open'"
@@ -250,8 +233,14 @@ def copy_buy(db, uid, ct, trade, info):
         return "skipped", "Сделка игрока без цены", {}
     if price * size < s["min_leader_trade"]:
         return "skipped", f"Сделка игрока меньше ${s['min_leader_trade']:g}", {}
-    if not s["price_min"] - EPS <= price <= s["price_max"] + EPS:
-        return "skipped", f"Цена ${price:.2f} вне диапазона ${s['price_min']:.2f}–{s['price_max']:.2f}", {}
+    if price < s["price_min"] - EPS:
+        return "skipped", f"Цена ${price:.2f} ниже ${s['price_min']:.2f}", {}
+    # a win must pay back at least min_payout times the copy (1.12.0: until then any price up to $0.97 was bought,
+    # and a $6 copy at $0.92 won $6.50)
+    top = scout.payout_price(s["min_payout"])
+    if price > top + EPS:
+        return "skipped", (f"Малый выигрыш: по цене ${price:.2f} ставка вернёт ×{scout.payout(price):.2f}, "
+                           f"нужно от ×{s['min_payout']:g}").replace(".", ","), {}
     if scout.SHORT_TERM.search(str(trade.get("title") or "")):
         return "skipped", "Краткосрочный крипторынок: задержка копии слишком велика", {}
     end = scout._date_ts(info.get("end"))
@@ -276,7 +265,7 @@ def copy_buy(db, uid, ct, trade, info):
     if s["copy_mode"] == "limit":
         return _limit_buy(db, uid, ct, trade, info, s, amount, cash)
     allow = price_allowance(price, s)
-    cap = min(0.999, price + allow)
+    cap = min(0.999, price + allow, top)        # not above the price that still pays min_payout
     try:
         order = trading.place(db, uid, {"side": "buy", "type": "market", "condition": info["condition"], "token": info["token"],
                                         "amount": amount, "max_price": cap},
@@ -513,6 +502,7 @@ def _relaxed(s):
     that asked for 20)."""
     return {**s, "min_lb": s["min_lb"] - 5, "min_wr": s["min_wr"] - 7, "min_roi": s["min_roi"] - 2,
             "min_recent": s["min_recent"] // 2, "min_skill_edge": max(0.0, s["min_skill_edge"] - 1),
+            "min_copyable": max(0.0, s["min_copyable"] - 10),
             "min_edge": max(0.0, s["min_edge"] - 0.01), "max_slip": s["max_slip"] + 0.01}
 
 
@@ -885,7 +875,7 @@ def overview(db, uid):
     returns = [expected_return(c["profile"]) for c in cards["active"] if c.get("profile")]
     returns = [r for r in returns if r is not None]
     return {"settings": s, "defaults": SETTINGS, "enabled": s["enabled"], "account": acc, "share": share,
-            "warnings": warnings(s), "selections": scout.SELECTIONS,
+            "selections": scout.SELECTIONS, "payout_price": scout.payout_price(s["min_payout"]),
             "stats": {"closed": len(closed), "wins": wins, "wr": wins / len(closed) if closed else None,
                       "realized": sum(b["pnl"] or 0 for b in closed),
                       "open": sum(1 for b in bets if b["status"] == "open"),

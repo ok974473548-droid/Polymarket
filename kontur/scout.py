@@ -51,9 +51,11 @@ DEFAULTS = {
     "max_slip": 0.03,     # $, median price move 60 s after the leader's buys
     "selection": "skill",  # "skill": wins against the price paid; "winrate": the share of winning copies (until 1.10.0)
     "min_skill_edge": 2,  # %, return of a copy over what its price promised, shrunk by the amount of evidence
+    "min_payout": 1.5,    # x stake: a copy is bought only if a win pays back at least this much (1.12.0)
+    "min_copyable": 50,   # %, share of the player's bets that pay that much (the rest are not copied)
 }
 SELECTIONS = {"skill": "Умение против цены", "winrate": "Доля выигрышей"}
-METRICS_VERSION = 2       # 2: fee 0.05 * p * (1 - p) and skill against the price (1.10.0)
+METRICS_VERSION = 3       # 2: fee 0.05 * p * (1 - p) and skill against the price (1.10.0); 3: entry prices (1.12.0)
 SKILL_MIN_BETS, SKILL_MIN_EVENTS = 20, 15
 K_SHRINK = 40             # events of evidence for half weight
 BH_Q = 0.10               # false discovery rate across all candidates (Benjamini–Hochberg)
@@ -78,6 +80,40 @@ FEE_RATE = 0.05     # taker fee of the markets copies are made in: 0.05 * p * (1
 def fee_est(price):
     """Per-share taker fee of a copy (the same formula real copies pay)."""
     return FEE_RATE * price * (1 - price)
+
+
+def payout(price):
+    """What a winning copy pays back per dollar spent: $1 a share over the price with the fee (×2 at $0.488)."""
+    return 1.0 / (price + fee_est(price)) if price > 0 else float("inf")
+
+
+def payout_price(times):
+    """The highest price at which a winning copy still pays back `times` its cost (×1.5: $0.655, ×2: $0.488)."""
+    lo, hi = 0.0, 1.0
+    for _ in range(40):
+        mid = (lo + hi) / 2
+        if payout(mid) >= times:
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+
+ENTRY_BINS = 20                 # entry prices of decided bets, in steps of $0.05
+
+
+def copyable_share(m, top):
+    """Share of a player's decided bets bought at `top` or less (from the stored price steps), or None."""
+    bins = m.get("entries")
+    total = sum(bins or ())
+    if not total:
+        return None
+    width = 1.0 / ENTRY_BINS
+    got = 0.0
+    for i, c in enumerate(bins):
+        lo = i * width
+        got += c * max(0.0, min(1.0, (top - lo) / width))
+    return got / total
 
 
 def wilson_lb(wins, n, z=1.96):
@@ -366,8 +402,16 @@ def metrics(bets, *, slip=DEFAULT_SLIP, now=None, as_of=None, lookback=LOOKBACK_
         "first_seen": min((b["opened"] for b in bets), default=None),
         "slip": slip,
         "skill": skill_stats(d, slip),
+        "entries": _entries(d),
         "version": METRICS_VERSION,
     }
+
+
+def _entries(d):
+    bins = [0] * ENTRY_BINS
+    for x in d:
+        bins[min(ENTRY_BINS - 1, int(x["entry"] * ENTRY_BINS))] += 1
+    return bins
 
 
 def behaviour(bets, trades, m, now=None):
@@ -412,6 +456,11 @@ def gates(m, kind, settings, cut=None):
     `cut` is the Benjamini–Hochberg p-value threshold across all candidates (skill selection only)."""
     s = {**DEFAULTS, **{k: v for k, v in (settings or {}).items() if k in DEFAULTS}}
     pct = lambda v: None if v is None else round(v * 100, 1)  # noqa: E731
+    # bets the autopilot would copy at all: a win pays back at least min_payout times the stake (1.12.0)
+    share = copyable_share(m, payout_price(s["min_payout"]))
+    times = f"{s['min_payout']:g}".replace(".", ",")
+    copyable = {"key": "copyable", "label": f"Ставок с выигрышем от ×{times}", "ok": share is not None and share * 100 >= s["min_copyable"] - 1e-9,
+                "value": pct(share), "need": f"от {s['min_copyable']:g}%"}
     if s.get("selection") == "skill":
         sk = m.get("skill")
         cut = 0.0 if cut is None else cut
@@ -431,6 +480,7 @@ def gates(m, kind, settings, cut=None):
              "value": pct(m["top_share"]), "need": f"до {s['max_top_share']}%"},
             {"key": "recent", "label": "Новых ставок за 14 дней", "ok": m["new_14d"] >= s["min_recent"], "value": m["new_14d"],
              "need": f"от {s['min_recent']}"},
+            copyable,
             {"key": "slip", "label": "Проскальзывание", "ok": m.get("slip_measured") is not None and m["slip"] <= s["max_slip"],
              "value": None if m.get("slip_measured") is None else round(m["slip"], 3), "need": f"до ${s['max_slip']}"},
         ]
@@ -450,6 +500,7 @@ def gates(m, kind, settings, cut=None):
          "value": pct(m["top_share"]), "need": f"до {s['max_top_share']}%"},
         {"key": "recent", "label": "Новых ставок за 14 дней", "ok": m["new_14d"] >= s["min_recent"], "value": m["new_14d"],
          "need": f"от {s['min_recent']}"},
+        copyable,
         {"key": "slip", "label": "Проскальзывание", "ok": m.get("slip_measured") is not None and m["slip"] <= s["max_slip"],
          "value": None if m.get("slip_measured") is None else round(m["slip"], 3), "need": f"до ${s['max_slip']}"},
     ]
