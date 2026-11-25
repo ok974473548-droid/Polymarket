@@ -301,7 +301,7 @@ class StreamLinks(unittest.TestCase):
         self.assertFalse(got[0]["embed"])
         self.assertEqual(got[1]["src"], "https://player.kick.com/cct_cs2?muted=true&autoplay=true")
         self.assertTrue(got[1]["embed"])
-        self.assertEqual(got[2]["src"], "https://www.youtube.com/embed/87Q4eGjKbVc?autoplay=1&mute=1&playsinline=1")
+        self.assertEqual(got[2]["src"], "https://www.youtube-nocookie.com/embed/87Q4eGjKbVc?autoplay=1&mute=1&playsinline=1")
         self.assertEqual(got[3]["channel"], "87Q4eGjKbVc")
         self.assertEqual(got[4:], [None, None, None])         # a league's site, a Twitch section, nothing
 

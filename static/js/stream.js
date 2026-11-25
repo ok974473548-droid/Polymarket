@@ -26,7 +26,8 @@ export function streamOf(link, host = location.hostname) {
   if (site === "youtube.com" || site === "youtu.be") {
     const id = site === "youtu.be" ? parts[0] : u.searchParams.get("v") || (["live", "embed", "shorts"].includes(parts[0]) ? parts[1] : null);
     if (id && /^[\w-]{6,20}$/.test(id)) {
-      return { site: "YouTube", channel: id, url: u.href, embed: true, src: `https://www.youtube.com/embed/${id}?autoplay=1&mute=1&playsinline=1` };
+      // youtube-nocookie: приватный встроенный плеер, реже показывает «подтвердите, что вы не бот» (1.17.3)
+      return { site: "YouTube", channel: id, url: u.href, embed: true, src: `https://www.youtube-nocookie.com/embed/${id}?autoplay=1&mute=1&playsinline=1` };
     }
   }
   if (site === "twitch.tv" && parts[0] && !["directory", "videos", "p", "settings"].includes(parts[0].toLowerCase())) {
