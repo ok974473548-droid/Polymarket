@@ -1,4 +1,5 @@
 // Header, hot-traders strip, footer, mobile bar, search box, notifications, account menu, sign-in.
+import "./palette.js";
 import { $, $$, api, ago, avatar, compact, esc, go, icon, loadSession, modal, render, route, state, thumb, toast, unwrap, usd } from "./core.js";
 
 export function brand() {
@@ -19,7 +20,7 @@ export function header() {
   $("#top").innerHTML = `<div class="wrap top-row">
     <button class="icon-btn nav-burger" data-mobile-menu aria-label="Меню">${icon("menu", 20)}</button>
     ${brand()}
-    <button class="search-trigger" data-search-open aria-label="Поиск рынков и трейдеров">${icon("search", 16)}<span>Поиск рынков и трейдеров</span></button>
+    <button class="search-trigger" data-palette aria-label="Умный поиск: рынки, трейдеры, теги">${icon("search", 16)}<span>Поиск рынков и трейдеров</span></button>
     <nav class="main-nav" aria-label="Основная навигация">
       ${NAV.map(([href, label, extra]) => `<a href="${href}" class="${cur === href ? "cur" : ""}">${label}${extra || ""}</a>`).join("")}
       <div class="dropdown more-menu">
@@ -29,11 +30,9 @@ export function header() {
     </nav>
     <div class="top-actions">
       <a href="/watchlist" class="watch-link ${cur === "/watchlist" ? "cur" : ""}">${icon("star", 15)}<span>Избранное</span></a>
-      <div class="search-box" role="search">
-        ${icon("search", 15)}
-        <input id="top-search" type="search" placeholder="Поиск трейдеров или рынков" autocomplete="off" aria-label="Поиск трейдеров или рынков">
-        <div class="search-pop" hidden></div>
-      </div>
+      <button class="search-box" data-palette aria-label="Умный поиск (Ctrl+K)">
+        ${icon("search", 15)}<span>Поиск рынков, трейдеров…</span><kbd>${/Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl"} K</kbd>
+      </button>
       ${u ? `<a href="/portfolio" class="pf-chip"><small>Портфель</small><b>${usd(a?.total ?? 0)}</b></a>
         <button class="btn btn-primary btn-sm" data-deposit>Пополнить</button>
         <div class="dropdown bell">
@@ -55,7 +54,6 @@ export function header() {
       : `<button class="btn btn-primary btn-sm" data-login>Войти</button>`}
     </div>
   </div>`;
-  bindSearch();
 }
 
 export function footer() {
@@ -108,92 +106,6 @@ export async function hotStrip() {
   host.innerHTML = `<div class="wrap hs-row"><a class="hs-label" href="/traders">${icon("fire", 14)} Популярные трейдеры ${icon("right", 12)}</a><div class="hs-viewport"><div class="hs-track"><div class="hs-run">${run}</div><div class="hs-run" aria-hidden="true">${run}</div></div></div></div>`;
   $$('.hs-run[aria-hidden="true"] a', host).forEach((a) => (a.tabIndex = -1));
 }
-
-// ------------------------------------------------------------ search
-let searchTimer = 0, searchCtl = null;
-function bindSearch(input = $("#top-search"), pop = $(".search-pop"), onGo = () => {}) {
-  if (!input) return;
-  input.addEventListener("input", () => {
-    clearTimeout(searchTimer);
-    const q = input.value.trim();
-    if (q.length < 2) {
-      pop.hidden = true;
-      return;
-    }
-    searchTimer = setTimeout(async () => {
-      searchCtl?.abort();
-      searchCtl = new AbortController();
-      pop.hidden = false;
-      pop.innerHTML = '<div class="sp-note">Поиск…</div>';
-      try {
-        const data = unwrap(await api("/api/search?q=" + encodeURIComponent(q), undefined, { signal: searchCtl.signal }));
-        const ev = data.events.slice(0, 5), pr = data.profiles.slice(0, 4), tg = data.tags.slice(0, 3);
-        pop.innerHTML = (ev.length ? `<div class="sp-head">Рынки</div>` + ev.map((e) => `<a href="/event/${esc(e.slug)}" class="sp-row">${thumb(e.image, 28)}<span>${esc(e.title)}</span></a>`).join("") : "")
-          + (pr.length ? `<div class="sp-head">Трейдеры</div>` + pr.map((p) => `<a href="/traders/${p.wallet}" class="sp-row">${avatar(p.wallet, p.image, p.name, 24)}<span>${esc(p.name || p.wallet)}</span></a>`).join("") : "")
-          + (tg.length ? `<div class="sp-head">Теги</div>` + tg.map((t) => `<a href="/tags/${esc(t.slug)}" class="sp-row">${icon("tag", 16)}<span>${esc(t.label)}</span></a>`).join("") : "")
-          + `<a href="/search?q=${encodeURIComponent(q)}" class="sp-all">Все результаты по «${esc(q)}» ${icon("arrow", 13)}</a>`;
-        if (!ev.length && !pr.length && !tg.length) pop.insertAdjacentHTML("afterbegin", '<div class="sp-note">Ничего не найдено</div>');
-      } catch (e) {
-        if (e.name !== "AbortError") pop.innerHTML = `<div class="sp-note">${esc(e.message)}</div>`;
-      }
-    }, 250);
-  });
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && input.value.trim()) {
-      pop.hidden = true;
-      onGo();
-      go("/search?q=" + encodeURIComponent(input.value.trim()));
-    }
-    if (e.key === "Escape") pop.hidden = true;
-  });
-  input.addEventListener("focus", () => input.value.trim().length >= 2 && pop.innerHTML && (pop.hidden = false));
-}
-document.addEventListener("click", (e) => {
-  if (!e.target.closest(".search-box")) for (const p of $$(".search-pop")) p.hidden = true;
-  if (e.target.closest(".sp-row, .sp-all")) for (const p of $$(".search-pop")) p.hidden = true;
-});
-document.addEventListener("keydown", (e) => {
-  if (e.key === "/" && !/input|textarea|select/i.test(document.activeElement?.tagName || "")) {
-    e.preventDefault();
-    const box = $("#top-search");
-    if (box && box.offsetParent) box.focus();
-    else openSearch();
-  }
-});
-
-// On a phone or tablet the search opens over the page: a field at the top, results under it as you type.
-function openSearch() {
-  if ($(".search-sheet")) return $("#sheet-search")?.focus();
-  const sheet = document.createElement("div");
-  sheet.className = "search-sheet";
-  sheet.setAttribute("role", "dialog");
-  sheet.setAttribute("aria-label", "Поиск");
-  sheet.innerHTML = `<div class="ss-panel"><div class="ss-bar"><label class="ss-box">${icon("search", 18)}
-      <input id="sheet-search" type="search" enterkeyhint="search" placeholder="Рынки, трейдеры, теги" autocomplete="off" aria-label="Поиск рынков и трейдеров"></label>
-      <button class="ss-cancel" type="button">Отмена</button></div>
-    <div class="ss-pop" hidden></div>
-    <div class="ss-hint">Наберите хотя бы две буквы: название события, имя трейдера, адрес кошелька или тег.
-      <div class="ss-quick"><a href="/markets">${icon("chart", 15)} Все рынки</a><a href="/traders">${icon("users", 15)} Рейтинг трейдеров</a><a href="/tags">${icon("tag", 15)} Теги</a></div></div></div>`;
-  document.body.append(sheet);
-  document.body.classList.add("ss-open");
-  const input = $("#sheet-search", sheet), pop = $(".ss-pop", sheet), hint = $(".ss-hint", sheet);
-  const close = () => {
-    sheet.remove();
-    document.body.classList.remove("ss-open");
-    document.removeEventListener("keydown", esc);
-  };
-  const esc = (e) => e.key === "Escape" && close();
-  document.addEventListener("keydown", esc);
-  bindSearch(input, pop, close);
-  input.addEventListener("input", () => (hint.hidden = input.value.trim().length >= 2));
-  sheet.addEventListener("click", (e) => {
-    if (e.target === sheet || e.target.closest(".ss-cancel, a")) close();
-  });
-  requestAnimationFrame(() => input.focus());
-}
-document.addEventListener("click", (e) => {
-  if (e.target.closest("[data-search-open]")) openSearch();
-});
 
 // ------------------------------------------------------------ dropdowns
 document.addEventListener("click", async (e) => {

@@ -335,6 +335,48 @@ CREATE TABLE IF NOT EXISTS ap_log(
   wallet TEXT NOT NULL DEFAULT '',
   text TEXT NOT NULL
 );
+
+-- Smart search (1.2): index, saved searches, recent queries and opened items.
+CREATE TABLE IF NOT EXISTS search_items(
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL,
+  key TEXT NOT NULL,
+  title TEXT NOT NULL,
+  image TEXT NOT NULL DEFAULT '',
+  pop REAL NOT NULL DEFAULT 0,
+  data TEXT NOT NULL DEFAULT '{}',
+  updated REAL NOT NULL,
+  UNIQUE(kind, key)
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
+  title, body, tokenize='unicode61 remove_diacritics 2', prefix='2 3 4'
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS search_vocab USING fts5vocab(search_fts, 'row');
+CREATE TABLE IF NOT EXISTS saved_searches(
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  query TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'all',
+  params TEXT NOT NULL DEFAULT '{}',
+  pinned INTEGER NOT NULL DEFAULT 1,
+  notify INTEGER NOT NULL DEFAULT 0,
+  seen TEXT NOT NULL DEFAULT '[]',
+  created REAL NOT NULL,
+  checked REAL,
+  hits INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS search_history(
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK(kind IN ('query','open')),
+  key TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  subtitle TEXT NOT NULL DEFAULT '',
+  image TEXT NOT NULL DEFAULT '',
+  url TEXT NOT NULL DEFAULT '',
+  at REAL NOT NULL,
+  PRIMARY KEY(user_id, kind, key)
+);
 """
 
 # Columns added after 1.0.0: (table, column, definition).

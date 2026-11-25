@@ -118,39 +118,3 @@ export async function watchlistPage(main) {
 }
 
 // ------------------------------------------------------------------ /search
-export async function searchPage(main) {
-  const q = route().q;
-  const phrase = (q.get("q") || "").trim();
-  const tab = ["markets", "traders", "tags"].includes(q.get("tab")) ? q.get("tab") : "markets";
-  main.innerHTML = `<div class="page-head"><h1>Поиск</h1></div>
-    <form class="search-big" id="s-form">${icon("search", 18)}<input name="q" type="search" value="${esc(phrase)}" placeholder="Трейдер, адрес 0x…, событие или тег" aria-label="Поиск" autofocus><button class="btn btn-primary">Найти</button></form>
-    <nav class="tabs">${[["markets", "Рынки"], ["traders", "Трейдеры"], ["tags", "Теги"]].map(([k, l]) =>
-      `<a href="${withQuery({ tab: k === "markets" ? null : k })}" class="${tab === k ? "cur" : ""}" data-keep-scroll>${l} <span class="count" data-count="${k}"></span></a>`).join("")}</nav>
-    <div id="s-res"></div>`;
-  $("#s-form").onsubmit = (e) => {
-    e.preventDefault();
-    const v = e.target.q.value.trim();
-    if (/^0x[0-9a-fA-F]{40}$/.test(v)) return go("/traders/" + v.toLowerCase());
-    go(withQuery({ q: v || null }));
-  };
-  const host = $("#s-res");
-  if (!phrase) {
-    host.innerHTML = emptyBox("Введите запрос", "Ищите события, трейдеров по нику или адресу и теги.");
-    return;
-  }
-  host.innerHTML = '<div class="sk-block tall"></div>';
-  try {
-    const d = unwrap(await api("/api/search?q=" + encodeURIComponent(phrase)));
-    const local = await api("/api/traders?search=" + encodeURIComponent(phrase) + "&size=20").catch(() => ({ rows: [] }));
-    const known = new Set(d.profiles.map((p) => p.wallet));
-    const traders = d.profiles.concat((local.rows || []).filter((r) => !known.has(r.wallet)).map((r) => ({ wallet: r.wallet, name: r.name, image: r.image, pnl: r.pnl })));
-    $('[data-count="markets"]').textContent = d.events.length;
-    $('[data-count="traders"]').textContent = traders.length;
-    $('[data-count="tags"]').textContent = d.tags.length;
-    if (tab === "markets") host.innerHTML = d.events.length ? `<div class="mgrid">${d.events.map(marketCard).join("")}</div>` : emptyBox("Рынки не найдены");
-    else if (tab === "traders") host.innerHTML = traders.length ? `<div class="list-cards">${traders.map((p) => `<a class="row-card" href="/traders/${p.wallet}">${avatar(p.wallet, p.image, p.name, 36)}<span><b>${esc(p.name || short(p.wallet))}</b><small>${short(p.wallet)}</small></span>${p.pnl != null ? `<b class="${p.pnl >= 0 ? "up" : "down"}">${compact(p.pnl)}</b>` : ""}</a>`).join("")}</div>` : emptyBox("Трейдеры не найдены");
-    else host.innerHTML = d.tags.length ? `<div class="tag-grid">${d.tags.map((r) => `<div class="tag-card"><a href="/tags/${esc(r.slug)}">${icon("tag", 15)}<b>${esc(r.label)}</b></a><small>${r.count != null ? num(r.count) + " событ." : ""}</small>${starBtn("tag", r.slug, r.label)}</div>`).join("")}</div>` : emptyBox("Теги не найдены");
-  } catch (e) {
-    host.innerHTML = errorBox(e);
-  }
-}

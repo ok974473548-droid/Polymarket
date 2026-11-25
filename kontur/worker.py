@@ -14,6 +14,7 @@ from . import copytrade
 from . import db as store
 from . import polymarket as pm
 from . import scout
+from . import search
 from . import stream
 from . import traders
 from . import trading
@@ -349,6 +350,18 @@ def job_backtest(db):
             autopilot.run_backtest(db, uid)
 
 
+def job_index_events(db):
+    search.index_events_page(db)
+
+
+def job_index_people(db):
+    search.index_people(db)
+
+
+def job_search_alerts(db):
+    search.check_alerts(db)
+
+
 FAST = [
     ("copy", job_copy, 10),
     ("watch", job_watch, 15),
@@ -366,6 +379,9 @@ SLOW = [
     ("discover", job_discover, 300),
     ("backtest", job_backtest, 120),
     ("rescore", job_rescore, 60),
+    ("index_events", job_index_events, 20),
+    ("index_people", job_index_people, 600),
+    ("search_alerts", job_search_alerts, 60),
 ]
 
 

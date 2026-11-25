@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from kontur import VERSION, accounts, auth, autopilot, books, bus, copytrade, crypto, net, news, notify, scout, stream, traders, trading, watchlist
+from kontur import VERSION, accounts, auth, autopilot, books, bus, copytrade, crypto, net, news, notify, scout, search, stream, traders, trading, watchlist
 from kontur import db as store
 from kontur import polymarket as pm
 from kontur.worker import FAST, SLOW, ScoutPool, WalletPool, Worker
@@ -143,6 +143,35 @@ def trader_positions(db, query):
 
 # ---------------------------------------------------------------- routing
 
+SEARCH_FACETS = ("category", "side", "outcome", "behaviour", "tag", "mine", "active", "new", "whale", "end_days",
+                 "wr_min", "wr_max", "pnl_min", "pnl_max", "networth_min", "networth_max", "volume_min", "volume_max",
+                 "liquidity_min", "liquidity_max", "price_min", "price_max", "amount_min", "amount_max", "period_h", "sort")
+
+
+def search_get(db, path, query, user):
+    uid = user["id"] if user else None
+    phrase = q1(query, "q")[:200]
+    if path == "/api/search":
+        return search.quick(db, uid, phrase)
+    if path == "/api/search/full":
+        kind = q1(query, "kind")
+        kind = kind if kind in {"all", "events", "traders", "trades", "tags", "mine"} else None
+        params = {k: q1(query, k)[:40] for k in SEARCH_FACETS if q1(query, k)}
+        offset = q1(query, "offset", "0")
+        res = search.full(db, uid, phrase, kind, params, limit=50, offset=int(offset) if offset.isdigit() else 0,
+                          record=q1(query, "record") == "1")
+        if res.get("kind") == "trades":
+            res["rows"] = trade_rows(db, res["rows"])
+        return res
+    if path == "/api/search/home":
+        return search.home(db, uid)
+    if path == "/api/search/saved":
+        return {"rows": search.saved(db, need(user)["id"])}
+    if path == "/api/search/status":
+        return search.status(db)
+    raise HttpError(404, "Нет такого запроса")
+
+
 def get_routes(db, path, query, user):
     if path == "/api/health":
         return {"ok": True, "version": VERSION}
@@ -164,8 +193,11 @@ def get_routes(db, path, query, user):
         return home(db)
     if path == "/api/markets":
         offset = q1(query, "offset", "0")
-        return pm.catalog(db, order=q1(query, "order", "oi"), tag=q1(query, "tag"),
-                          offset=int(offset) if offset.isdigit() else 0, limit=20)
+        res = pm.catalog(db, order=q1(query, "order", "oi"), tag=q1(query, "tag"),
+                         offset=int(offset) if offset.isdigit() else 0, limit=20)
+        if isinstance(res.get("data"), list):
+            search.note_events(db, res["data"])
+        return res
     if path == "/api/event":
         return pm.event_by_slug(db, q1(query, "slug"))
     if path == "/api/prices":
@@ -180,8 +212,8 @@ def get_routes(db, path, query, user):
         return res
     if path == "/api/news":
         return news.for_event(db, q1(query, "title")[:300])
-    if path == "/api/search":
-        return pm.search(db, q1(query, "q"))
+    if path.startswith("/api/search"):
+        return search_get(db, path, query, user)
     if path == "/api/tags":
         data = json.loads(store.kv_get(db, "tags", '{"rows": [], "events": 0, "at": null}'))
         phrase = q1(query, "q").strip().lower()
@@ -368,6 +400,16 @@ def post_routes(db, path, body, user, handler):
         return {"ok": True}
     if path == "/api/watchlist":
         return watchlist.toggle(db, uid, body)
+    if path == "/api/search/visit":
+        return search.visit(db, uid, body)
+    if path == "/api/search/saved":
+        return search.save(db, uid, body)
+    if path == "/api/search/saved/update":
+        return search.update_saved(db, uid, body)
+    if path == "/api/search/saved/delete":
+        return search.delete_saved(db, uid, body.get("id"))
+    if path == "/api/search/recent/clear":
+        return search.clear_history(db, uid)
     if path == "/api/notifications/read":
         return notify.mark_read(db, uid)
     raise HttpError(404, "Нет такого действия")
