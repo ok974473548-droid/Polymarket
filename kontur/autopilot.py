@@ -22,7 +22,6 @@ DAY = 86400
 REVIEW_EVERY = 600
 EPS = 1e-6
 SHARE_MAX_X = 2.0           # the budget is shared among players actually copied, at most twice the nominal share (1.13.0)
-SMALL_TRADES_LIVE = (20, 0.6)   # buys seen live, and the share under min_leader_trade that makes a player uncopyable
 EXPECTED_CAP = 0.25         # the most one player adds to the expected return of a copy (1.12.1)
 MANUAL_REMOVE_DAYS = 7      # at least this long a player taken off the bench by hand stays off
 
@@ -47,7 +46,7 @@ LIMITS = {
     "min_bets": (int, 15, 300), "min_wr": (float, 50, 95), "min_lb": (float, 40, 90), "min_roi": (float, -10, 50),
     "min_edge": (float, 0, 0.2), "max_top_share": (float, 10, 100), "min_recent": (int, 0, 30), "max_slip": (float, 0.005, 0.1),
     "price_min": (float, 0.01, 0.5), "min_leader_trade": (float, 1, 1000),
-    "min_payout": (float, 1.1, 10), "min_copyable": (float, 0, 100),
+    "min_payout": (float, 1.1, 10),
     "max_days_to_end": (int, 0, 730), "copy_slip": (float, 0.005, 0.2),
     "copy_mode": (str, ("limit", "market")), "limit_wait_min": (int, 1, 30), "copy_slip_pct": (float, 0.5, 50),
     "selection": (str, tuple(scout.SELECTIONS)), "min_skill_edge": (float, 0, 30),
@@ -71,7 +70,6 @@ NAMES = {  # as in the settings dialog, for error messages
     "max_slip": "Проскальзывание через 60 с, до",
     "price_min": "Цена ставки, от",
     "min_payout": "Выигрыш при успехе, не меньше",
-    "min_copyable": "Ставок с таким выигрышем у игрока, от",
     "min_leader_trade": "Сделка игрока, от",
     "max_days_to_end": "До разрешения рынка, дней",
     "copy_slip": "Цена копии хуже цены игрока, не больше",
@@ -517,7 +515,6 @@ def _relaxed(s):
     that asked for 20)."""
     return {**s, "min_lb": s["min_lb"] - 5, "min_wr": s["min_wr"] - 7, "min_roi": s["min_roi"] - 2,
             "min_recent": s["min_recent"] // 2, "min_skill_edge": max(0.0, s["min_skill_edge"] - 1),
-            "min_copyable": max(0.0, s["min_copyable"] - 10),
             "min_edge": max(0.0, s["min_edge"] - 0.01), "max_slip": s["max_slip"] + 0.01}
 
 
@@ -574,9 +571,6 @@ def _active_problem(db, uid, player, s, share, now):
     last = max(x for x in (st["last_copy"], last_bet, player["active_since"]) if x)
     if now - last >= s["inactive_days"] * DAY:
         return f"Нет новых ставок {int((now - last) / DAY)} дн.", st
-    small = _small_buys(db, uid, player["wallet"], s, now)
-    if small:
-        return small, {**st, "soft": True}
     if cand and cand["metrics"] and cand["profiled"] and cand["profiled"] > player["active_since"]:
         _, verdict = _verdict(db, player["wallet"], s, relaxed=True)
         if verdict and not verdict["passed"]:
@@ -584,20 +578,6 @@ def _active_problem(db, uid, player, s, share, now):
             # low activity an empty seat is worse than the player; losses, a losing streak and silence stay hard rules
             return "Больше не проходит отбор: " + ", ".join(verdict["failed"]).lower(), {**st, "soft": True}
     return None, st
-
-
-def _small_buys(db, uid, wallet, s, now):
-    """A player whose buys are mostly under min_leader_trade gives almost nothing to copy (1.13.0: 51 of 59 buys of
-    one roster player were under $4). Counted on the buys seen live over a week."""
-    aid = account_id(db, uid)
-    if not aid:
-        return None
-    n, small = db.execute("""SELECT COUNT(*), COALESCE(SUM(reason LIKE 'Сделка игрока меньше%'), 0) FROM copy_events
-                             WHERE account_id=? AND leader=? AND side='buy' AND at>?""", (aid, wallet, now - 7 * DAY)).fetchone()
-    need, share = SMALL_TRADES_LIVE
-    if n >= need and small / n >= share:
-        return f"Сделки мельче ${s['min_leader_trade']:g}: {small} из {n} покупок за неделю"
-    return None
 
 
 # ---------------------------------------------------------------- roster moves

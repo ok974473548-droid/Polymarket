@@ -403,10 +403,8 @@ class SkillTests(unittest.TestCase):
         self.assertLess(fav["skill"]["excess"], dog["skill"]["excess"])
         self.assertLess(dog["skill"]["p"], 0.001)
         self.assertGreater(fav["skill"]["p"], 0.001)
-        winrate = {"selection": "winrate", "min_copyable": 0}
+        winrate = {"selection": "winrate"}
         self.assertTrue(scout.judge(fav, "directional", winrate)["passed"])      # until 1.10.0 the favourite was chosen
-        # since 1.12.0 not even then: at 80¢ a win pays back ×1.24, none of his bets would be copied
-        self.assertIn("copyable", [c["key"] for c in scout.judge(fav, "directional", {"selection": "winrate"})["checks"] if not c["ok"]])
         self.assertFalse(scout.judge(dog, "directional", winrate)["passed"])     # and the skilled player was not
         skill = {"selection": "skill"}
         self.assertFalse(scout.judge(fav, "directional", skill, cut=0.001)["passed"])
@@ -701,38 +699,6 @@ class NewAutopilotTests(AutopilotTests):
         self.assertEqual(status, "filled", reason)
         self.assertAlmostEqual(extra["amount"], 20, places=1)          # 10% of a $200 share (was $10)
 
-    def test_player_with_mostly_small_buys_is_not_copied(self):
-        autopilot.review(self.db, self.uid)
-        small = self.players("active")[0]
-        ct = self.ct_of(small)
-        for i in range(25):                                             # 18 of 25 buys seen live under $5
-            reason = "Сделка игрока меньше $5" if i < 18 else ""
-            self.db.execute("""INSERT INTO copy_events(copy_trade_id, account_id, leader, status, reason, side, at)
-                               VALUES(?,?,?,?,?, 'buy', ?)""", (ct["id"], self.aid, small, "skipped" if reason else "filled", reason, self.now))
-        self.now += 60
-        autopilot.update_settings(self.db, self.uid, {"allow_early": False})
-        autopilot.review(self.db, self.uid)
-        row = self.db.execute("SELECT frozen, reason FROM ap_players WHERE wallet=?", (small,)).fetchone()
-        self.assertEqual(row[0], 1)
-        self.assertEqual(row[1], "Сделки мельче $5: 18 из 25 покупок за неделю")
-
-    def test_selection_needs_buys_big_enough_to_copy(self):
-        trades = [{"side": "BUY", "size": 10, "price": p} for p in [0.05] * 15 + [0.5] * 5] + [{"side": "SELL", "size": 100, "price": 0.5}]
-        q = scout.buy_sizes(trades)                                     # 15 buys of $0.50, 5 of $5
-        self.assertEqual(q[0], 0.5)
-        self.assertEqual(q[-1], 5.0)
-        self.assertAlmostEqual(scout.big_share(q, 5), 0.25, places=1)
-        self.assertEqual(scout.big_share(q, 0.4), 1.0)
-        self.assertEqual(scout.big_share(q, 6), 0.0)
-        self.assertIsNone(scout.buy_sizes(trades[:5]))                  # too few to say
-        m = scout.metrics(bets_events(40, 0.40, 22), slip=0.005, now=NOW)
-        size = lambda m: next(c for c in scout.gates(m, "directional", {"min_leader_trade": 5}) if c["key"] == "size")  # noqa: E731
-        self.assertTrue(size(m)["ok"])                                  # not profiled again yet: not held against him
-        m["buy_usd_q"] = q
-        self.assertFalse(size(m)["ok"])
-        m["buy_usd_q"] = scout.buy_sizes([{"side": "BUY", "size": 20, "price": 0.5}] * 12)
-        self.assertTrue(size(m)["ok"])
-
     def test_copies_only_bets_that_pay_enough(self):
         autopilot.review(self.db, self.uid)
         leader = self.players("active")[0]
@@ -751,21 +717,19 @@ class NewAutopilotTests(AutopilotTests):
         with self.assertRaises(ValueError):
             autopilot.update_settings(self.db, self.uid, {"copy_mode": "fast"})
 
-    def test_players_with_few_bets_that_pay_enough_are_not_selected(self):
-        m = scout.metrics(bets_events(60, 0.85, 55), slip=0.005, now=NOW)
-        self.assertEqual(sum(m["entries"]), m["n"])
-        self.assertEqual(scout.copyable_share(m, scout.payout_price(1.5)), 0.0)
-        mixed = scout.metrics(bets_events(30, 0.85, 27) + bets_events(30, 0.40, 15, prefix="d"), slip=0.005, now=NOW)
-        self.assertAlmostEqual(scout.copyable_share(mixed, scout.payout_price(1.5)), 0.5)
-        check = lambda m, s: next(c for c in scout.gates(m, "directional", s) if c["key"] == "copyable")  # noqa: E731
-        self.assertFalse(check(m, {})["ok"])
-        self.assertTrue(check(mixed, {})["ok"])                         # half of his bets pay ×1.5 or more
-        self.assertTrue(check(mixed, {"min_payout": 2})["ok"])          # ×2 is up to $0.49: the 40¢ bets still count
-        self.assertFalse(check(mixed, {"min_payout": 3})["ok"])         # ×3 is up to $0.32: none
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_payout_and_size_judge_each_bet_not_the_player(self):
+        # 1.15.0: a player who mostly buys favourites or trades small is not dropped; those bets just are not copied
+        fav = scout.metrics(bets_events(60, 0.85, 55), slip=0.005, now=NOW)
+        fav["buy_usd_q"] = [0.5] * 11
+        self.assertNotIn("copyable", [c["key"] for c in scout.gates(fav, "directional", {})])
+        self.assertNotIn("size", [c["key"] for c in scout.gates(fav, "directional", {})])
+        autopilot.review(self.db, self.uid)
+        leader = self.players("active")[0]
+        (status, reason, _), _, _ = self.copy_buy(leader, price=0.85)
+        self.assertIn("Малый выигрыш", reason)
+        (status, reason, _), _, _ = self.copy_buy(leader, price=0.40, size=5)        # a $2 buy
+        self.assertEqual(status, "skipped")
+        self.assertIn("Сделка игрока меньше", reason)
 
 
 class ProfileCrawlTests(Base):
