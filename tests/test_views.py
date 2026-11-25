@@ -297,8 +297,10 @@ class StreamLinks(unittest.TestCase):
         out = subprocess.run(["node", "--input-type=module", "-e", code], capture_output=True, text=True, timeout=30)
         self.assertEqual(out.returncode, 0, out.stderr)
         got = json.loads(out.stdout)
-        self.assertEqual(got[0]["src"], "https://player.twitch.tv/?channel=PGL&parent=polycontur.up.railway.app&muted=true&autoplay=true")
+        self.assertEqual(got[0]["site"], "Twitch")            # Twitch: link only (its embed starts with an ad)
+        self.assertFalse(got[0]["embed"])
         self.assertEqual(got[1]["src"], "https://player.kick.com/cct_cs2?muted=true&autoplay=true")
+        self.assertTrue(got[1]["embed"])
         self.assertEqual(got[2]["src"], "https://www.youtube.com/embed/87Q4eGjKbVc?autoplay=1&mute=1&playsinline=1")
         self.assertEqual(got[3]["channel"], "87Q4eGjKbVc")
         self.assertEqual(got[4:], [None, None, None])         # a league's site, a Twitch section, nothing
