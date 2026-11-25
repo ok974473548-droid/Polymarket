@@ -17,6 +17,7 @@ import statistics
 import time
 from datetime import datetime, timezone
 
+from . import categories
 from . import db as store
 from . import packs
 from . import polymarket as pm
@@ -53,9 +54,16 @@ DEFAULTS = {
     "min_skill_edge": 2,  # %, return of a copy over what its price promised, shrunk by the amount of evidence
     "min_payout": 1.5,    # x stake: a copy is bought only if a win pays back at least this much (1.12.0)
     "min_leader_trade": 5,  # $, smallest buy of a player that is copied (smaller ones are skipped)
+    # by category (1.16.0): "off" — the player as a whole; "soft" — not in categories where the player loses to the
+    # price; "strict" — only in categories where the player's skill is proven
+    "cat_mode": "off",      # history (research/categories_check.py, 25.11.2026): neither mode beat "off"
+    "cat_min_events": 10,   # events of a category before it is judged on its own
 }
+CAT_MODES = {"off": "Без учёта категорий", "soft": "Мягко: кроме слабых категорий", "strict": "Строго: только сильные категории"}
+K_CAT = 10                # events of a category for half weight against the player's overall edge
 SELECTIONS = {"skill": "Умение против цены", "winrate": "Доля выигрышей"}
-METRICS_VERSION = 3       # 2: fee 0.05 * p * (1 - p) and skill against the price (1.10.0); 3: entry prices (1.12.0)
+METRICS_VERSION = 4       # 2: fee 0.05 * p * (1 - p) and skill against the price (1.10.0); 3: entry prices (1.12.0);
+# 4: skill by category (1.16.0)
 SKILL_MIN_BETS, SKILL_MIN_EVENTS = 20, 15
 K_SHRINK = 40             # events of evidence for half weight
 BH_Q = 0.10               # false discovery rate across all candidates (Benjamini–Hochberg)
@@ -276,7 +284,7 @@ def measure_slip(trades, now=None, samples=12):
 
 # ---------------------------------------------------------------- profile
 
-def _decided(bets, slip, start, end):
+def _decided(bets, slip, start, end, cats=None):
     out = []
     for b in bets:
         if b["state"] == "open" or b["closed"] is None or b["closed"] > end:
@@ -291,9 +299,85 @@ def _decided(bets, slip, start, end):
             continue
         out.append({"closed": b["closed"], "opened": b["opened"], "r": r, "edge": edge, "entry": b["entry"],
                     "win": r > 0, "hold": max(0.0, b["closed"] - b["opened"]) / DAY,
-                    "ev": b.get("event_slug") or b.get("condition") or b["token"]})
+                    "ev": b.get("event_slug") or b.get("condition") or b["token"],
+                    "cat": _cat_of(b, cats)})
     out.sort(key=lambda x: x["closed"])
     return out
+
+
+def _cat_of(b, cats):
+    slug = b.get("event_slug") or ""
+    return (cats or {}).get(slug) or categories.of_text(slug, b.get("title") or "")
+
+
+def event_titles(bets, now, lookback=LOOKBACK_DAYS):
+    """{event slug: title} of the bets a profile is judged on (their categories are looked up)."""
+    start = now - lookback * DAY
+    return {b["event_slug"]: b.get("title") or "" for b in bets if b.get("event_slug") and b["opened"] >= start}
+
+
+def cat_stats(d, slip, overall=None):
+    """Skill against the price in each category (1.16.0): the same per-event copy return as skill_stats, with its
+    t statistic and p-value, and an edge drawn towards the player's overall edge while the category has few events
+    (half weight at K_CAT events), so six lucky esports events are not yet a specialist."""
+    by = {}
+    for x in d:
+        c = by.setdefault(x["cat"], {})
+        e = c.setdefault(x["ev"], [0.0, 0.0, 0])
+        e[0] += (1.0 if x["win"] else 0.0) - min(0.995, x["entry"] + slip)
+        e[1] += x["r"]
+        e[2] += 1
+    base = overall["edge"] if overall else 0.0
+    out = {}
+    for cat, evs in by.items():
+        n_ev = len(evs)
+        rets = [e[1] / e[2] for e in evs.values()]
+        mean = statistics.mean(rets)
+        sd = statistics.pstdev(rets) if n_ev > 1 else 0.0
+        t = mean / (sd / math.sqrt(n_ev)) if sd > 0 else (0.0 if mean == 0 else math.copysign(8.0, mean))
+        excess = sum(e[0] for e in evs.values()) / sum(e[2] for e in evs.values())
+        out[cat] = {"n": sum(e[2] for e in evs.values()), "n_ev": n_ev, "mean": round(mean, 5),
+                    "edge": round((n_ev * mean + K_CAT * base) / (n_ev + K_CAT), 5),
+                    "excess": round(excess * n_ev / (n_ev + K_CAT), 5), "t": round(t, 3),
+                    "p": 0.5 * math.erfc(t / math.sqrt(2))}
+    return out
+
+
+def overall_ok(m, s, cut):
+    """The player's skill as a whole is proven (the skill checks of `gates`)."""
+    sk = m.get("skill")
+    return bool(sk) and cut is not None and cut > 0 and sk["p"] <= cut and sk["edge"] * 100 >= s["min_skill_edge"] and sk["excess"] > 0
+
+
+def cat_verdict(cs, s, cut):
+    """strong: skill proven in this category; weak: enough events and the copies lose to the price;
+    neutral: enough events, not proven either way; unknown: too few events."""
+    if not cs or cs["n_ev"] < s["cat_min_events"]:
+        return "unknown"
+    if cut and cs["p"] <= cut and cs["edge"] * 100 >= s["min_skill_edge"] and cs["excess"] > 0:
+        return "strong"
+    if cs["edge"] <= 0 or cs["excess"] <= 0:
+        return "weak"
+    return "neutral"
+
+
+def cat_decision(m, cat, s, cut, cat_cut):
+    """(copy?, verdict) for a buy of this category: strict copies strong categories only; soft copies strong ones,
+    and neutral or unknown ones of a player whose skill is proven as a whole; off copies everything."""
+    mode = s.get("cat_mode", "off")
+    if mode == "off" or not current(m):
+        return True, None
+    v = cat_verdict((m.get("cats") or {}).get(cat), s, cat_cut)
+    if v == "strong":
+        return True, v
+    if mode == "strict" or v == "weak":
+        return False, v
+    # proven as a whole: by skill against the price, or (win-rate selection) by having been selected at all
+    return (overall_ok(m, s, cut) if s.get("selection", "skill") == "skill" else True), v
+
+
+def strong_cats(m, s, cat_cut):
+    return [c for c, cs in (m.get("cats") or {}).items() if cat_verdict(cs, s, cat_cut) == "strong"]
 
 
 def skill_stats(d, slip):
@@ -334,12 +418,13 @@ def bh_cut(pvalues, q=BH_Q):
     return cut
 
 
-def metrics(bets, *, slip=DEFAULT_SLIP, now=None, as_of=None, lookback=LOOKBACK_DAYS, target_wr=70):
-    """Copy statistics of one wallet. With `as_of`, only what was known at that moment is used."""
+def metrics(bets, *, slip=DEFAULT_SLIP, now=None, as_of=None, lookback=LOOKBACK_DAYS, target_wr=70, cats=None):
+    """Copy statistics of one wallet. With `as_of`, only what was known at that moment is used.
+    `cats`: {event slug: category} known from tags; other events get theirs from slug and title."""
     now = now or time.time()
     end = as_of or now
     start = end - lookback * DAY
-    d = _decided(bets, slip, start, end)
+    d = _decided(bets, slip, start, end, cats)
     n = len(d)
     wins = sum(1 for x in d if x["win"])
     rs = [x["r"] for x in d]
@@ -387,7 +472,8 @@ def metrics(bets, *, slip=DEFAULT_SLIP, now=None, as_of=None, lookback=LOOKBACK_
         "open_n": len(open_r), "open_r": (sum(open_r) / len(open_r)) if open_r else None,
         "first_seen": min((b["opened"] for b in bets), default=None),
         "slip": slip,
-        "skill": skill_stats(d, slip),
+        "skill": (sk := skill_stats(d, slip)),
+        "cats": cat_stats(d, slip, sk),
         "entries": _entries(d),
         "version": METRICS_VERSION,
     }
@@ -436,10 +522,12 @@ def behaviour(bets, trades, m, now=None):
     return kind, facts
 
 
-def gates(m, kind, settings, cut=None):
-    """Selection checks with the user's thresholds. Each item: key, label, ok, value, need.
+def gates(m, kind, settings, cut=None, cat_cut=None):
+    """Selection checks with the user's thresholds. Each item: key, label, ok, value, need (and `group` for the
+    checks that judge.passed combines by the category mode).
 
-    `cut` is the Benjamini–Hochberg p-value threshold across all candidates (skill selection only)."""
+    `cut` is the Benjamini–Hochberg p-value threshold across all candidates (skill selection only), `cat_cut` the
+    one across all (player, category) pairs."""
     s = {**DEFAULTS, **{k: v for k, v in (settings or {}).items() if k in DEFAULTS}}
     pct = lambda v: None if v is None else round(v * 100, 1)  # noqa: E731
     if s.get("selection") == "skill":
@@ -448,15 +536,19 @@ def gates(m, kind, settings, cut=None):
         return [
             {"key": "type", "label": "Тип поведения", "ok": kind == "directional", "value": TYPES.get(kind, kind),
              "need": TYPES["directional"]},
-            {"key": "history", "label": "История для оценки умения", "ok": sk is not None,
+            {"key": "history", "label": "История для оценки умения", "ok": sk is not None, "group": "skill",
              "value": f"{m['n']} ставок, {sk['n_ev']} событий" if sk else f"{m['n']} ставок",
              "need": f"от {SKILL_MIN_BETS} ставок и {SKILL_MIN_EVENTS} событий"},
-            {"key": "skill", "label": "Умение доказано (не удача)", "ok": bool(sk) and sk["p"] <= cut and cut > 0,
+            {"key": "skill", "label": "Умение доказано (не удача)", "ok": bool(sk) and sk["p"] <= cut and cut > 0, "group": "skill",
              "value": None if not sk else f"p = {sk['p']:.4f}", "need": f"p ≤ {cut:.4f} (поправка на {int(BH_Q * 100)}% ложных)"},
             {"key": "edge", "label": "Доходность сверх цены", "ok": bool(sk) and sk["edge"] * 100 >= s["min_skill_edge"],
-             "value": None if not sk else pct(sk["edge"]), "need": f"от {s['min_skill_edge']}%"},
-            {"key": "excess", "label": "Выигрывает чаще, чем обещала цена", "ok": bool(sk) and sk["excess"] > 0,
+             "group": "skill", "value": None if not sk else pct(sk["edge"]), "need": f"от {s['min_skill_edge']}%"},
+            {"key": "excess", "label": "Выигрывает чаще, чем обещала цена", "ok": bool(sk) and sk["excess"] > 0, "group": "skill",
              "value": None if not sk else pct(sk["excess"]), "need": "больше 0 п. п."},
+            *([{"key": "cats", "label": "Сильные категории", "group": "cats", "ok": bool(strong),
+                "value": ", ".join(categories.CATS[c] for c in strong) or "нет",
+                "need": f"от 1 (умение доказано на {s['cat_min_events']}+ событиях категории)"}]
+              if (strong := strong_cats(m, s, cat_cut)) is not None and s["cat_mode"] != "off" else []),
             {"key": "top", "label": "Доля лучшей ставки", "ok": m["top_share"] is not None and m["top_share"] * 100 <= s["max_top_share"],
              "value": pct(m["top_share"]), "need": f"до {s['max_top_share']}%"},
             {"key": "recent", "label": "Новых ставок за 14 дней", "ok": m["new_14d"] >= s["min_recent"], "value": m["new_14d"],
@@ -508,29 +600,52 @@ def score(m, selection="winrate"):
     return round(part, 1)
 
 
-def judge(m, kind, settings, cut=None):
-    checks = gates(m, kind, settings, cut)
+def judge(m, kind, settings, cut=None, cat_cut=None):
+    """Verdict on a player. With skill selection the overall skill checks and the strong-categories check combine
+    by the category mode: off — the overall skill; soft — either; strict — strong categories (1.16.0)."""
+    checks = gates(m, kind, settings, cut, cat_cut)
     mode = (settings or {}).get("selection", DEFAULTS["selection"])
-    return {"passed": all(c["ok"] for c in checks), "checks": checks, "score": score(m, mode),
-            "failed": [c["label"] for c in checks if not c["ok"]], "selection": mode}
+    cat_mode = (settings or {}).get("cat_mode", DEFAULTS["cat_mode"])
+    base = [c for c in checks if not c.get("group")]
+    by_skill = [c for c in checks if c.get("group") == "skill"]
+    by_cats = [c for c in checks if c.get("group") == "cats"]
+    skill_ok, cats_ok = all(c["ok"] for c in by_skill), any(c["ok"] for c in by_cats)
+    route = {"off": skill_ok, "soft": skill_ok or cats_ok, "strict": cats_ok}.get(cat_mode, skill_ok) if by_cats else skill_ok
+    failed = [c["label"] for c in base if not c["ok"]]
+    if not route:
+        failed += [c["label"] for c in (by_cats if cat_mode == "strict" else by_skill + by_cats) if not c["ok"]]
+    pts = score(m, mode)
+    if by_cats and cats_ok:     # a specialist is scored by the best of their strong categories
+        best = max((m["cats"][c] for c in strong_cats(m, {**DEFAULTS, **(settings or {})}, cat_cut)), key=lambda x: x["edge"])
+        pts = max(pts, score({**m, "skill": best}, mode))
+    return {"passed": all(c["ok"] for c in base) and route, "checks": checks, "score": pts, "failed": failed, "selection": mode}
 
 
-_cut_cache = {"at": 0.0, "cut": 0.0}
+_cut_cache = {"at": 0.0, "cut": 0.0, "cat": 0.0}
 
 
 def skill_cut(db, ttl=300):
     """The Benjamini–Hochberg threshold over every profiled directional candidate (cached for a few minutes)."""
     if time.time() - _cut_cache["at"] < ttl:
         return _cut_cache["cut"]
-    ps = []
+    ps, cps = [], []
     for kind, raw in db.execute("SELECT kind, metrics FROM scout_wallets WHERE metrics IS NOT NULL"):
         if kind != "directional":
             continue
-        sk = json.loads(raw).get("skill")
+        m = json.loads(raw)
+        sk = m.get("skill")
         if sk:
             ps.append(sk["p"])
-    _cut_cache.update(at=time.time(), cut=bh_cut(ps))
+        # every (player, category) pair with enough events is one more test: the threshold accounts for all of them
+        cps += [cs["p"] for cs in (m.get("cats") or {}).values() if cs["n_ev"] >= DEFAULTS["cat_min_events"]]
+    _cut_cache.update(at=time.time(), cut=bh_cut(ps), cat=bh_cut(cps))
     return _cut_cache["cut"]
+
+
+def cat_cut(db, ttl=300):
+    """The Benjamini–Hochberg threshold over every (player, category) pair (1.16.0)."""
+    skill_cut(db, ttl)
+    return _cut_cache["cat"]
 
 
 # ---------------------------------------------------------------- storage and crawl jobs
@@ -609,7 +724,8 @@ def profile_wallet(db, wallet, now=None):
     else:
         bets, partial = crawl(wallet, since, now)
     trades = pm.trades_page(user=wallet, limit=100, taker_only=False, gap=GAP)["rows"]
-    m = metrics(bets, now=now)
+    cats = categories.of_events(db, event_titles(bets, now))       # tags already known; the rest by slug and title
+    m = metrics(bets, now=now, cats=cats)
     kind, facts = behaviour(bets, trades, m, now)
     in_roster = db.execute("SELECT 1 FROM ap_players WHERE wallet=? AND state IN ('active','bench')", (wallet,)).fetchone()
     # worth a closer look: wins often, or wins more often than its prices promised (a buyer of cheap outcomes
@@ -619,10 +735,12 @@ def profile_wallet(db, wallet, now=None):
     slip = None
     if promising or in_roster:
         slip = measure_slip(trades, now)
+    if in_roster:   # tags of their events (cached a week); everyone else by slug and title, which agree in 95%
+        cats = categories.of_events(db, event_titles(bets, now), fetch=True)
     live = live_slip(db, wallet)
     used = copy_slip(slip["median"] if slip else None, live)
-    if used is not None:
-        m = metrics(bets, slip=used, now=now)
+    if used is not None or promising or in_roster:
+        m = metrics(bets, slip=used if used is not None else DEFAULT_SLIP, now=now, cats=cats)
     m["slip_measured"] = slip["median"] if slip else (live["mean"] if live else None)
     m["slip_samples"] = slip["samples"] if slip else 0
     m["slip_over"] = slip["over"] if slip else None
@@ -683,8 +801,10 @@ def refresh_metrics(db, limit=200):
         bets = packs.load(db, row["wallet"])
         if not bets:
             continue
+        stamp = row["profiled"] or time.time()
+        cats = categories.of_events(db, event_titles(bets, stamp))
         # as of the stored profile: the bets kept end there, so "new bets in 14 days" stays what it was
-        m = metrics(bets, slip=old.get("slip") or DEFAULT_SLIP, now=row["profiled"] or time.time())
+        m = metrics(bets, slip=old.get("slip") or DEFAULT_SLIP, now=stamp, cats=cats)
         for k in ("slip_measured", "slip_samples", "slip_over", "slip_live", "slip_live_n", "partial"):
             if k in old:
                 m[k] = old[k]
@@ -714,10 +834,10 @@ def candidate(db, wallet):
 def candidates(db, settings):
     """All profiled wallets with the user's verdict, best first."""
     out = []
-    cut = skill_cut(db)
+    cut, ccut = skill_cut(db), cat_cut(db)
     for row in store.rows(db.execute("SELECT * FROM scout_wallets WHERE metrics IS NOT NULL")):
         m = json.loads(row["metrics"])
-        verdict = judge(m, row["kind"], settings, cut)
+        verdict = judge(m, row["kind"], settings, cut, ccut)
         sk = m.get("skill") or {}
         out.append({"wallet": row["wallet"], "name": row["name"], "image": row["image"], "kind": row["kind"],
                     "kind_label": TYPES.get(row["kind"], row["kind"]), "sources": json.loads(row["sources"] or "[]"),

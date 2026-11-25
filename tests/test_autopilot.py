@@ -732,6 +732,31 @@ class NewAutopilotTests(AutopilotTests):
         self.assertIn("Сделка игрока меньше", reason)
 
 
+    def test_buy_of_a_weak_category_is_not_copied(self):
+        autopilot.update_settings(self.db, self.uid, {"cat_mode": "soft"})
+        autopilot.review(self.db, self.uid)
+        leader = self.players("active")[0]
+        m = json.loads(self.db.execute("SELECT metrics FROM scout_wallets WHERE wallet=?", (leader,)).fetchone()[0])
+        m["cats"] = {"weather": {"n": 30, "n_ev": 30, "mean": -0.2, "edge": -0.15, "excess": -0.1, "t": -3, "p": 0.99}}
+        self.db.execute("UPDATE scout_wallets SET metrics=? WHERE wallet=?", (json.dumps(m), leader))
+        (status, reason, _), _, _ = self.copy_buy(leader)               # "Will it rain?" is weather
+        self.assertEqual(status, "skipped")
+        self.assertEqual(reason, "Категория «Погода»: игрок в ней проигрывает цене")
+        autopilot.update_settings(self.db, self.uid, {"cat_mode": "off"})
+        (status, reason, _), _, _ = self.copy_buy(leader)
+        self.assertEqual(status, "filled", reason)
+
+    def test_strict_copies_only_strong_categories(self):
+        autopilot.update_settings(self.db, self.uid, {"cat_mode": "strict"})
+        autopilot.review(self.db, self.uid)
+        leader = self.players("active")[0]
+        (status, reason, _), _, _ = self.copy_buy(leader)
+        self.assertEqual(status, "skipped")
+        self.assertIn("мало ставок игрока", reason)
+        table = autopilot.player(self.db, self.uid, leader)["categories"]
+        self.assertTrue(all(not r["copied"] or r["verdict"] == "strong" for r in table))
+
+
 class ProfileCrawlTests(Base):
     def test_profile_wallet_from_api_rows(self):
         w = wallet(7)

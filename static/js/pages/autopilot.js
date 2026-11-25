@@ -163,7 +163,8 @@ const GROUPS = [
     ["min_wr", "Доля выигрышей копий, от", "%", 1, "winrate"], ["min_lb", "Надёжная граница (Уилсон), от", "%", 1, "winrate"],
     ["min_bets", "Решённых ставок за 180 дней, от", "", 1, "winrate"], ["min_roi", "Доходность на ставку, от", "%", 0.5, "winrate"],
     ["min_edge", "Преимущество над ценой, от", "$", 0.005, "winrate"], ["max_top_share", "Доля прибыли от лучшей ставки, до", "%", 1],
-    ["min_recent", "Новых ставок за 14 дней, от", "", 1], ["max_slip", "Проскальзывание, до", "$", 0.005]]],
+    ["min_recent", "Новых ставок за 14 дней, от", "", 1], ["max_slip", "Проскальзывание, до", "$", 0.005],
+    ["cat_mode", "Категории", "select"], ["cat_min_events", "Событий в категории для оценки, от", "", 1]]],
   ["Что копировать и как", [
     ["copy_mode", "Как покупать копию", "select"],
     ["limit_wait_min", "Ждать цену игрока, минут", "", 1, "limit"],
@@ -185,6 +186,9 @@ const GROUPS = [
 
 // choices: value, label, what it means
 const CHOICES = {
+  cat_mode: [["off", "Без учёта категорий", "Игрок оценивается в целом, копируются его ставки во всех категориях."],
+    ["soft", "Мягко: кроме слабых категорий", "Не копируются ставки в категориях, где копии игрока проигрывают цене. В категориях, где данных мало, — только если умение игрока доказано в целом. В состав попадают и узкие специалисты: сильные хотя бы в одной категории."],
+    ["strict", "Строго: только сильные категории", "Копируются только ставки в категориях, где умение игрока доказано (10+ событий, проверка на удачу по всем парам «игрок × категория»). Копий меньше."]],
   selection: [["skill", "Умение против цены (рекомендуется)", "Игрок выигрывает чаще, чем обещала цена его ставок, и это не удача: проверено поправкой на сотни сравнений. Покупатель дорогих исходов с 90% выигрышей сюда не проходит — у него выигрывает цена, а не умение."],
     ["winrate", "Доля выигрышей копий (как до 1.10)", "Отбор по доле выигрышных копий и надёжной границе. Выбирает в основном покупателей дорогих исходов."]],
   copy_mode: [["limit", "Лимитная по цене игрока (рекомендуется)", "Заявка по цене игрока ждёт несколько минут: сразу после его покупки дешёвые предложения выкуплены, но часто возвращаются. Что не исполнилось — снимается. По истории 1 512 кошельков: +6,3% на копию против +1,5% у покупки сразу, исполняется около 40% копий."],
@@ -206,6 +210,18 @@ const MONEY_HINTS = {
   event_cap_pct: (v, d) => `Не больше ${usd(((d.account?.total || 0) * v) / 100)} на одно событие`,
   min_payout: (v) => v > 1 ? `Копия $10 при выигрыше вернёт не меньше ${usd(10 * v)}: копируются покупки до ${cents(payoutPrice(v))} за акцию (с комиссией)` : "",
 };
+
+// The player's skill by category: what is copied and why (1.16.0)
+const CAT_VERDICT = { strong: ["Сильная", "badge-green"], neutral: ["Не доказана", "badge-gray"], unknown: ["Мало данных", "badge-gray"], weak: ["Слабая", "badge-red"] };
+function catTable(rows) {
+  if (!rows.length) return "";
+  return `<h3 class="sub-h">По категориям</h3><div class="tablewrap"><table class="table cat-table"><thead><tr><th>Категория</th><th class="num">Ставок</th>
+    <th class="num">Событий</th><th class="num">Сверх цены</th><th>Оценка</th><th>Копируем</th></tr></thead><tbody>${rows.map((r) => `<tr>
+      <td>${esc(r.name)}</td><td class="num">${num(r.bets)}</td><td class="num">${num(r.events)}</td>
+      <td class="num ${r.edge > 0 ? "up" : r.edge < 0 ? "down" : ""}">${sp100(r.edge)}</td>
+      <td><span class="badge ${CAT_VERDICT[r.verdict][1]}">${CAT_VERDICT[r.verdict][0]}</span></td>
+      <td>${r.copied ? icon("check", 14) : '<span class="muted">—</span>'}</td></tr>`).join("")}</tbody></table></div>`;
+}
 
 function settingsDialog(d, done) {
   const s = d.settings;
@@ -234,7 +250,7 @@ function settingsDialog(d, done) {
       $(`[data-money="${key}"]`, f).textContent = isFinite(v) ? hint(v, d) : "";
     }
   };
-  f.selection.onchange = f.copy_mode.onchange = sync;
+  f.selection.onchange = f.copy_mode.onchange = f.cat_mode.onchange = sync;
   for (const key of Object.keys(MONEY_HINTS)) f[key].oninput = sync;
   sync();
   const err = (m) => {
@@ -560,6 +576,7 @@ async function playerDialog(wallet, main = $("#main")) {
     ${v.recounting ? `<div class="verdict">${icon("clock", 16)} Оценка пересчитывается по новым правилам отбора — это займёт несколько минут</div>`
       : `<div class="verdict ${v.passed ? "ok" : "no"}">${v.passed ? icon("check", 16) + " Проходит отбор по вашим правилам" : icon("x", 16) + " Не проходит: " + esc(v.failed.join(", ").toLowerCase())}</div>`}
     <div class="checks">${v.checks.map((c) => `<div class="${c.ok ? "ok" : "no"}">${icon(c.ok ? "check" : "x", 14)}<span>${esc(c.label)}</span><b>${checkValue(c)}</b><small>${c.key === "type" ? "" : esc(c.need.replace(".", ","))}</small></div>`).join("")}</div>
+    ${catTable(p.categories || [])}
     <h3 class="sub-h">Копии его ставок за 180 дней</h3>
     <dl class="pl-stats wide">
       <div><dt>Выигрыши</dt><dd>${m.wins} из ${m.n} <small>${p100(m.wr, 1)}</small></dd></div>

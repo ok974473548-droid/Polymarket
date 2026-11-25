@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timezone
 
 from . import bus
+from . import categories
 from . import copytrade
 from . import db as store
 from . import notify
@@ -50,6 +51,7 @@ LIMITS = {
     "max_days_to_end": (int, 0, 730), "copy_slip": (float, 0.005, 0.2),
     "copy_mode": (str, ("limit", "market")), "limit_wait_min": (int, 1, 30), "copy_slip_pct": (float, 0.5, 50),
     "selection": (str, tuple(scout.SELECTIONS)), "min_skill_edge": (float, 0, 30),
+    "cat_mode": (str, tuple(scout.CAT_MODES)), "cat_min_events": (int, 5, 60),
     "probation_days": (int, 3, 60), "probation_min_bets": (int, 1, 50), "allow_early": (bool,), "early_days": (int, 1, 60),
     "bootstrap": (bool,), "loss_streak": (int, 3, 20), "recent_min_wr": (float, 20, 90), "max_drawdown_pct": (float, 5, 90),
     "inactive_days": (int, 3, 90), "rotation": (bool,), "rotation_margin": (float, 5, 50), "min_tenure_days": (int, 3, 120),
@@ -77,6 +79,8 @@ NAMES = {  # as in the settings dialog, for error messages
     "limit_wait_min": "Ждать цену игрока, минут",
     "copy_slip_pct": "Цена копии хуже цены игрока, % цены, не больше",
     "selection": "Как отбирать игроков",
+    "cat_mode": "Категории",
+    "cat_min_events": "Событий в категории для оценки, от",
     "min_skill_edge": "Доходность сверх цены, от",
     "probation_days": "Срок испытания, дней",
     "probation_min_bets": "Новых ставок за испытание, от",
@@ -254,6 +258,9 @@ def copy_buy(db, uid, ct, trade, info):
     if price > top + EPS:
         return "skipped", (f"Малый выигрыш: по цене ${price:.2f} ставка вернёт ×{scout.payout(price):.2f}, "
                            f"нужно от ×{s['min_payout']:g}").replace(".", ","), {}
+    skip = _category_skip(db, ct, trade, info, s)
+    if skip:
+        return "skipped", skip, {}
     if scout.SHORT_TERM.search(str(trade.get("title") or "")):
         return "skipped", "Краткосрочный крипторынок: задержка копии слишком велика", {}
     end = scout._date_ts(info.get("end"))
@@ -289,6 +296,39 @@ def copy_buy(db, uid, ct, trade, info):
     spent = order["filled"] * (order["avg"] or 0) + order["fees"]
     _record_buy(db, uid, aid, ct, info, trade, order["filled"], spent)
     return "filled", "", {"amount": round(spent, 6), "shares": order["filled"], "price": order["avg"], "order_id": order["id"]}
+
+
+def _category_skip(db, ct, trade, info, s):
+    """Reason not to copy this buy because of its category (1.16.0), or None to copy it."""
+    if s.get("cat_mode", "off") == "off":
+        return None
+    cand = scout.candidate(db, ct["leader"])
+    m = (cand or {}).get("metrics") or {}
+    slug = info.get("event_slug") or trade.get("event_slug") or ""
+    cat = categories.of_event(db, slug, info.get("event_title") or trade.get("title") or "", fetch=True)
+    ok, verdict = scout.cat_decision(m, cat, s, _cut(db), _cat_cut(db))
+    if ok:
+        return None
+    name = categories.CATS.get(cat, cat)
+    if verdict == "weak":
+        return f"Категория «{name}»: игрок в ней проигрывает цене"
+    if verdict == "unknown":
+        return f"Категория «{name}»: мало ставок игрока, чтобы судить" + ("" if s["cat_mode"] == "strict" else ", а общее умение не доказано")
+    return f"Категория «{name}»: умение игрока в ней не доказано"
+
+
+def category_table(m, s, db):
+    """Rows of the player's skill by category for the player view (best first)."""
+    if not scout.current(m):
+        return []
+    cut, ccut = _cut(db), _cat_cut(db)
+    rows = []
+    for cat, cs in (m.get("cats") or {}).items():
+        ok, v = scout.cat_decision(m, cat, {**s, "cat_mode": s["cat_mode"] if s["cat_mode"] != "off" else "soft"}, cut, ccut)
+        rows.append({"cat": cat, "name": categories.CATS.get(cat, cat), "bets": cs["n"], "events": cs["n_ev"],
+                     "edge": cs["edge"], "excess": cs["excess"], "p": cs["p"], "verdict": v, "copied": ok if s["cat_mode"] != "off" else True})
+    rows.sort(key=lambda r: ({"strong": 0, "neutral": 1, "unknown": 2, "weak": 3}[r["verdict"]], -r["events"]))
+    return rows
 
 
 def _limit_buy(db, uid, ct, trade, info, s, amount, cash):
@@ -524,6 +564,12 @@ def _cut(db, relaxed=False):
     return max(cut * 2, 0.02) if relaxed else cut
 
 
+def _cat_cut(db, relaxed=False):
+    """The same for skill in one category (Benjamini–Hochberg over all player-category pairs)."""
+    cut = scout.cat_cut(db)
+    return max(cut * 2, 0.02) if relaxed else cut
+
+
 def _verdict(db, wallet, s, relaxed=False):
     cand = scout.candidate(db, wallet)
     if not cand or not cand["metrics"]:
@@ -532,7 +578,7 @@ def _verdict(db, wallet, s, relaxed=False):
         # counted by an older version and waiting to be recomputed (worker.job_rescore): not judged until then, or
         # a change of the rules (1.10.0: skill against the price) dropped players for a figure not counted yet
         return cand, None
-    return cand, scout.judge(cand["metrics"], cand["kind"], _relaxed(s) if relaxed else s, _cut(db, relaxed))
+    return cand, scout.judge(cand["metrics"], cand["kind"], _relaxed(s) if relaxed else s, _cut(db, relaxed), _cat_cut(db, relaxed))
 
 
 def _probation(db, player, s, now):
@@ -843,7 +889,7 @@ def action(db, uid, wallet, what):
 def _card(db, uid, p, s, share, now):
     cand = scout.candidate(db, p["wallet"])
     m = (cand or {}).get("metrics") or {}
-    verdict = scout.judge(m, cand["kind"], s, _cut(db)) if scout.current(m) else None
+    verdict = scout.judge(m, cand["kind"], s, _cut(db), _cat_cut(db)) if scout.current(m) else None
     card = {"wallet": p["wallet"], "name": (cand or {}).get("name") or "", "image": (cand or {}).get("image") or "",
             "state": p["state"], "pinned": bool(p["pinned"]), "manual": bool(p["manual"]), "early": bool(p["early"]),
             "frozen": bool(p.get("frozen")),
@@ -943,7 +989,8 @@ def player(db, uid, wallet):
            "facts": (cand or {}).get("facts"), "sources": (cand or {}).get("sources") or [], "metrics": None, "verdict": None}
     if cand and cand["metrics"]:
         out["metrics"] = cand["metrics"]
-        out["verdict"] = scout.judge(cand["metrics"], cand["kind"], s, _cut(db)) if scout.current(cand["metrics"]) else None
+        out["verdict"] = scout.judge(cand["metrics"], cand["kind"], s, _cut(db), _cat_cut(db)) if scout.current(cand["metrics"]) else None
+        out["categories"] = category_table(cand["metrics"], s, db)
     keys = ("title", "outcome", "event_slug", "entry", "exit", "state", "mark", "opened", "closed", "size")
     recent = [{k: b[k] for k in keys} for b in sorted(scout.stored_bets(db, wallet), key=lambda b: -b["opened"])[:25]]
     for b in recent:

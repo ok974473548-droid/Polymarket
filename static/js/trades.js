@@ -19,6 +19,7 @@ const pctOf = (v, base) => (base ? (v >= 0 ? "+" : "−") + Math.abs((100 * v) /
 // Short label for the reason a copy was skipped; `setting` marks reasons the person can change in the settings.
 const REASONS = [
   [/^Размер копии меньше/, "Копия меньше $1", true],
+  [/^Категория «/, "Категория", true],
   [/^Сделка (игрока|лидера) меньше/, "Мелкая сделка", true],
   [/без цены/, "Нет цены", false],
   [/диапазон/, "Цена вне диапазона", true],

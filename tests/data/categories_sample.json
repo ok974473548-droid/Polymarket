@@ -1,0 +1,512 @@
+[
+[
+"wta-juvan-uchijim-2026-05-11",
+"Parma: Kaja Juvan vs Moyuka Uchijima",
+"sports"
+],
+[
+"atp-arnabol-varilla-2026-09-02",
+"Como: Federico Arnaboldi vs Juan Pablo Varillas",
+"sports"
+],
+[
+"chi2-yan-gua-2026-09-18-more-markets",
+"Yanbian Longding vs. Guandong GZ-Power FC: O/U 3.5",
+"sports"
+],
+[
+"jap-ura-fag-2026-09-13-more-markets",
+"Urawa Red Diamonds vs. Fagiano Okayama: O/U 5.5",
+"sports"
+],
+[
+"cfb-norfst-vir-2026-09-11",
+"Norfolk State vs. Virginia: O/U 55.5",
+"sports"
+],
+[
+"tur2-ias-igd-2026-09-07-first-to-score",
+"Igdir FK to score first vs. Istanbulspor AS?",
+"sports"
+],
+[
+"itf-jakupov-astakho-2026-07-09",
+"ITF Aschaffenburg: Dalila Jakupovic vs Darya Astakhova",
+"sports"
+],
+[
+"bun-bay-koe-2026-11-20-player-props",
+"Michael Olise: Anytime Goalscorer",
+"sports"
+],
+[
+"mlb-col-sd-2026-04-10",
+"Colorado Rockies vs. San Diego Padres",
+"sports"
+],
+[
+"atp-forejte-donald-2026-11-02",
+"Bratislava 2: Jonas Forejtek vs Matthew William Donald",
+"sports"
+],
+[
+"ucl-rbl-mnc-2026-11-04-exact-score",
+"Exact Score: RB Leipzig 2 - 3 Manchester City FC?",
+"sports"
+],
+[
+"uwcl-che-rso-2026-08-26",
+"Will Chelsea FC win on 2026-08-26?",
+"sports"
+],
+[
+"next-gemini-argon-released-byptptpt-20261014",
+"Next Gemini Argon released by January 31, 2027?",
+"tech"
+],
+[
+"another-critical-php-security-flaw-in-2026",
+"Another critical PHP security flaw in 2026?",
+"tech"
+],
+[
+"gemini-helix-released-byptptpt-20261113",
+"Gemini Helix released by December 31, 2026?",
+"tech"
+],
+[
+"next-kimi-k-model-3pt2-released-byptptpt",
+"Next Kimi K model (3.2+) released by February 28, 2027?",
+"tech"
+],
+[
+"how-many-spacex-launches-in-august-2026",
+"Will SpaceX have fewer than 13 launches in August 2026?",
+"tech"
+],
+[
+"which-company-has-the-best-image-edit-ai-end-of-october",
+"Will OpenAI have the best Image Edit AI at the end of October 2026?",
+"tech"
+],
+[
+"highest-temperature-in-austin-on-october-27-2026",
+"Will the highest temperature in Austin be between 84-85°F on October 27?",
+"weather"
+],
+[
+"highest-temperature-in-karachi-on-june-21-2026",
+"Will the highest temperature in Karachi be 35°C on June 21?",
+"weather"
+],
+[
+"highest-temperature-in-jakarta-on-april-23-2026",
+"Will the highest temperature in Jakarta be 31°C on April 23?",
+"weather"
+],
+[
+"lowest-temperature-in-shanghai-on-september-14-2026",
+"Will the lowest temperature in Shanghai be 22°C on September 14?",
+"weather"
+],
+[
+"highest-temperature-in-buenos-aires-on-november-18-2026",
+"Will the highest temperature in Buenos Aires be 27°C on November 18?",
+"weather"
+],
+[
+"highest-temperature-in-seoul-on-july-4-2026",
+"Will the highest temperature in Seoul be 29°C on July 4?",
+"weather"
+],
+[
+"highest-temperature-in-lucknow-on-july-19-2026",
+"Will the highest temperature in Lucknow be 28°C on July 19?",
+"weather"
+],
+[
+"highest-temperature-in-buenos-aires-on-march-21-2026",
+"Will the highest temperature in Buenos Aires be 30°C on March 21?",
+"weather"
+],
+[
+"highest-temperature-in-shenzhen-on-may-20-2026",
+"Will the highest temperature in Shenzhen be 26°C on May 20?",
+"weather"
+],
+[
+"lowest-temperature-in-london-on-april-29-2026",
+"Will the lowest temperature in London be 13°C or higher on April 29?",
+"weather"
+],
+[
+"highest-temperature-in-seoul-on-november-4-2026",
+"Will the highest temperature in Seoul (Incheon) be 16°C on November 4?",
+"weather"
+],
+[
+"highest-temperature-in-seoul-on-april-3-2026",
+"Will the highest temperature in Seoul be 15°C on April 3?",
+"weather"
+],
+[
+"val-gena-osg-2026-06-17",
+"Valorant: Gen.G Global Academy vs ONSIDE GAMING (BO3) - VCL Korea: Regular Season",
+"esports"
+],
+[
+"cs2-keyd-odk-2026-04-01",
+"Counter-Strike: Keyd vs ODDIK (BO3) - PGL Astana: South American Closed Qualifier Playoffs",
+"esports"
+],
+[
+"cs2-ssins-dm2-2026-10-22",
+"Counter-Strike: Saint Sinners vs Dark Moon - Map 2 Winner",
+"esports"
+],
+[
+"lol-kt-gen-2026-08-07",
+"LoL: KT Rolster vs Gen.G - Game 1 Winner",
+"esports"
+],
+[
+"val-jdg-tec-2026-04-12",
+"Valorant: JD Gaming vs TEC Esports (BO3) - VCT China Group Alpha",
+"esports"
+],
+[
+"lol-blg-jdg-2026-03-08",
+"LoL: Bilibili Gaming vs JD Gaming - Game 3 Winner",
+"esports"
+],
+[
+"cs2-tyloo-5s-2026-05-14",
+"Counter-Strike: TYLOO vs 5star - Map 1 Winner",
+"esports"
+],
+[
+"cs2-blackp-havu-2026-08-24",
+"Counter-Strike: Black Phoenix vs HAVU - Map 1 Winner",
+"esports"
+],
+[
+"hok-wol-lgd-2026-05-15",
+"Honor of Kings: Wolves vs LGD NBW (BO7) - Honor of Kings Challenger Cup Stage 2",
+"esports"
+],
+[
+"cs2-saw2-ast-2026-05-24",
+"Counter-Strike: SAW vs ASTRAL (BO3) - CCT Europe Closed Qualifier: Series #3 Play-In",
+"esports"
+],
+[
+"cs2-cw1-pre-2026-10-19",
+"Counter-Strike: Copenhagen Wolves vs Prestige (BO3) - United21 Gorup A",
+"esports"
+],
+[
+"cs2-mana1-rustec-2026-08-16",
+"Counter-Strike: ex-MANA eSports vs ex-RUSTEC (BO3) - CCT Europe Closed Qualifier: Series #7 Group A",
+"esports"
+],
+[
+"will-abnb-hit-week-of-may-25-2026",
+"Will Airbnb, Inc. (ABNB) hit (LOW) $132 Week of May 25 2026?",
+"finance"
+],
+[
+"will-openais-valuation-hit-by-june-30",
+"Will OpenAI's valuation hit (HIGH) $875B by June 30?",
+"finance"
+],
+[
+"nflx-above-on-august-14-2026",
+"Will Netflix (NFLX) finish week of August 10 above $80?",
+"finance"
+],
+[
+"will-msft-hit-week-of-june-22-2026",
+"Will Microsoft Corporation (MSFT) hit (LOW) $352.50 Week of June 22 2026?",
+"finance"
+],
+[
+"khc-quarterly-earnings-nongaap-eps-08-05-2026-0pt53",
+"Will Kraft Heinz (KHC) beat quarterly earnings?",
+"finance"
+],
+[
+"nvda-close-above-on-july-31-2026",
+"Will NVIDIA (NVDA) close above $190 on July 31?",
+"finance"
+],
+[
+"will-tsla-hit-week-of-june-22-2026",
+"Will Tesla, Inc. (TSLA) hit (LOW) $360 Week of June 22 2026?",
+"finance"
+],
+[
+"msft-close-above-on-november-18-2026",
+"Will Microsoft (MSFT) close above $500 on November 18?",
+"finance"
+],
+[
+"germany-gdp-growth-in-q1-2026",
+"Will Germany GDP growth in Q1 2026 be between 0.1% and 0.3%?",
+"finance"
+],
+[
+"ko-quarterly-earnings-nongaap-eps-07-28-2026-0pt93",
+"Will Coca-Cola (KO) beat quarterly earnings?",
+"finance"
+],
+[
+"msft-close-above-on-august-7-2026",
+"Will Microsoft (MSFT) close above $490 on August 7?",
+"finance"
+],
+[
+"msft-close-above-on-march-10-2026",
+"Will Microsoft (MSFT) close above $400 on March 10?",
+"finance"
+],
+[
+"total-crypto-hack-value-in-2026",
+"Over $1B crypto hack value in 2026?",
+"crypto"
+],
+[
+"what-price-will-ethereum-hit-on-june-24",
+"Will Ethereum dip to $1,450 on June 24?",
+"crypto"
+],
+[
+"what-price-will-bitcoin-hit-june-8-14-2026",
+"Will Bitcoin reach $66,000 June 8-14?",
+"crypto"
+],
+[
+"ethereum-above-on-may-17",
+"Will the price of Ethereum be above $2,200 on May 17?",
+"crypto"
+],
+[
+"ethereum-above-on-may-7-2026-3am-et",
+"Ethereum above 2,315 on May 7, 3AM ET?",
+"crypto"
+],
+[
+"ethereum-above-on-november-21-2026-4pm-et",
+"Ethereum above 1,670 on November 21, 4PM ET?",
+"crypto"
+],
+[
+"ethereum-above-on-april-7",
+"Will the price of Ethereum be above $1,800 on April 7?",
+"crypto"
+],
+[
+"solana-price-on-may-26-2026",
+"Will the price of Solana be between $90 and $100 on May 26?",
+"crypto"
+],
+[
+"bitcoin-above-on-june-10-2026-6pm-et",
+"Bitcoin above 60,600 on June 10, 6PM ET?",
+"crypto"
+],
+[
+"solana-price-on-march-13",
+"Will the price of Solana be between $80 and $90 on March 13?",
+"crypto"
+],
+[
+"solana-above-on-may-6",
+"Will the price of Solana be above $90 on May 6?",
+"crypto"
+],
+[
+"number-of-bitcoin-green-hourly-candles-on-march-23",
+"Less than 7 green Bitcoin hourly candles on March 23?",
+"crypto"
+],
+[
+"gottingen-mayoral-election-winner",
+"Will Florian Dinger win the next Göttingen mayoral election?",
+"politics"
+],
+[
+"georgia-senate-election-winner",
+"Will the Democrats win the Georgia Senate race in 2026?",
+"politics"
+],
+[
+"new-mexico-governor-margin-of-victory-2026",
+"Will the Democratic Party candidate win the 2026 New Mexico gubernatorial election by 10%-15%?",
+"politics"
+],
+[
+"democratic-2028-presidential-odds-hit-by-march-31",
+"Democratic 2028 presidential odds dip to 50% by March 31?",
+"politics"
+],
+[
+"brazil-presidential-election-first-round-1st-place-in-amazonas",
+"Will Lula win the most votes in the next Brazil presidential election from Amazonas?",
+"politics"
+],
+[
+"katie-zacharia-out-as-press-secretary-by",
+"Katie Zacharia out as Press Secretary by October 31?",
+"politics"
+],
+[
+"how-many-house-seats-will-the-democrats-win-in-tennessee",
+"Will Democrats win exactly 0 House seats in Tennessee in the 2026 midterm elections?",
+"politics"
+],
+[
+"mn-04-house-election-winner",
+"Will the Democratic Party win the MN-04 House seat?",
+"politics"
+],
+[
+"va-11-house-election-winner",
+"Will the Democratic Party win the VA-11 House seat?",
+"politics"
+],
+[
+"tn-04-house-margin-of-victory-2026",
+"Will the Republican Party candidate win the 2026 TN-04 House election by 0%-5%?",
+"politics"
+],
+[
+"will-the-white-house-call-a-full-lid-by-630-pm-on-october-23-2026",
+"Will the White House call a full lid by 6:30 PM on October 23?",
+"politics"
+],
+[
+"nj-02-democratic-primary-winner",
+"Will Terri Reese be the Democratic nominee for NJ-02?",
+"politics"
+],
+[
+"netanyahu-out-before-2027",
+"Netanyahu out by April 30?",
+"geopolitics"
+],
+[
+"gorton-and-denton-by-election-2nd-place",
+"Will Matt Goodwin – Reform finish second in the Gorton and Denton by-election?",
+"geopolitics"
+],
+[
+"spain-general-election-psoe-of-vote",
+"Will PSOE receive 30% or more of the vote in the 2026 Spanish general election?",
+"geopolitics"
+],
+[
+"us-evacuates-jerusalem-embassy-by-march-31",
+"U.S. evacuates Jerusalem embassy by March 31?",
+"geopolitics"
+],
+[
+"park-sung-jae-in-jail-by-march-31",
+"Park Sung-jae in jail by March 31?",
+"geopolitics"
+],
+[
+"ukraine-hits-moscow-by",
+"Ukraine hits Moscow by March 31, 2026?",
+"geopolitics"
+],
+[
+"will-reza-pahlavi-lead-iran-in-2026",
+"Will Reza Pahlavi lead Iran in 2026?",
+"geopolitics"
+],
+[
+"abiy-ahmed-out-as-prime-minister-of-ethiopia-in-2026",
+"Abiy Ahmed out as Prime Minister of Ethiopia in 2026?",
+"geopolitics"
+],
+[
+"us-iran-hormuz-agreement-byptptpt-20260803235957575",
+"US-Iran Hormuz Agreement by October 15?",
+"geopolitics"
+],
+[
+"usd-x-iranian-rials-end-of-december",
+"Will USD be between 2.5M and 3.0M Iranian rials on December 31?",
+"geopolitics"
+],
+[
+"will-russia-capture-the-royal-cafe-alex-in-kostyantynivka-byptptpt",
+"Will Russia capture the Royal Café Alex in Kostyantynivka by September 30, 2026?",
+"geopolitics"
+],
+[
+"lipetsk-oblast-parliament-election-party-winner",
+"Will United Russia win the next Lipetsk Oblast Parliament elections?",
+"geopolitics"
+],
+[
+"what-will-be-the-top-global-netflix-show-this-week-20260901",
+"Will \"Beauty in Black: Season 3\" be the top global Netflix show this week?",
+"culture"
+],
+[
+"nyc-mayor-of-tweets-may-12-may-19-2026",
+"Will NYC Mayor post 20-39 posts from May 12 to May 19, 2026?",
+"culture"
+],
+[
+"white-house-of-tweets-august-4-august-11-2026",
+"Will White House post 180-199 posts from August 4 to August 11, 2026?",
+"culture"
+],
+[
+"what-will-be-the-top-global-netflix-show-this-week-886",
+"Will \"ONE PIECE: Season 2\" be the top global Netflix show this week?",
+"culture"
+],
+[
+"the-end-of-oak-street-opening-weekend-box-office-20260811181702926",
+"Will \"The End of Oak Street\" Opening Weekend Box Office be between 17m and 20m?",
+"culture"
+],
+[
+"what-will-trump-say-during-his-protecting-american-families-remarks",
+"Will Trump say \"Jensen\" or \"Huang\" during his Protecting American Families remarks?",
+"culture"
+],
+[
+"what-will-the-announcers-say-during-usa-vs-australia-world-cup-match-20260619150746559",
+"Will the announcers say \"History\" during the USA vs Australia FIFA World Cup Match?",
+"culture"
+],
+[
+"what-will-the-announcers-say-during-the-49ers-vs-rams-game-20260911",
+"Will the announcers say \"Referee\" 5+ times during the 49ers vs Rams game?",
+"culture"
+],
+[
+"what-will-be-said-on-the-next-lemonade-stand-podcast-may-13",
+"Will \"Energy\" be said during the next episode of the Lemonade Stand Podcast?",
+"culture"
+],
+[
+"canadas-choice-2027-winner",
+"Will Josiane win Canada's Choice 2027?",
+"culture"
+],
+[
+"what-will-drpt-oz-say-during-the-next-white-house-press-briefing-20260602132816499",
+"Will Dr. Oz say \"Nuclear\" during the press briefing?",
+"culture"
+],
+[
+"of-views-of-mrbeast-video-day-6-20260618144754415",
+"Will MrBeast's next video get between 55 and 55.5 million views on day 6?",
+"culture"
+]
+]

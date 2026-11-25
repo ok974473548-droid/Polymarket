@@ -7,7 +7,7 @@
 ## Запуск и проверка
 - Только Python 3.11+, без сторонних пакетов: `python app.py` → http://127.0.0.1:8787 (`--db`, `--port`, `--no-worker`).
 - Docker: `docker compose up -d --build` (том `kontur-data`).
-- Тесты: `PYTHONPATH=.:tests python -m unittest tests.test_trading tests.test_autopilot tests.test_data tests.test_speed tests.test_views tests.test_search` (202 теста, без сети; расчёты `roundchart.js` — через node, если он есть).
+- Тесты: `PYTHONPATH=.:tests python -m unittest tests.test_trading tests.test_autopilot tests.test_data tests.test_speed tests.test_views tests.test_search tests.test_categories` (212 тестов, без сети; расчёты `roundchart.js` — через node, если он есть).
 - Замер скорости: `PYTHONPATH=. python research/bench_perf.py` (сеть, сервер, база, поток сделок).
 - Переменные: `KONTUR_DB`, `HOST`, `PORT`, `KONTUR_SCOUT_THREADS` (6), `KONTUR_SCOUT_GAP` (0.06 с), `KONTUR_STATS_THREADS` (4), `KONTUR_STATS_GAP` (0.06 с).
 
@@ -31,6 +31,7 @@
 | `kontur/traders.py` | Рейтинги и статистика трейдеров; закрытые позиции догружаются и хранятся картой «хэш токена → итог» (`wallet_closed`) |
 | `kontur/accounts.py` | Несколько человек: приглашения (одноразовые ссылки, в базе только хэш), регистрация по ним, список пользователей, блокировка (вход и копирование останавливаются), удаление со всеми данными; страница `/admin` и `/join` — `static/js/pages/admin.js` |
 | `kontur/search.py`, `query.py`, `lexicon.py` | Умный поиск: индекс FTS5 (`search_items`/`search_fts`), обход событий в фоне (`index_events`, 20 с), трейдеры (`index_people`), разбор фразы (`query.parse`: условия, префиксы, время, цены в $), словарь RU→EN, раскладка, транслит, опечатки; сохранённые поиски и оповещения; палитра Ctrl+K — `static/js/palette.js`, страница `/search` — `static/js/pages/search.js` |
+| `kontur/categories.py` | Категория события (10 штук): по тегам `event_tags` (приоритет: киберспорт раньше спорта, упоминания раньше политики), иначе по адресу и названию (`of_text`, 95% совпадения с тегами); умение по категориям — `scout.cat_stats`/`cat_verdict`/`cat_decision`, порог BH по парам — `scout.cat_cut`; режимы `cat_mode` off/soft/strict (по умолчанию off — на истории не помогло, `research/categories_check.py`) |
 | `kontur/news.py`, `watchlist.py`, `notify.py`, `auth.py`, `db.py` | Новости, избранное, уведомления, вход, база SQLite (справочник исходов `outcomes` для журнала копий) |
 | `static/` | Интерфейс (JS без сборки). Дизайн — токены в `:root` `static/css/app.css`: `--radius` 16, `--card` (градиент), `--surface-shadow`, `--well`, фирменная пара `--brand`/`--brand-2`/`--brand-grad` (синий → бирюзовый); контейнер `.wrap` до 1 880 px; высота графиков — `fitHeight` в `chart.js`; строки сделок и ставок (деньги, подробности под строкой, карточки на телефоне) — `trades.js`; криптораунд и живой канал страницы события — `livechart.js`; график раунда (canvas: окно 30 с у идущего, мягкая ступенька между ценами, «Цель» у края со стрелками, всплывающие покупки, свечи, наведение) — `roundchart.js`; график вероятностей (свой SVG: перетекание 300 мс, ось % с круглым шагом и размахом ≥ 20 п. п., подписи у концов, наведение) — `probchart.js`; цифры-барабаны коротким путём — `roll.js` |
 | `research/` | Скрипты проверки модели автопилота и итоги прогона |
