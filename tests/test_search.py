@@ -123,6 +123,19 @@ class IndexTests(Base):
         self.assertEqual(res["relaxed"], "category")
         self.assertEqual(self.titles(res), ["Bitcoin above $150k by June?"])
 
+    def test_category_word_filters_tags_to_that_category(self):
+        # a category word ("политика") returned every tag by popularity before 1.17.2; now only politics-family tags
+        from kontur import categories
+        tag = lambda slug: search._item({"kind": "tag", "key": slug, "title": slug, "image": "",
+                                         "data": json.dumps({"slug": slug, "count": 5}), "pop": 5}, search._personal(self.db, None))
+        now = time.time()
+        self.assertTrue(categories.TAG_INDEX.get("elections") == "politics")
+        self.assertTrue(search._passes(tag("elections"), {"category": "politics"}, now))
+        self.assertTrue(search._passes(tag("trump"), {"category": "politics"}, now))
+        self.assertFalse(search._passes(tag("sports"), {"category": "politics"}, now))
+        self.assertFalse(search._passes(tag("recurring"), {"category": "politics"}, now))
+        self.assertTrue(search._passes(tag("sports"), {}, now))        # no category: every tag passes
+
     def test_history_and_saved_alerts(self):
         search.full(self.db, self.uid, "трамп", None, record=True)
         self.assertEqual(search.home(self.db, self.uid)["recent"], ["трамп"])

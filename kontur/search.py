@@ -10,6 +10,7 @@ import re
 import time
 from datetime import datetime
 
+from . import categories
 from . import db as store
 from . import notify
 from . import polymarket as pm
@@ -369,6 +370,12 @@ def _passes(it, f, now):
         if f.get("tag") and f["tag"] not in (d.get("tags") or []):
             return False
         return True
+    if kind == "tag":
+        # a category word ("политика") has no free text to match, so without this every tag passed and the Теги
+        # результаты были все 1122 тега по популярности; keep only tags of that category (1.17.2)
+        if f.get("category") and categories.TAG_INDEX.get((d.get("slug") or "").lower()) != f["category"]:
+            return False
+        return True
     return True
 
 
@@ -388,7 +395,9 @@ def find(db, uid, parsed, kind, filters, sort=None, limit=50, offset=0):
     items = [_item(r, mine) for r in rows]
     keep = [(it, r) for it, r in zip(items, rows) if _passes(it, filters, now)]
     relaxed = None
-    if not keep and filters.get("category") and items:
+    # events and traders fall back to no-category when nothing matches; tags of an empty category stay empty
+    # (1.17.2: relaxing tags brought back all 1122 tags, the bug we are fixing)
+    if not keep and filters.get("category") and items and k != "tag":
         f2 = {**filters, "category": None}
         keep = [(it, r) for it, r in zip(items, rows) if _passes(it, f2, now)]
         relaxed = "category" if keep else None
