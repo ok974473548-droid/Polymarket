@@ -302,6 +302,7 @@ CREATE TABLE IF NOT EXISTS ap_players(
   until REAL,
   checked REAL,
   shadow TEXT,
+  frozen INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(user_id, wallet)
 );
 CREATE TABLE IF NOT EXISTS ap_bets(
@@ -351,6 +352,8 @@ MIGRATIONS = [
     # 1.5.0: several people in one app: a blocked person cannot sign in and their copying stops
     ("users", "blocked", "INTEGER NOT NULL DEFAULT 0"),
     ("users", "last_login", "REAL"),
+    # 1.13.0: a roster player who no longer passes selection keeps the seat until replaced, but only sells are copied
+    ("ap_players", "frozen", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 # Indexes for the hot queries (created after the column migrations above).

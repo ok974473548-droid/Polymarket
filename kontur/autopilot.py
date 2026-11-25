@@ -21,6 +21,8 @@ from . import trading
 DAY = 86400
 REVIEW_EVERY = 600
 EPS = 1e-6
+SHARE_MAX_X = 2.0           # the budget is shared among players actually copied, at most twice the nominal share (1.13.0)
+SMALL_TRADES_LIVE = (20, 0.6)   # buys seen live, and the share under min_leader_trade that makes a player uncopyable
 EXPECTED_CAP = 0.25         # the most one player adds to the expected return of a copy (1.12.1)
 MANUAL_REMOVE_DAYS = 7      # at least this long a player taken off the bench by hand stays off
 
@@ -30,7 +32,7 @@ SETTINGS = {
     # selection (same keys as scout.DEFAULTS)
     **scout.DEFAULTS,
     # what is copied and how
-    "price_min": 0.02, "min_leader_trade": 5, "max_days_to_end": 60, "copy_slip": 0.03,
+    "price_min": 0.02, "max_days_to_end": 60, "copy_slip": 0.03,
     # "limit": a limit order at the player's price that waits a few minutes for the price to come back;
     # "market": buy at once within the allowed price move (until 1.10.0 the only way)
     "copy_mode": "limit", "limit_wait_min": 2, "copy_slip_pct": 3,
@@ -224,10 +226,22 @@ def _open_cost(db, uid, *, wallet=None, event_slug=None):
     return held + db.execute(sql, params).fetchone()[0]
 
 
+def player_share(db, uid, s, total):
+    """Money behind one player: the budget divided among the players whose buys are copied (frozen ones only sell),
+    but at most SHARE_MAX_X times the nominal share. Until 1.13.0 it was always budget / roster size, and with 7 of
+    20 seats copied 86% of the budget stayed unused (25.11.2026)."""
+    copied = db.execute("SELECT COUNT(*) FROM ap_players WHERE user_id=? AND state='active' AND frozen=0", (uid,)).fetchone()[0]
+    return total / max(copied, s["active_count"] / SHARE_MAX_X, 1)
+
+
 def copy_buy(db, uid, ct, trade, info):
     """Size and place an autopilot copy of a leader's buy. Returns (status, reason, extra) like copytrade."""
     if ct.get("mode") != "normal":
         return "skipped", "Игрок выведен из состава: повторяются только его продажи", {}
+    frozen = db.execute("SELECT frozen FROM ap_players WHERE user_id=? AND wallet=? AND state='active'",
+                        (uid, ct["leader"])).fetchone()
+    if frozen and frozen[0]:
+        return "skipped", "Игрок не проходит отбор и ждёт замены: копируются только его продажи", {}
     s = settings(db, uid)
     price, size = trade.get("price"), trade.get("size")
     if price is None or size is None:
@@ -249,7 +263,7 @@ def copy_buy(db, uid, ct, trade, info):
         return "skipped", f"До разрешения {int((end - time.time()) / DAY)} дн., лимит {s['max_days_to_end']}", {}
     aid = ct["account_id"]
     eq = _equity(db, aid)
-    share = eq["total"] / s["active_count"]
+    share = player_share(db, uid, s, eq["total"])
     amount = share * s["copy_pct"] / 100
     room = share - _open_cost(db, uid, wallet=ct["leader"])
     if room < copytrade.MIN_COPY:
@@ -560,6 +574,9 @@ def _active_problem(db, uid, player, s, share, now):
     last = max(x for x in (st["last_copy"], last_bet, player["active_since"]) if x)
     if now - last >= s["inactive_days"] * DAY:
         return f"Нет новых ставок {int((now - last) / DAY)} дн.", st
+    small = _small_buys(db, uid, player["wallet"], s, now)
+    if small:
+        return small, {**st, "soft": True}
     if cand and cand["metrics"] and cand["profiled"] and cand["profiled"] > player["active_since"]:
         _, verdict = _verdict(db, player["wallet"], s, relaxed=True)
         if verdict and not verdict["passed"]:
@@ -567,6 +584,20 @@ def _active_problem(db, uid, player, s, share, now):
             # low activity an empty seat is worse than the player; losses, a losing streak and silence stay hard rules
             return "Больше не проходит отбор: " + ", ".join(verdict["failed"]).lower(), {**st, "soft": True}
     return None, st
+
+
+def _small_buys(db, uid, wallet, s, now):
+    """A player whose buys are mostly under min_leader_trade gives almost nothing to copy (1.13.0: 51 of 59 buys of
+    one roster player were under $4). Counted on the buys seen live over a week."""
+    aid = account_id(db, uid)
+    if not aid:
+        return None
+    n, small = db.execute("""SELECT COUNT(*), COALESCE(SUM(reason LIKE 'Сделка игрока меньше%'), 0) FROM copy_events
+                             WHERE account_id=? AND leader=? AND side='buy' AND at>?""", (aid, wallet, now - 7 * DAY)).fetchone()
+    need, share = SMALL_TRADES_LIVE
+    if n >= need and small / n >= share:
+        return f"Сделки мельче ${s['min_leader_trade']:g}: {small} из {n} покупок за неделю"
+    return None
 
 
 # ---------------------------------------------------------------- roster moves
@@ -603,7 +634,7 @@ def _promote(db, uid, aid, wallet, kind, text, early=False):
 def _retire(db, uid, player, kind, reason, s, cooldown=True):
     _stop_copy(db, player)
     until = time.time() + (s["cooldown_days"] * DAY if cooldown else 0)
-    db.execute("UPDATE ap_players SET state='retired', reason=?, until=?, pinned=0 WHERE user_id=? AND wallet=?",
+    db.execute("UPDATE ap_players SET state='retired', reason=?, until=?, pinned=0, frozen=0 WHERE user_id=? AND wallet=?",
                (reason, until, uid, player["wallet"]))
     verb = {"replace": "заменён", "rotate": "выведен из состава", "fail": "не прошёл испытание", "retire": "выбыл"}.get(kind, "выбыл")
     log(db, uid, kind, player["wallet"], f"{_who(db, player['wallet'])} {verb}: {reason[:1].lower() + reason[1:]}")
@@ -653,7 +684,7 @@ def review(db, uid, now=None):
         store.kv_set(db, f"ap:{uid}:reviewed", str(now))
         return
     eq = _equity(db, aid)
-    share = eq["total"] / s["active_count"]
+    share = player_share(db, uid, s, eq["total"])
     swaps_left = s["max_swaps_per_day"] - _swaps_today(db, uid)
     vacancies = 0
 
@@ -661,8 +692,11 @@ def review(db, uid, now=None):
     takers = None
     for p in sorted(_players(db, uid, "active"), key=lambda r: r["active_since"] or 0):
         problem, st = _active_problem(db, uid, p, s, share, now)
-        db.execute("UPDATE ap_players SET checked=?, reason=? WHERE user_id=? AND wallet=?",
-                   (now, problem or "", uid, p["wallet"]))
+        # a player who no longer passes keeps the seat until someone can take it, but their buys are no longer
+        # copied (1.13.0: 7 such players lost $35 in a day, the ones who passed $2); a pinned player is the user's call
+        frozen = int(bool(problem and st.get("soft")) and not p["pinned"])
+        db.execute("UPDATE ap_players SET checked=?, reason=?, frozen=? WHERE user_id=? AND wallet=?",
+                   (now, problem or "", frozen, uid, p["wallet"]))
         if problem and st.get("soft"):
             if takers is None:     # bench players who may enter the roster now
                 prs = [_probation(db, b, s, now) for b in _players(db, uid, "bench")]
@@ -832,6 +866,7 @@ def _card(db, uid, p, s, share, now):
     verdict = scout.judge(m, cand["kind"], s, _cut(db)) if scout.current(m) else None
     card = {"wallet": p["wallet"], "name": (cand or {}).get("name") or "", "image": (cand or {}).get("image") or "",
             "state": p["state"], "pinned": bool(p["pinned"]), "manual": bool(p["manual"]), "early": bool(p["early"]),
+            "frozen": bool(p.get("frozen")),
             "since": p["since"], "bench_since": p["bench_since"], "active_since": p["active_since"], "reason": p["reason"],
             "until": p["until"], "kind": (cand or {}).get("kind"), "kind_label": scout.TYPES.get((cand or {}).get("kind"), "Считается"),
             "profiled": (cand or {}).get("profiled"),
@@ -861,7 +896,7 @@ def overview(db, uid):
     aid = account_id(db, uid)
     now = time.time()
     acc = trading.summary(db, uid, aid) if aid else None
-    share = (acc["total"] / s["active_count"]) if acc else 0
+    share = player_share(db, uid, s, acc["total"]) if acc else 0
     players = _players(db, uid)
     cards = {k: [] for k in ("active", "bench", "retired", "banned")}
     for p in players:
@@ -921,7 +956,7 @@ def player(db, uid, wallet):
     cand = scout.candidate(db, wallet)
     p = store.one(db.execute("SELECT * FROM ap_players WHERE user_id=? AND wallet=?", (uid, wallet)))
     aid = account_id(db, uid)
-    share = (trading.equity(db, aid)["total"] / s["active_count"]) if aid else 0
+    share = player_share(db, uid, s, trading.equity(db, aid)["total"]) if aid else 0
     out = {"wallet": wallet, "in_roster": bool(p), "card": _card(db, uid, p, s, share, time.time()) if p else None,
            "name": (cand or {}).get("name") or "", "image": (cand or {}).get("image") or "", "profiled": (cand or {}).get("profiled"),
            "kind": (cand or {}).get("kind"), "kind_label": scout.TYPES.get((cand or {}).get("kind"), ""),

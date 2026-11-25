@@ -664,6 +664,75 @@ class NewAutopilotTests(AutopilotTests):
         self.assertGreater(scout.refresh_metrics(self.db), 0)
         self.assertFalse(autopilot.overview(self.db, self.uid)["players"]["bench"][0]["recounting"])
 
+    def test_player_who_no_longer_passes_only_sells_until_replaced(self):
+        autopilot.review(self.db, self.uid)
+        idle = self.players("active")[0]
+        _, ct, info = self.copy_buy(idle)                               # a copy bought while the player passed
+        self.now += 60
+        self.idle(idle)                                                 # no longer passes, nobody on the bench is ready
+        autopilot.update_settings(self.db, self.uid, {"min_recent": 4, "allow_early": False})
+        autopilot.review(self.db, self.uid)
+        self.assertIn(idle, self.players("active"))
+        self.assertEqual(self.db.execute("SELECT frozen FROM ap_players WHERE wallet=?", (idle,)).fetchone()[0], 1)
+        (status, reason, _), _, _ = self.copy_buy(idle)                 # until 1.13.0 his buys went on being copied
+        self.assertEqual(status, "skipped")
+        self.assertIn("только его продажи", reason)
+        status, reason, _ = autopilot.copy_sell(self.db, self.uid, ct, {"side": "SELL", "price": 0.38, "size": 1000}, info)
+        self.assertEqual(status, "filled", reason)                      # his sales are still followed
+        card = next(c for c in autopilot.overview(self.db, self.uid)["players"]["active"] if c["wallet"] == idle)
+        self.assertTrue(card["frozen"])
+        m = json.loads(self.db.execute("SELECT metrics FROM scout_wallets WHERE wallet=?", (idle,)).fetchone()[0])
+        m["new_14d"] = 9                                                # active again: copied again
+        self.db.execute("UPDATE scout_wallets SET metrics=?, profiled=? WHERE wallet=?", (json.dumps(m), self.now + 1, idle))
+        self.now += 60
+        autopilot.review(self.db, self.uid)
+        self.assertEqual(self.db.execute("SELECT frozen FROM ap_players WHERE wallet=?", (idle,)).fetchone()[0], 0)
+
+    def test_budget_shared_among_players_actually_copied(self):
+        autopilot.review(self.db, self.uid)
+        s = autopilot.settings(self.db, self.uid)                       # 5 seats
+        self.assertAlmostEqual(autopilot.player_share(self.db, self.uid, s, 500), 100)
+        active = self.players("active")
+        self.db.execute("UPDATE ap_players SET frozen=1 WHERE wallet IN (?, ?)", active[:2])
+        self.assertAlmostEqual(autopilot.player_share(self.db, self.uid, s, 500), 500 / 3)      # was: 100
+        self.db.execute("UPDATE ap_players SET frozen=1 WHERE wallet IN (?, ?, ?, ?)", active[:4])
+        self.assertAlmostEqual(autopilot.player_share(self.db, self.uid, s, 500), 200)          # at most twice the share
+        (status, reason, extra), _, _ = self.copy_buy(active[4])
+        self.assertEqual(status, "filled", reason)
+        self.assertAlmostEqual(extra["amount"], 20, places=1)          # 10% of a $200 share (was $10)
+
+    def test_player_with_mostly_small_buys_is_not_copied(self):
+        autopilot.review(self.db, self.uid)
+        small = self.players("active")[0]
+        ct = self.ct_of(small)
+        for i in range(25):                                             # 18 of 25 buys seen live under $5
+            reason = "Сделка игрока меньше $5" if i < 18 else ""
+            self.db.execute("""INSERT INTO copy_events(copy_trade_id, account_id, leader, status, reason, side, at)
+                               VALUES(?,?,?,?,?, 'buy', ?)""", (ct["id"], self.aid, small, "skipped" if reason else "filled", reason, self.now))
+        self.now += 60
+        autopilot.update_settings(self.db, self.uid, {"allow_early": False})
+        autopilot.review(self.db, self.uid)
+        row = self.db.execute("SELECT frozen, reason FROM ap_players WHERE wallet=?", (small,)).fetchone()
+        self.assertEqual(row[0], 1)
+        self.assertEqual(row[1], "Сделки мельче $5: 18 из 25 покупок за неделю")
+
+    def test_selection_needs_buys_big_enough_to_copy(self):
+        trades = [{"side": "BUY", "size": 10, "price": p} for p in [0.05] * 15 + [0.5] * 5] + [{"side": "SELL", "size": 100, "price": 0.5}]
+        q = scout.buy_sizes(trades)                                     # 15 buys of $0.50, 5 of $5
+        self.assertEqual(q[0], 0.5)
+        self.assertEqual(q[-1], 5.0)
+        self.assertAlmostEqual(scout.big_share(q, 5), 0.25, places=1)
+        self.assertEqual(scout.big_share(q, 0.4), 1.0)
+        self.assertEqual(scout.big_share(q, 6), 0.0)
+        self.assertIsNone(scout.buy_sizes(trades[:5]))                  # too few to say
+        m = scout.metrics(bets_events(40, 0.40, 22), slip=0.005, now=NOW)
+        size = lambda m: next(c for c in scout.gates(m, "directional", {"min_leader_trade": 5}) if c["key"] == "size")  # noqa: E731
+        self.assertTrue(size(m)["ok"])                                  # not profiled again yet: not held against him
+        m["buy_usd_q"] = q
+        self.assertFalse(size(m)["ok"])
+        m["buy_usd_q"] = scout.buy_sizes([{"side": "BUY", "size": 20, "price": 0.5}] * 12)
+        self.assertTrue(size(m)["ok"])
+
     def test_copies_only_bets_that_pay_enough(self):
         autopilot.review(self.db, self.uid)
         leader = self.players("active")[0]

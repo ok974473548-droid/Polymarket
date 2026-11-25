@@ -53,7 +53,9 @@ DEFAULTS = {
     "min_skill_edge": 2,  # %, return of a copy over what its price promised, shrunk by the amount of evidence
     "min_payout": 1.5,    # x stake: a copy is bought only if a win pays back at least this much (1.12.0)
     "min_copyable": 50,   # %, share of the player's bets that pay that much (the rest are not copied)
+    "min_leader_trade": 5,  # $, smallest buy of a player that is copied (smaller ones are skipped)
 }
+BIG_TRADES = 0.5          # share of a player's buys that must reach min_leader_trade, or there is little to copy (1.13.0)
 SELECTIONS = {"skill": "Умение против цены", "winrate": "Доля выигрышей"}
 METRICS_VERSION = 3       # 2: fee 0.05 * p * (1 - p) and skill against the price (1.10.0); 3: entry prices (1.12.0)
 SKILL_MIN_BETS, SKILL_MIN_EVENTS = 20, 15
@@ -100,6 +102,31 @@ def payout_price(times):
 
 
 ENTRY_BINS = 20                 # entry prices of decided bets, in steps of $0.05
+
+
+def buy_sizes(trades):
+    """Dollar size of the player's recent buys as 11 points (smallest, every tenth, largest), or None."""
+    usd = sorted(pm.num(t.get("size")) * pm.num(t.get("price")) for t in trades or ()
+                 if str(t.get("side") or "").upper() == "BUY" and pm.num(t.get("size")) and pm.num(t.get("price")))
+    if len(usd) < 10:
+        return None
+    return [round(usd[min(len(usd) - 1, round(i * (len(usd) - 1) / 10))], 2) for i in range(11)]
+
+
+def big_share(q, floor):
+    """Share of buys of at least `floor` dollars, read from the 11 points of buy_sizes."""
+    if not q:
+        return None
+    if floor <= q[0]:
+        return 1.0
+    if floor > q[-1]:
+        return 0.0
+    for i in range(10):
+        lo, hi = q[i], q[i + 1]
+        if lo < floor <= hi:
+            below = i / 10 + ((floor - lo) / (hi - lo) / 10 if hi > lo else 0.1)
+            return max(0.0, 1.0 - below)
+    return 0.0
 
 
 def copyable_share(m, top):
@@ -461,6 +488,11 @@ def gates(m, kind, settings, cut=None):
     times = f"{s['min_payout']:g}".replace(".", ",")
     copyable = {"key": "copyable", "label": f"Ставок с выигрышем от ×{times}", "ok": share is not None and share * 100 >= s["min_copyable"] - 1e-9,
                 "value": pct(share), "need": f"от {s['min_copyable']:g}%"}
+    # buys smaller than min_leader_trade are not copied (1.13.0: one player of the roster had 51 of 59 buys under $4);
+    # unknown until the wallet is profiled again, and then it does not count against the player
+    big = big_share(m.get("buy_usd_q"), s["min_leader_trade"])
+    copyable = [copyable, {"key": "size", "label": f"Сделок от ${s['min_leader_trade']:g}", "ok": big is None or big >= BIG_TRADES - 1e-9,
+                           "value": "нет данных" if big is None else pct(big), "need": f"от {BIG_TRADES * 100:.0f}%"}]
     if s.get("selection") == "skill":
         sk = m.get("skill")
         cut = 0.0 if cut is None else cut
@@ -480,7 +512,7 @@ def gates(m, kind, settings, cut=None):
              "value": pct(m["top_share"]), "need": f"до {s['max_top_share']}%"},
             {"key": "recent", "label": "Новых ставок за 14 дней", "ok": m["new_14d"] >= s["min_recent"], "value": m["new_14d"],
              "need": f"от {s['min_recent']}"},
-            copyable,
+            *copyable,
             {"key": "slip", "label": "Проскальзывание", "ok": m.get("slip_measured") is not None and m["slip"] <= s["max_slip"],
              "value": None if m.get("slip_measured") is None else round(m["slip"], 3), "need": f"до ${s['max_slip']}"},
         ]
@@ -500,7 +532,7 @@ def gates(m, kind, settings, cut=None):
          "value": pct(m["top_share"]), "need": f"до {s['max_top_share']}%"},
         {"key": "recent", "label": "Новых ставок за 14 дней", "ok": m["new_14d"] >= s["min_recent"], "value": m["new_14d"],
          "need": f"от {s['min_recent']}"},
-        copyable,
+        *copyable,
         {"key": "slip", "label": "Проскальзывание", "ok": m.get("slip_measured") is not None and m["slip"] <= s["max_slip"],
          "value": None if m.get("slip_measured") is None else round(m["slip"], 3), "need": f"до ${s['max_slip']}"},
     ]
@@ -644,6 +676,7 @@ def profile_wallet(db, wallet, now=None):
     used = copy_slip(slip["median"] if slip else None, live)
     if used is not None:
         m = metrics(bets, slip=used, now=now)
+    m["buy_usd_q"] = buy_sizes(trades)
     m["slip_measured"] = slip["median"] if slip else (live["mean"] if live else None)
     m["slip_samples"] = slip["samples"] if slip else 0
     m["slip_over"] = slip["over"] if slip else None
@@ -706,7 +739,7 @@ def refresh_metrics(db, limit=200):
             continue
         # as of the stored profile: the bets kept end there, so "new bets in 14 days" stays what it was
         m = metrics(bets, slip=old.get("slip") or DEFAULT_SLIP, now=row["profiled"] or time.time())
-        for k in ("slip_measured", "slip_samples", "slip_over", "slip_live", "slip_live_n", "partial"):
+        for k in ("slip_measured", "slip_samples", "slip_over", "slip_live", "slip_live_n", "partial", "buy_usd_q"):
             if k in old:
                 m[k] = old[k]
         db.execute("UPDATE scout_wallets SET metrics=?, score=? WHERE wallet=?", (json.dumps(m), score(m), row["wallet"]))

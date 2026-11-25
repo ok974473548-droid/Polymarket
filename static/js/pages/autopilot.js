@@ -278,7 +278,7 @@ function activeCard(c, s) {
   return `<article class="card pl-card ${c.warnings?.length ? "warn" : ""}">
     <div class="pl-head">${avatar(c.wallet, c.image, c.name, 40)}<div class="pl-id"><a href="/traders/${c.wallet}"><b>${esc(playerName(c))}</b></a>
       <small>${esc(c.kind_label || "")} · в составе ${days(c.active_since)} дн.</small>
-      <div class="pl-badges">${c.pinned ? `<span class="badge badge-gold">${icon("pin", 12)} Закреплён</span>` : ""}${c.early ? '<span class="badge badge-gray">Досрочно</span>' : ""}${c.manual ? '<span class="badge badge-gray">Вручную</span>' : ""}${c.recounting ? '<span class="badge badge-gray" title="Оценка пересчитывается по новым правилам отбора">Пересчёт</span>' : ""}</div></div>
+      <div class="pl-badges">${c.pinned ? `<span class="badge badge-gold">${icon("pin", 12)} Закреплён</span>` : ""}${c.early ? '<span class="badge badge-gray">Досрочно</span>' : ""}${c.manual ? '<span class="badge badge-gray">Вручную</span>' : ""}${c.recounting ? '<span class="badge badge-gray" title="Оценка пересчитывается по новым правилам отбора">Пересчёт</span>' : ""}${c.frozen ? `<span class="badge badge-red" title="${esc(c.reason || "Не проходит отбор")}: новые покупки не копируются, продажи — да. Игрок уйдёт, когда на скамейке появится замена.">Только продажи</span>` : ""}</div></div>
       ${scoreRing(c.score)}</div>
     <dl class="pl-stats">
       <div><dt>Выигрыши копий по истории</dt><dd>${p100(pr.wr)} <small>надёжно ≥ ${p100(pr.lb)}</small></dd></div>
